@@ -183,7 +183,3 @@ Please make sure to follow our contribution guidelines before submitting a pull 
 ## License
 
 PatchWise is licensed under the BSD-3-clause License. See [LICENSE.txt](LICENSE.txt) for the full license text.
-
-### See Also
-
-- [PatchWise Wiki](https://github.com/your-username/PatchWise/wiki)
