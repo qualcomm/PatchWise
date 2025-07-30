@@ -42,13 +42,6 @@
 
 ### Installation
 
-1. **Clone the repository:**
-
-   ```bash
-   git clone https://github.com/qualcomm/PatchWise.git
-   cd PatchWise
-   ```
-
 1. **Create and activate a virtual environment:**
 
    ```bash
@@ -56,10 +49,10 @@
    source .venv/bin/activate
    ```
 
-1. **Install dependencies:**
+1. **Install PatchWise:**
 
    ```bash
-   pip install .
+   pip install patchwise
    ```
 
 1. **Set up your API key:**
@@ -115,27 +108,21 @@
 ### Example Workflow
 
 ```bash
-# Replace with a path on your system where you would like to download patchwise
-cd /local/mnt/workspace/dgantman/kernel-tools
-
-### Clone the repository
-git clone https://github.com/qualcomm/PatchWise.git
-cd /local/mnt/workspace/dgantman/kernel-tools/PatchWise
-
 ### Create and activate a virtual environment
 python3.10 -m venv .venv
 # Required every time you start a new shell session
-source /local/mnt/workspace/dgantman/kernel-tools/PatchWise/.venv/bin/activate 
-# Required every time you update the codebase
-pip install /local/mnt/workspace/dgantman/kernel-tools/PatchWise
+source .venv/bin/activate 
+### Install PatchWise
+pip install patchwise
+
 # Required every time you start a new shell session
 # unless you've added it to your shell profile (e.g., ~/.bashrc or ~/.zshrc)
 # You can find your API key from your provider
 export OPENAI_API_KEY=<your-api-key>
 
 ### Run PatchWise in your kernel workspace that has the patch you want to review already applied
-cd /local/mnt/workspace/dgantman/linux-next
-patchwise --all-reviews
+cd linux-next
+patchwise
 ```
 
 ---
