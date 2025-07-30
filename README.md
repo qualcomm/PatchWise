@@ -94,10 +94,10 @@
    patchwise --commits <commit-sha>
    ```
 
-   To run all available reviews, use:
+   To run only short reviews, use:
 
    ```bash
-   patchwise --all-reviews
+   patchwise --short-reviews
    ```
 
    To run specific reviews, use the `--reviews` flag:
