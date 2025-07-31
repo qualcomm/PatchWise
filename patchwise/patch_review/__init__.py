@@ -20,13 +20,7 @@ for _, modname, ispkg in pkgutil.iter_modules(ai_review.__path__):
     if not ispkg:
         importlib.import_module(f"{__name__}.ai_review.{modname}")
 
-from ..patch_review.decorators import (
-    AVAILABLE_PATCH_REVIEWS,
-    LLM_REVIEWS,
-    STATIC_ANALYSIS_REVIEWS,
-    SHORT_REVIEWS,
-    LONG_REVIEWS,
-)
+from patchwise.patch_review.decorators import AVAILABLE_PATCH_REVIEWS, LLM_REVIEWS, STATIC_ANALYSIS_REVIEWS, SHORT_REVIEWS, LONG_REVIEWS
 from .patch_review import PatchReview
 
 

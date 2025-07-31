@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import os
-from ...patch_review.patch_review import PatchReview
+from patchwise.patch_review.patch_review import PatchReview
 
 class StaticAnalysis(PatchReview):
     """

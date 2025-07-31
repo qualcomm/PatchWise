@@ -6,7 +6,7 @@ from pathlib import Path
 import logging
 import shutil
 from tqdm import tqdm
-from .. import KERNEL_PATH, PACKAGE_NAME
+from patchwise import KERNEL_PATH, PACKAGE_NAME
 
 logger = logging.getLogger(__name__)
 

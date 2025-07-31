@@ -4,10 +4,7 @@
 import os
 import re
 from .static_analysis import StaticAnalysis
-from ...patch_review.decorators import (
-    register_static_analysis_review,
-    register_short_review,
-)
+from patchwise.patch_review.decorators import register_static_analysis_review, register_short_review
 
 
 @register_static_analysis_review

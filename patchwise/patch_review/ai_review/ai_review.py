@@ -11,8 +11,7 @@ import urllib3
 import litellm, httpx
 urllib3.disable_warnings()
 
-from ...patch_review.patch_review import PatchReview
-from ..patch_review import Dependency
+from patchwise.patch_review.patch_review import PatchReview, Dependency
 
 DEFAULT_MODEL = "Pro"
 DEFAULT_API_BASE = "https://api.openai.com/v1"

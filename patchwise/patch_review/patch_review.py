@@ -15,7 +15,7 @@ from git import Repo
 from git.exc import GitCommandError
 from git.objects.commit import Commit
 from packaging.version import Version, InvalidVersion
-from .. import KERNEL_PATH, SANDBOX_BIN, SANDBOX_PATH, PACKAGE_NAME, PACKAGE_PATH
+from patchwise import KERNEL_PATH, SANDBOX_BIN, SANDBOX_PATH, PACKAGE_NAME, PACKAGE_PATH
 from .kernel_tree import BRANCH_NAME
 
 PATCH_PATH = PACKAGE_PATH / "patches"
