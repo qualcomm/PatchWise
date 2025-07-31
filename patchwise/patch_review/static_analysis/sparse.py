@@ -18,28 +18,30 @@ from ..patch_review import Dependency
 MINIMUM_CLANG_VERSION = 14
 MINIMUM_SPARSE_VERSION = "0.6.4"
 
-class SparseDependency(Dependency):
+class InstallDependency(Dependency):
 
     # TODO if installing to SANDBOX_PATH and the version still does not work, the user will need to manually clear the SANDBOX_PATH folder because SANDBOX_PATH is at the start of the PATH
-    def install_from_source(self) -> None:
+    def _do_install(self) -> None:
+        super().install_from_pkg_manager()
+        try:
+            super().check()
+        except ImportError as e:
+            self.logger.warning(f"{e}")
+            self.logger.info(f"Installing {self.name} from source...")
+            self.source()
+
+def install_sparse_from_source() -> None:
         """
         Install sparse from source.
         """
-        self.logger.info(f"Installing {self.name} from source...")
         with tempfile.TemporaryDirectory() as tmpdir:
             src_dir = os.path.join(tmpdir, "sparse")
             subprocess.run(["git", "clone", "git://git.kernel.org/pub/scm/devel/sparse/sparse.git", src_dir], check=True)
             subprocess.run(["make"], cwd=src_dir, check=True)
             subprocess.run(["sudo", "make", f"PREFIX={SANDBOX_PATH}", "install"], cwd=src_dir, check=True)
-
-    def _do_install(self) -> None:
-        super().install_from_pkg_manager()
-        # Check if the correct version of sparse is installed
-        try:
-            super().check()
-        except ImportError as e:
-            self.logger.warning(f"{e}")
-            self.install_from_source()
+            
+def install_llvm_from_source() -> None:
+    pass
 
 @register_static_analysis_review
 @register_long_review
@@ -53,23 +55,32 @@ class Sparse(StaticAnalysis):
     """
 
     DEPENDENCIES = [
-        Dependency(
+        InstallDependency(
             name="llvm-config",
-            min_version=MINIMUM_CLANG_VERSION,
-        ),
-        Dependency(
-            name="clang",
-            min_version=MINIMUM_CLANG_VERSION,
-        ),
-        Dependency(
-            name="ld.lld",
+            install_name="llvm",
+            source=install_llvm_from_source,
             min_version=MINIMUM_CLANG_VERSION,
         ),
         # Dependency(
-        #     name="lld",
+        #     name="llvm-config",
+        #     install_name="llvm",
+        #     source=install_llvm_from_source,
+        #     min_version=MINIMUM_CLANG_VERSION,
         # ),
-        SparseDependency(
+        InstallDependency(
+            name="clang",
+            source=install_llvm_from_source,
+            min_version=MINIMUM_CLANG_VERSION,
+        ),
+        InstallDependency(
+            name="ld.lld",
+            install_name="lld",
+            source=install_llvm_from_source,
+            min_version=MINIMUM_CLANG_VERSION,
+        ),
+        InstallDependency(
             name="sparse",
+            source=install_sparse_from_source,
             min_version=MINIMUM_SPARSE_VERSION,
         ),
     ]

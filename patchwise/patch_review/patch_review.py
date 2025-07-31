@@ -22,14 +22,18 @@ PATCH_PATH = PACKAGE_PATH / "patches"
 BUILD_DIR = SANDBOX_PATH / "build"
 
 
-class Dependency:
+class Dependency(abc.ABC):
     def __init__(
         self,
         name: str,
+        install_name: str = "",
+        source: str = "",
         min_version: Union[int, float, str, None] = None,
         max_version: Union[int, float, str, None] = None,
     ):
         self.name = name
+        self.install_name = install_name if install_name else name
+        self.source = source
         self.logger = logging.getLogger(
             f"{PACKAGE_NAME}.{__name__.lower()}.{self.name}"
         )
@@ -86,11 +90,11 @@ class Dependency:
 
     def install_from_pkg_manager(self) -> None:
         pkg_managers: list[tuple[str, list[str] | None, list[str]]] = [
-            ("apt-get", ["sudo", "apt-get", "update"], ["sudo", "apt-get", "install", "-y", self.name]),
-            ("dnf", None, ["sudo", "dnf", "install", "-y", self.name]),
-            ("yum", None, ["sudo", "yum", "install", "-y", self.name]),
-            ("zypper", None, ["sudo", "zypper", "install", "-y", self.name]),
-            ("pacman", None, ["sudo", "pacman", "-Sy", self.name]),
+            ("apt-get", ["sudo", "apt-get", "update"], ["sudo", "apt-get", "install", "-y", self.install_name]),
+            ("dnf", None, ["sudo", "dnf", "install", "-y", self.install_name]),
+            ("yum", None, ["sudo", "yum", "install", "-y", self.install_name]),
+            ("zypper", None, ["sudo", "zypper", "install", "-y", self.install_name]),
+            ("pacman", None, ["sudo", "pacman", "-Sy", self.install_name]),
         ]
         for mgr, pre, install_cmd in pkg_managers:
             if shutil.which(mgr):
@@ -102,16 +106,18 @@ class Dependency:
                 except Exception:
                     continue
 
+    @abc.abstractmethod
     def _do_install(self) -> None:
         """
         Subclasses must implement this method to install the dependency.
         """
-        method_name = (
-            f"{self.__class__.__name__}.{inspect.currentframe().f_code.co_name}"
-        )
-        raise NotImplementedError(
-            f"{self.__class__.__name__} must implement {method_name}."
-        )
+        pass
+        # method_name = (
+        #     f"{self.__class__.__name__}.{inspect.currentframe().f_code.co_name}"
+        # )
+        # raise NotImplementedError(
+        #     f"{self.__class__.__name__} must implement {method_name}."
+        # )
 
     def install(self) -> None:
         try:

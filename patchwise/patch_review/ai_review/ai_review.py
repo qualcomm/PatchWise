@@ -37,6 +37,9 @@ def get_api_key(name: str = API_KEY_NAME) -> str:
 class ModelProviderDependency(Dependency):
     def check(self) -> None:
         get_api_key(self.name)  # Ensure the API key is available
+    
+    def _do_install(self) -> None:
+        pass
 
 class AiReview(PatchReview):
     api_key: str

@@ -16,6 +16,16 @@ from ..patch_review import Dependency
 from .ai_review import AiReview
 
 
+class InstallDependency(Dependency):
+
+    def _do_install(self) -> None:
+        super().install_from_pkg_manager()
+        try:
+            super().check()
+        except ImportError as e:
+            self.logger.warning(f"{e}")
+            self.logger.info(f"Installing {self.name} from source...")
+            self.source()
 
 @dataclass
 class LSPLocation:
@@ -40,12 +50,12 @@ class AiCodeReview(AiReview):
     """AI-powered code review for Linux kernel patches using LSP and clangd."""
 
     DEPENDENCIES = getattr(AiReview, "DEPENDENCIES", []) + [
-        Dependency(
+        InstallDependency(
             name="clangd",
             min_version="14.0.0",
             max_version="20.0.0",
         ),
-        Dependency(
+        InstallDependency(
             name="clang",
             min_version="14.0.0",
             max_version="20.0.0",
