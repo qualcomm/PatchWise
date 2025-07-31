@@ -6,16 +6,19 @@ import inspect
 import logging
 import os
 import re
-import subprocess
 import shutil
+import subprocess
 import sys
 import time
 from typing import Any, List, Union
+
 from git import Repo
 from git.exc import GitCommandError
 from git.objects.commit import Commit
-from packaging.version import Version, InvalidVersion
-from patchwise import KERNEL_PATH, SANDBOX_BIN, SANDBOX_PATH, PACKAGE_NAME, PACKAGE_PATH
+from packaging.version import InvalidVersion, Version
+
+from patchwise import KERNEL_PATH, PACKAGE_NAME, PACKAGE_PATH, SANDBOX_BIN, SANDBOX_PATH
+
 from .kernel_tree import BRANCH_NAME
 
 PATCH_PATH = PACKAGE_PATH / "patches"

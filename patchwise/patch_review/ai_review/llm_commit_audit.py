@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 from patchwise.patch_review.decorators import register_llm_review, register_short_review
+
 from .ai_review import AiReview
 
 

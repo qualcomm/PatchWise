@@ -3,11 +3,13 @@
 
 import os
 import re
-from .static_analysis import StaticAnalysis
+
 from patchwise.patch_review.decorators import (
-    register_static_analysis_review,
     register_short_review,
+    register_static_analysis_review,
 )
+
+from .static_analysis import StaticAnalysis
 
 
 @register_static_analysis_review

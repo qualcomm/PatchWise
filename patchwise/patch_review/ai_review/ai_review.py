@@ -2,17 +2,19 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import argparse
-from getpass import getpass
+import os
 import re
 import textwrap
-import os
 import typing as t
+from getpass import getpass
+
+import httpx
+import litellm
 import urllib3
-import litellm, httpx
 
 urllib3.disable_warnings()
 
-from patchwise.patch_review.patch_review import PatchReview, Dependency
+from patchwise.patch_review.patch_review import Dependency, PatchReview
 
 DEFAULT_MODEL = "Pro"
 DEFAULT_API_BASE = "https://api.openai.com/v1"
@@ -83,7 +85,7 @@ class AiReview(PatchReview):
                     or line_stripped == "```"
                     or line_stripped == "'''"
                     or line_stripped == '"""'
-                    or bullet_pattern.match(line_stripped) != None
+                    or bullet_pattern.match(line_stripped) is not None
                 ):
                     if len(current) > 0:
                         paragraphs.append("\n".join(current))

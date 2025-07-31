@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import os
+
 from patchwise.patch_review.patch_review import PatchReview
 
 

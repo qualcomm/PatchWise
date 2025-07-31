@@ -1,11 +1,11 @@
 # Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 
-from typing import Type, List, Any
-from .static_analysis.static_analysis import StaticAnalysis
+from typing import Any, List, Type
+
 from .ai_review.ai_review import AiReview
 from .patch_review import PatchReview
-
+from .static_analysis.static_analysis import StaticAnalysis
 
 # Registries for different review types
 AVAILABLE_PATCH_REVIEWS: List[Type[PatchReview]] = []

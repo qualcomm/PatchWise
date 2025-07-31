@@ -3,12 +3,14 @@
 
 import os
 from pathlib import Path
-from .static_analysis import StaticAnalysis
+
 from patchwise import SANDBOX_PATH
 from patchwise.patch_review.decorators import (
-    register_static_analysis_review,
     register_long_review,
+    register_static_analysis_review,
 )
+
+from .static_analysis import StaticAnalysis
 
 
 @register_static_analysis_review

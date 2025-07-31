@@ -1,11 +1,13 @@
 # Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 
-from git import Repo, RemoteProgress, GitCommandError
-from pathlib import Path
 import logging
 import shutil
+from pathlib import Path
+
+from git import GitCommandError, RemoteProgress, Repo
 from tqdm import tqdm
+
 from patchwise import KERNEL_PATH, PACKAGE_NAME
 
 logger = logging.getLogger(__name__)

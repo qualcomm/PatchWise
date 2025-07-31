@@ -4,21 +4,21 @@
 import argparse
 import logging
 from pathlib import Path
+
 from git import Repo
 from git.objects.commit import Commit
 from rich_argparse import RichHelpFormatter
 
-from .logger_setup import setup_logger, add_logging_arguments
-from .patch_review.kernel_tree import create_git_worktree
-from .patch_review.patch_review import PATCH_PATH
+from .logger_setup import add_logging_arguments, setup_logger
 from .patch_review import (
-    review_patch,
     add_review_arguments,
     get_selected_reviews_from_args,
     install_missing_dependencies,
+    review_patch,
 )
 from .patch_review.ai_review.ai_review import add_ai_arguments, apply_ai_args
-
+from .patch_review.kernel_tree import create_git_worktree
+from .patch_review.patch_review import PATCH_PATH
 
 logger = logging.getLogger(__name__)
 

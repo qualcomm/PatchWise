@@ -5,15 +5,17 @@ import os
 import re
 import subprocess
 import tempfile
+
 from git import GitCommandError
 
-from .static_analysis import StaticAnalysis
-from patchwise.patch_review.decorators import (
-    register_static_analysis_review,
-    register_long_review,
-)
 from patchwise import SANDBOX_PATH
+from patchwise.patch_review.decorators import (
+    register_long_review,
+    register_static_analysis_review,
+)
 from patchwise.patch_review.patch_review import Dependency
+
+from .static_analysis import StaticAnalysis
 
 MINIMUM_CLANG_VERSION = 14
 MINIMUM_SPARSE_VERSION = "0.6.4"

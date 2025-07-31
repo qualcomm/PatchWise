@@ -2,14 +2,16 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import argparse
-import logging
-from typing import Iterable
-from git.objects.commit import Commit
 
 # Automatically import all patch review modules so all @register_patch_review classes are registered
 import importlib
+import logging
 import pkgutil
-from . import static_analysis, ai_review
+from typing import Iterable
+
+from git.objects.commit import Commit
+
+from . import ai_review, static_analysis
 
 # Import all modules in static_analysis subpackage
 for _, modname, ispkg in pkgutil.iter_modules(static_analysis.__path__):
@@ -24,12 +26,12 @@ for _, modname, ispkg in pkgutil.iter_modules(ai_review.__path__):
 from patchwise.patch_review.decorators import (
     AVAILABLE_PATCH_REVIEWS,
     LLM_REVIEWS,
-    STATIC_ANALYSIS_REVIEWS,
-    SHORT_REVIEWS,
     LONG_REVIEWS,
+    SHORT_REVIEWS,
+    STATIC_ANALYSIS_REVIEWS,
 )
-from .patch_review import PatchReview
 
+from .patch_review import PatchReview
 
 logger = logging.getLogger(__name__)
 
