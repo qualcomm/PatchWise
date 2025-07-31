@@ -130,7 +130,6 @@ class Dependency:
 
 
 class PatchReview(abc.ABC):
-
     # Subclasses must define a list of Dependency objects
     DEPENDENCIES: list[Dependency]
 

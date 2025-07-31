@@ -65,7 +65,6 @@ def run_patch_review(
 
 
 def review_patch(reviews: set[str], commit: Commit) -> PatchReviewResults:
-
     all_reviews = {cls.__name__: cls for cls in AVAILABLE_PATCH_REVIEWS}
     selected_reviews = [all_reviews[name] for name in reviews if name in all_reviews]
 

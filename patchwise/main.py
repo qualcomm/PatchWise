@@ -81,7 +81,6 @@ def get_commits(repo: Repo, commits: list[str]) -> list[Commit]:
 
 
 def main():
-
     args = parse_args()
 
     setup_logger(log_file=args.log_file, log_level=args.log_level)

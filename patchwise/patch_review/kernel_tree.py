@@ -72,7 +72,6 @@ def fetch_and_branch(repo: Repo) -> None:
 
 
 def init_kernel_tree(path: Path = KERNEL_PATH) -> Repo:
-
     path.mkdir(parents=True, exist_ok=True)
 
     repo = Repo.init(path)

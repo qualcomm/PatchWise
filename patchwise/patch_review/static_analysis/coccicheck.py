@@ -13,7 +13,6 @@ from patchwise.patch_review.decorators import (
 @register_static_analysis_review
 @register_short_review
 class Coccicheck(StaticAnalysis):
-
     DEPENDENCIES = []
 
     def _run_coccicheck(self, directory: str) -> str:

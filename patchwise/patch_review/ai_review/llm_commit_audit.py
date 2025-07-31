@@ -8,7 +8,6 @@ from .ai_review import AiReview
 @register_llm_review
 @register_short_review
 class LLMCommitAudit(AiReview):
-
     DEPENDENCIES = getattr(AiReview, "DEPENDENCIES", [])
 
     PROMPT_TEMPLATE = """

@@ -101,8 +101,7 @@ Review the following patch diff and provide inline feedback on the code changes.
     @classmethod
     def get_system_prompt(cls) -> str:
         """Generate the system prompt including kernel coding style guidelines."""
-        return (
-            """
+        return """
 # System Prompt
 
 ## Instructions
@@ -170,9 +169,7 @@ regulator-name.
 
 ## Kernel Coding Style Guidelines
 
-"""
-            + cls.get_kernel_coding_style()
-        )
+""" + cls.get_kernel_coding_style()
 
     def _read_file_safely(self, file_path: str) -> Optional[str]:
         """Safely read a file and return its contents, or None on error."""
