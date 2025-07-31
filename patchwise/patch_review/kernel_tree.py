@@ -13,12 +13,13 @@ logger = logging.getLogger(__name__)
 
 BRANCH_NAME = f"{PACKAGE_NAME}-linux-next-stable"
 
+
 class TqdmFetchProgress(RemoteProgress):
     def __init__(self):
         super().__init__()
         self.pbar = None
 
-    def update(self, op_code, cur_count, max_count=None, message=''):
+    def update(self, op_code, cur_count, max_count=None, message=""):
         if max_count:
             if self.pbar is None:
                 self.pbar = tqdm(
@@ -67,19 +68,23 @@ def fetch_and_branch(repo: Repo) -> None:
             raise
 
     # Force-create the branch at FETCH_HEAD, do not check it out
-    repo.git.branch('-f', BRANCH_NAME, 'FETCH_HEAD')
+    repo.git.branch("-f", BRANCH_NAME, "FETCH_HEAD")
+
 
 def init_kernel_tree(path: Path = KERNEL_PATH) -> Repo:
 
     path.mkdir(parents=True, exist_ok=True)
 
     repo = Repo.init(path)
-    
+
     fetch_and_branch(repo)
 
     return repo
 
-def create_git_worktree(repo: Repo, branch_name: str = BRANCH_NAME, worktree_path: Path = KERNEL_PATH):
+
+def create_git_worktree(
+    repo: Repo, branch_name: str = BRANCH_NAME, worktree_path: Path = KERNEL_PATH
+):
     """
     Create a new git worktree at worktree_path from repo_path using branch_name.
     If the worktree already exists at worktree_path, do nothing (reentrant).
@@ -110,7 +115,9 @@ def create_git_worktree(repo: Repo, branch_name: str = BRANCH_NAME, worktree_pat
             logger.info(f"Worktree already exists at {worktree_path}")
             return
         else:
-            logger.info(f"Directory {worktree_path} exists but is not a worktree, removing it.")
+            logger.info(
+                f"Directory {worktree_path} exists but is not a worktree, removing it."
+            )
             shutil.rmtree(worktree_path)
 
     # Create the worktree

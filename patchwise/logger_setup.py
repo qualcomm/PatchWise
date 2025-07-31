@@ -21,6 +21,7 @@ RED = "\033[31m"
 GRAY = "\033[232m"
 BOLD = "\033[1m"
 
+
 class ColorFormatter(logging.Formatter):
     def format(self, record):
         msg = super().format(record)
@@ -30,7 +31,7 @@ class ColorFormatter(logging.Formatter):
         # Color everything up to and including the first ": "
         split_idx = msg.find(": ")
         if split_idx != -1:
-            header = msg[:split_idx + 2]
+            header = msg[: split_idx + 2]
             message = msg[split_idx + 2 :]
         else:
             return msg
@@ -45,9 +46,8 @@ class ColorFormatter(logging.Formatter):
         else:
             return msg
 
-def setup_logger(
-    log_file: str = LOG_PATH, log_level: str = "INFO"
-):
+
+def setup_logger(log_file: str = LOG_PATH, log_level: str = "INFO"):
     """
     Sets up the logger with the specified log file and log level.
     """
@@ -66,12 +66,14 @@ def setup_logger(
     logging.getLogger(__name__.split(".")[0]).setLevel(log_level)
 
 
-def add_logging_arguments(parser_or_group: argparse.ArgumentParser | argparse._ArgumentGroup):
+def add_logging_arguments(
+    parser_or_group: argparse.ArgumentParser | argparse._ArgumentGroup,
+):
     parser_or_group.add_argument(
         "--log-level",
         choices=("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"),
         default="INFO",
-        help="Set the logging level. (default: %(default)s)"
+        help="Set the logging level. (default: %(default)s)",
     )
     parser_or_group.add_argument(
         "--log-file",

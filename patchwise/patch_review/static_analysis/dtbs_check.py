@@ -5,7 +5,11 @@ import os
 from pathlib import Path
 from .static_analysis import StaticAnalysis
 from patchwise import SANDBOX_PATH
-from patchwise.patch_review.decorators import register_static_analysis_review, register_long_review
+from patchwise.patch_review.decorators import (
+    register_static_analysis_review,
+    register_long_review,
+)
+
 
 @register_static_analysis_review
 @register_long_review
@@ -28,8 +32,10 @@ class DtbsCheck(StaticAnalysis):
             "CONFIG_BROKEN_GAS_INST=n",
         ]
 
-        arch = "arm64" # TODO loop through both arm and arm64
-        super().make_config(arch=arch, extra_args=cfg_opts) # TODO use _make_allmodconfig
+        arch = "arm64"  # TODO loop through both arm and arm64
+        super().make_config(
+            arch=arch, extra_args=cfg_opts
+        )  # TODO use _make_allmodconfig
         dtbs_check_output = super().run_cmd_with_timer(
             cmd=[
                 "make",
@@ -39,7 +45,8 @@ class DtbsCheck(StaticAnalysis):
                 f"ARCH={arch}",
                 "LLVM=1",
                 "dtbs_check",
-            ] + cfg_opts,
+            ]
+            + cfg_opts,
             cwd=kernel_tree,
             desc=f"dtbs_check",
         )
@@ -59,15 +66,15 @@ class DtbsCheck(StaticAnalysis):
         self.logger.debug("Running dtbs_check analysis")
 
         modified_files = [str(f) for f in self.commit.stats.files.keys()]
-        dt_files = [
-            f for f in modified_files if f.endswith((".yaml", ".dts", ".dtsi"))
-        ]
+        dt_files = [f for f in modified_files if f.endswith((".yaml", ".dts", ".dtsi"))]
         if not dt_files:
             self.logger.debug("No modified DT schema files found, skipping dtbs_check")
             return ""
         self.logger.debug(f"Modified DT files: {dt_files}")
 
-        self.logger.debug(f"Running dtbs_check for base commit: {self.base_commit.message}")
+        self.logger.debug(
+            f"Running dtbs_check for base commit: {self.base_commit.message}"
+        )
         self.apply_patches([self.base_commit])
         baseline_output = self.__run_dtbs_check(self.base_commit.hexsha)
 

@@ -6,7 +6,7 @@ from pathlib import Path
 # Get the path of the patchwise package
 PACKAGE_PATH = Path(__file__).resolve().parent
 
-PACKAGE_NAME = __name__.split('.')[0]
+PACKAGE_NAME = __name__.split(".")[0]
 
 # Define the sandbox/workspace path relative to the package location
 SANDBOX_PATH = PACKAGE_PATH / "sandbox"

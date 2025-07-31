@@ -9,6 +9,7 @@ import os
 import typing as t
 import urllib3
 import litellm, httpx
+
 urllib3.disable_warnings()
 
 from patchwise.patch_review.patch_review import PatchReview, Dependency
@@ -16,6 +17,7 @@ from patchwise.patch_review.patch_review import PatchReview, Dependency
 DEFAULT_MODEL = "Pro"
 DEFAULT_API_BASE = "https://api.openai.com/v1"
 API_KEY_NAME = "OPENAI_API_KEY"
+
 
 def get_api_key(name: str = API_KEY_NAME) -> str:
     """
@@ -33,9 +35,11 @@ def get_api_key(name: str = API_KEY_NAME) -> str:
         setattr(get_api_key, name, env_var)
     return getattr(get_api_key, name)
 
+
 class ModelProviderDependency(Dependency):
     def check(self) -> None:
         get_api_key(self.name)  # Ensure the API key is available
+
 
 class AiReview(PatchReview):
     api_key: str
@@ -48,15 +52,17 @@ class AiReview(PatchReview):
         """
         Line wraps the given text at 75 columns but skips commit tags.
         """
+
         def split_text_into_paragraphs(text: str) -> list[str]:
             """
             Splits the input text into paragraphs, treating each bullet
             point line as a separate paragraph.
             """
-            lines = text.split('\n')
+            lines = text.split("\n")
             paragraphs = []
             current = []
-            bullet_pattern = re.compile(r"""
+            bullet_pattern = re.compile(
+                r"""
                 ^\s*                              # Optional leading whitespace
                 (
                     [*+\->]                       # Unordered bullet characters
@@ -66,21 +72,27 @@ class AiReview(PatchReview):
                     \d+(\.\d+)+                   # Decimal bullets like 1.1 or 1.2.3
                 )
                 \s*                               # At least one space after the bullet
-            """, re.VERBOSE)
+            """,
+                re.VERBOSE,
+            )
 
             for line in lines:
                 line_stripped = line.strip()
-                if line_stripped == '' or line_stripped == '```' \
-                        or line_stripped == '\'\'\'' or line_stripped == '\"\"\"' \
-                        or bullet_pattern.match(line_stripped) != None:
+                if (
+                    line_stripped == ""
+                    or line_stripped == "```"
+                    or line_stripped == "'''"
+                    or line_stripped == '"""'
+                    or bullet_pattern.match(line_stripped) != None
+                ):
                     if len(current) > 0:
-                        paragraphs.append('\n'.join(current))
+                        paragraphs.append("\n".join(current))
                         current = []
                     paragraphs.append(line)
                 else:
                     current.append(line)
             if len(current) > 0:
-                paragraphs.append('\n'.join(current))
+                paragraphs.append("\n".join(current))
 
             return paragraphs
 
@@ -105,7 +117,6 @@ class AiReview(PatchReview):
                 "Signed-off-by:",
                 "Suggested-by:",
                 "Tested-by:",
-
                 # Additional tags
                 "(cherry picked from commit",
                 "Change-Id",
@@ -122,26 +133,30 @@ class AiReview(PatchReview):
         paragraphs = split_text_into_paragraphs(text)
 
         wrapped_paragraphs = [
-            textwrap.fill(
-                p,
-                width=75,
-                break_long_words=False,  # to preserve links
-            ) if not (is_commit_tag(p.strip()) or is_quote(p.strip())) else p \
-                for p in paragraphs
+            (
+                textwrap.fill(
+                    p,
+                    width=75,
+                    break_long_words=False,  # to preserve links
+                )
+                if not (is_commit_tag(p.strip()) or is_quote(p.strip()))
+                else p
+            )
+            for p in paragraphs
         ]
 
-        return '\n'.join(wrapped_paragraphs)
+        return "\n".join(wrapped_paragraphs)
 
     def provider_api_call(
-        self,
-        user_prompt: str,
-        system_prompt: t.Optional[str] = None
+        self, user_prompt: str, system_prompt: t.Optional[str] = None
     ) -> str:
         messages = [{"content": user_prompt, "role": "user"}]
         if system_prompt:
             messages.append({"content": system_prompt, "role": "system"})
 
-        self.logger.debug(f"Making API call with model: {self.model}, api_base: {AiReview.api_base}")
+        self.logger.debug(
+            f"Making API call with model: {self.model}, api_base: {AiReview.api_base}"
+        )
 
         response = litellm.completion(
             model=self.model,
@@ -168,22 +183,23 @@ class AiReview(PatchReview):
         if not self.commit_message:
             self.logger.error("Failed to retrieve commit message.")
 
+
 def add_ai_arguments(
     parser_or_group: argparse.ArgumentParser | argparse._ArgumentGroup,
 ):
     parser_or_group.add_argument(
         "--model",
         default=f"openai/{AiReview.model}",
-        help="The AI model to use for review. (default: %(default)s)"
+        help="The AI model to use for review. (default: %(default)s)",
     )
     parser_or_group.add_argument(
         "--provider",
         default=DEFAULT_API_BASE,
-        help="The base URL for the AI model API. (default: %(default)s)"
+        help="The base URL for the AI model API. (default: %(default)s)",
     )
     parser_or_group.add_argument(
         "--api-key",
-        help=f"The API key for the AI model API. If not provided, it will be read from the environment variable `{API_KEY_NAME}`."
+        help=f"The API key for the AI model API. If not provided, it will be read from the environment variable `{API_KEY_NAME}`.",
     )
     # parser_or_group.add_argument(
     #     "--review-threshold",
@@ -191,6 +207,7 @@ def add_ai_arguments(
     #     default=0.5,
     #     help="The threshold for review confidence. (default: %(default)s)"
     # )
+
 
 def apply_ai_args(args: argparse.Namespace) -> None:
     """

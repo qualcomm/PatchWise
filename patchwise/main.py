@@ -11,7 +11,12 @@ from rich_argparse import RichHelpFormatter
 from .logger_setup import setup_logger, add_logging_arguments
 from .patch_review.kernel_tree import create_git_worktree
 from .patch_review.patch_review import PATCH_PATH
-from .patch_review import review_patch, add_review_arguments, get_selected_reviews_from_args, install_missing_dependencies
+from .patch_review import (
+    review_patch,
+    add_review_arguments,
+    get_selected_reviews_from_args,
+    install_missing_dependencies,
+)
 from .patch_review.ai_review.ai_review import add_ai_arguments, apply_ai_args
 
 
@@ -19,9 +24,7 @@ logger = logging.getLogger(__name__)
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        formatter_class=RichHelpFormatter
-    )
+    parser = argparse.ArgumentParser(formatter_class=RichHelpFormatter)
 
     review_group = parser.add_argument_group("Patch Review Options")
 
@@ -29,7 +32,7 @@ def parse_args() -> argparse.Namespace:
         "--commits",
         nargs="*",
         default=["HEAD"],
-        help="Space separated list of commit SHAs/refs, or a single commit range in start..end format. (default: %(default)s)"
+        help="Space separated list of commit SHAs/refs, or a single commit range in start..end format. (default: %(default)s)",
     )
     review_group.add_argument(
         "--repo-path",
@@ -39,7 +42,6 @@ def parse_args() -> argparse.Namespace:
 
     add_review_arguments(review_group)
 
-
     ai_group = parser.add_argument_group("AI Review Options")
     add_ai_arguments(ai_group)
 
@@ -47,6 +49,7 @@ def parse_args() -> argparse.Namespace:
     add_logging_arguments(logging_group)
 
     return parser.parse_args()
+
 
 def get_patches(repo: Repo, commits: list[Commit]):
     dest_dir = PATCH_PATH / "user"
@@ -56,6 +59,7 @@ def get_patches(repo: Repo, commits: list[Commit]):
         diff = repo.git.format_patch(f"-1", commit, stdout=True)
         logger.debug(f"Writing patch for commit {commit} to {patch_file}")
         patch_file.write_text(diff)
+
 
 def get_commits(repo: Repo, commits: list[str]) -> list[Commit]:
     """
@@ -74,6 +78,7 @@ def get_commits(repo: Repo, commits: list[str]) -> list[Commit]:
     else:
         # List of refs/SHAs
         return [repo.commit(ref) for ref in commits]
+
 
 def main():
 
@@ -96,6 +101,7 @@ def main():
     for commit in commits:
         logger.info(f"Reviewing commit {commit.hexsha}...")
         review_patch(reviews, commit)
+
 
 if __name__ == "__main__":
     main()

@@ -8,12 +8,16 @@ import tempfile
 from git import GitCommandError
 
 from .static_analysis import StaticAnalysis
-from patchwise.patch_review.decorators import register_static_analysis_review, register_long_review
+from patchwise.patch_review.decorators import (
+    register_static_analysis_review,
+    register_long_review,
+)
 from patchwise import SANDBOX_PATH
 from patchwise.patch_review.patch_review import Dependency
 
 MINIMUM_CLANG_VERSION = 14
 MINIMUM_SPARSE_VERSION = "0.6.4"
+
 
 class SparseDependency(Dependency):
 
@@ -25,9 +29,21 @@ class SparseDependency(Dependency):
         self.logger.info(f"Installing {self.name} from source...")
         with tempfile.TemporaryDirectory() as tmpdir:
             src_dir = os.path.join(tmpdir, "sparse")
-            subprocess.run(["git", "clone", "git://git.kernel.org/pub/scm/devel/sparse/sparse.git", src_dir], check=True)
+            subprocess.run(
+                [
+                    "git",
+                    "clone",
+                    "git://git.kernel.org/pub/scm/devel/sparse/sparse.git",
+                    src_dir,
+                ],
+                check=True,
+            )
             subprocess.run(["make"], cwd=src_dir, check=True)
-            subprocess.run(["sudo", "make", f"PREFIX={SANDBOX_PATH}", "install"], cwd=src_dir, check=True)
+            subprocess.run(
+                ["sudo", "make", f"PREFIX={SANDBOX_PATH}", "install"],
+                cwd=src_dir,
+                check=True,
+            )
 
     def _do_install(self) -> None:
         super().install_from_pkg_manager()
@@ -37,6 +53,7 @@ class SparseDependency(Dependency):
         except ImportError as e:
             self.logger.warning(f"{e}")
             self.install_from_source()
+
 
 @register_static_analysis_review
 @register_long_review
@@ -136,7 +153,7 @@ class Sparse(StaticAnalysis):
                     if not blame_output.startswith("^"):
                         # Strip kernel_tree prefix from the line's filepath
                         if line.startswith(kernel_tree + "/"):
-                            stripped_line = line[len(kernel_tree) + 1:]
+                            stripped_line = line[len(kernel_tree) + 1 :]
                         else:
                             stripped_line = line
                         output += stripped_line + "\n"

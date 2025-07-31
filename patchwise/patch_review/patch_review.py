@@ -41,7 +41,9 @@ class Dependency:
             self.max_version = Version(str(max_version))
 
     def version_in_range(self, version: Version) -> bool:
-        if (self.min_version is not None and version < self.min_version) or (self.max_version is not None and version > self.max_version):
+        if (self.min_version is not None and version < self.min_version) or (
+            self.max_version is not None and version > self.max_version
+        ):
             return False
         return True
 
@@ -86,7 +88,11 @@ class Dependency:
 
     def install_from_pkg_manager(self) -> None:
         pkg_managers: list[tuple[str, list[str] | None, list[str]]] = [
-            ("apt-get", ["sudo", "apt-get", "update"], ["sudo", "apt-get", "install", "-y", self.name]),
+            (
+                "apt-get",
+                ["sudo", "apt-get", "update"],
+                ["sudo", "apt-get", "install", "-y", self.name],
+            ),
             ("dnf", None, ["sudo", "dnf", "install", "-y", self.name]),
             ("yum", None, ["sudo", "yum", "install", "-y", self.name]),
             ("zypper", None, ["sudo", "zypper", "install", "-y", self.name]),

@@ -5,6 +5,7 @@ import argparse
 import logging
 from typing import Iterable
 from git.objects.commit import Commit
+
 # Automatically import all patch review modules so all @register_patch_review classes are registered
 import importlib
 import pkgutil
@@ -20,11 +21,18 @@ for _, modname, ispkg in pkgutil.iter_modules(ai_review.__path__):
     if not ispkg:
         importlib.import_module(f"{__name__}.ai_review.{modname}")
 
-from patchwise.patch_review.decorators import AVAILABLE_PATCH_REVIEWS, LLM_REVIEWS, STATIC_ANALYSIS_REVIEWS, SHORT_REVIEWS, LONG_REVIEWS
+from patchwise.patch_review.decorators import (
+    AVAILABLE_PATCH_REVIEWS,
+    LLM_REVIEWS,
+    STATIC_ANALYSIS_REVIEWS,
+    SHORT_REVIEWS,
+    LONG_REVIEWS,
+)
 from .patch_review import PatchReview
 
 
 logger = logging.getLogger(__name__)
+
 
 class PatchReviewResults:
     def __init__(self, commit: Commit):
@@ -59,9 +67,7 @@ def run_patch_review(
 def review_patch(reviews: set[str], commit: Commit) -> PatchReviewResults:
 
     all_reviews = {cls.__name__: cls for cls in AVAILABLE_PATCH_REVIEWS}
-    selected_reviews = [
-        all_reviews[name] for name in reviews if name in all_reviews
-    ]
+    selected_reviews = [all_reviews[name] for name in reviews if name in all_reviews]
 
     for review_cls in selected_reviews:
         logger.debug(f"Verifying dependencies for: {review_cls.__name__}")
@@ -77,9 +83,7 @@ def install_missing_dependencies(reviews: set[str]) -> None:
     Install missing dependencies for the specified reviews.
     """
     all_reviews = {cls.__name__: cls for cls in AVAILABLE_PATCH_REVIEWS}
-    selected_reviews = [
-        all_reviews[name] for name in reviews if name in all_reviews
-    ]
+    selected_reviews = [all_reviews[name] for name in reviews if name in all_reviews]
 
     for review_cls in selected_reviews:
         logger.info(f"Installing dependencies for: {review_cls.__name__}")

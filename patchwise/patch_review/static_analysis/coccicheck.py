@@ -4,7 +4,10 @@
 import os
 import re
 from .static_analysis import StaticAnalysis
-from patchwise.patch_review.decorators import register_static_analysis_review, register_short_review
+from patchwise.patch_review.decorators import (
+    register_static_analysis_review,
+    register_short_review,
+)
 
 
 @register_static_analysis_review
@@ -25,7 +28,7 @@ class Coccicheck(StaticAnalysis):
                 "coccicheck",
                 f"M={directory}",
                 "MODE=report",
-                f"DEBUG_FILE={self.symlink_path}", # if hasattr(self, 'symlink_path') else "DEBUG_FILE=/dev/null",
+                f"DEBUG_FILE={self.symlink_path}",  # if hasattr(self, 'symlink_path') else "DEBUG_FILE=/dev/null",
             ],
             cwd=str(self.repo.working_tree_dir),
             desc="coccicheck running",
@@ -58,7 +61,7 @@ class Coccicheck(StaticAnalysis):
 
         for directory in directories:
             self.logger.debug(f"Running coccicheck on directory: '{directory}'")
-            cur_output =  self._run_coccicheck(directory)
+            cur_output = self._run_coccicheck(directory)
             if not cur_output:
                 self.logger.debug(f"No coccicheck output for {directory}, skipping")
                 continue

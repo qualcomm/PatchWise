@@ -4,6 +4,7 @@
 import os
 from patchwise.patch_review.patch_review import PatchReview
 
+
 class StaticAnalysis(PatchReview):
     """
     Base class for performing static analysis on kernel commits.
@@ -27,8 +28,12 @@ class StaticAnalysis(PatchReview):
             desc="Cleaning tree",
         )
 
-
-    def make_config(self, config_type: str = "defconfig", arch: str = "arm", extra_args: list[str] = []) -> None:
+    def make_config(
+        self,
+        config_type: str = "defconfig",
+        arch: str = "arm",
+        extra_args: list[str] = [],
+    ) -> None:
         self.logger.debug(f"Making {config_type}")
         cmd = [
             "make",

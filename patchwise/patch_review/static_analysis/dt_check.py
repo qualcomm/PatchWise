@@ -6,7 +6,10 @@ from pathlib import Path
 from git.objects.commit import Commit
 from .static_analysis import StaticAnalysis
 from patchwise import SANDBOX_PATH
-from patchwise.patch_review.decorators import register_static_analysis_review, register_long_review
+from patchwise.patch_review.decorators import (
+    register_static_analysis_review,
+    register_long_review,
+)
 
 
 @register_static_analysis_review
@@ -75,7 +78,9 @@ class DtCheck(StaticAnalysis):
         logs_dir.mkdir(parents=True, exist_ok=True)
 
         if dt_binding_check_log_path.exists() and refcheckdocs_log_path.exists():
-            self.logger.debug(f"Using cached dt_binding_check logs for: {commit.hexsha}")
+            self.logger.debug(
+                f"Using cached dt_binding_check logs for: {commit.hexsha}"
+            )
         else:
             self.apply_patches([commit])
             refcheckdocs_logs = self.__make_refcheckdocs()
@@ -83,7 +88,9 @@ class DtCheck(StaticAnalysis):
             self.logger.debug(f"Saved refcheckdocs logs to {refcheckdocs_log_path}")
             dt_binding_check_logs = self.__make_dt_binding_check()
             dt_binding_check_log_path.write_text(dt_binding_check_logs)
-            self.logger.debug(f"Saved dt_binding_check logs to {dt_binding_check_log_path}")
+            self.logger.debug(
+                f"Saved dt_binding_check logs to {dt_binding_check_log_path}"
+            )
 
         return refcheckdocs_log_path.read_text(), dt_binding_check_log_path.read_text()
 
@@ -109,7 +116,7 @@ class DtCheck(StaticAnalysis):
 
         self.logger.debug(f"Preparing kernel tree for dt checks")
         # super().clean_tree()
-        super().make_config() # TODO change back to _make_allmodconfig
+        super().make_config()  # TODO change back to _make_allmodconfig
         base_refcheck, base_binding = self.__get_dt_checker_logs(self.base_commit)
         patch_refcheck, patch_binding = self.__get_dt_checker_logs(self.commit)
 
