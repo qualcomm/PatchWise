@@ -31,9 +31,11 @@ def get_api_key(name: str = API_KEY_NAME) -> str:
             try:
                 env_var = getpass(f"Please enter your {name}: ").strip()
             except Exception:
-                raise RuntimeError(f"{name} is not set and user input failed.")
+                print(f"{name} is not set and user input failed.")
+                setattr(get_api_key, name, None)
             if not env_var:
-                raise RuntimeError(f"{name} is required but was not provided.")
+                print(f"{name} is required but was not provided.")
+                setattr(get_api_key, name, None)
         setattr(get_api_key, name, env_var)
     return getattr(get_api_key, name)
 
