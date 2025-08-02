@@ -23,13 +23,10 @@ jobs:
         python -m pip install --upgrade pip
         pip install -e .
     
-    - name: Check formatting with black
-      run: black --check --diff .
-    
+    - name: Format code with ruff
+      run: |
+        ruff format --check .
+        
     - name: Lint and check imports with ruff
       run: |
         ruff check .
-        ruff check --select TID252 .
-    
-    - name: Check for relative imports
-      run: ruff check --select TID252 --diff .
