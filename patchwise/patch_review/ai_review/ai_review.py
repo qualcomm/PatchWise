@@ -6,7 +6,6 @@ import os
 import re
 import textwrap
 import typing as t
-from getpass import getpass
 
 import httpx
 import litellm
@@ -14,43 +13,15 @@ import urllib3
 
 urllib3.disable_warnings()
 
-from patchwise.patch_review.patch_review import Dependency, PatchReview
+from patchwise.patch_review.patch_review import PatchReview
 
 DEFAULT_MODEL = "Pro"
 DEFAULT_API_BASE = "https://api.openai.com/v1"
-API_KEY_NAME = "OPENAI_API_KEY"
-
-
-def get_api_key(name: str = API_KEY_NAME) -> str:
-    """
-    Returns the environment variable value, caching it after the first retrieval.
-    """
-    if not hasattr(get_api_key, name):
-        env_var = os.environ.get(name)
-        if not env_var:
-            try:
-                env_var = getpass(f"Please enter your {name}: ").strip()
-            except Exception:
-                print(f"{name} is not set and user input failed.")
-                setattr(get_api_key, name, None)
-            if not env_var:
-                print(f"{name} is required but was not provided.")
-                setattr(get_api_key, name, None)
-        setattr(get_api_key, name, env_var)
-    return getattr(get_api_key, name)
-
-
-class ModelProviderDependency(Dependency):
-    def check(self) -> None:
-        get_api_key(self.name)  # Ensure the API key is available
 
 
 class AiReview(PatchReview):
-    api_key: str
     model: str = DEFAULT_MODEL
     api_base: str = DEFAULT_API_BASE
-
-    DEPENDENCIES = [ModelProviderDependency("OPENAI_API_KEY")]
 
     def format_chat_response(self, text: str) -> str:
         """
@@ -175,7 +146,6 @@ class AiReview(PatchReview):
         self.model = AiReview.model
 
         os.environ["OTEL_SDK_DISABLED"] = "true"
-        os.environ[API_KEY_NAME] = get_api_key(API_KEY_NAME)
 
         litellm.client_session = httpx.Client(verify=False)
 
@@ -201,10 +171,6 @@ def add_ai_arguments(
         default=DEFAULT_API_BASE,
         help="The base URL for the AI model API. (default: %(default)s)",
     )
-    parser_or_group.add_argument(
-        "--api-key",
-        help=f"The API key for the AI model API. If not provided, it will be read from the environment variable `{API_KEY_NAME}`.",
-    )
     # parser_or_group.add_argument(
     #     "--review-threshold",
     #     type=float,
@@ -220,5 +186,3 @@ def apply_ai_args(args: argparse.Namespace) -> None:
     """
     AiReview.model = args.model
     AiReview.api_base = args.provider
-    if args.api_key:
-        AiReview.api_key = args.api_key
