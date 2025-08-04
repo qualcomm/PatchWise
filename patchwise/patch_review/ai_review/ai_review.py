@@ -15,6 +15,7 @@ from patchwise.patch_review.patch_review import PatchReview
 
 urllib3.disable_warnings()
 
+
 DEFAULT_MODEL = "Pro"
 DEFAULT_API_BASE = "https://api.openai.com/v1"
 
