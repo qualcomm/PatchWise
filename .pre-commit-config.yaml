@@ -1,3 +1,4 @@
+fail_fast: true
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
     # Use the latest stable version of Ruff
@@ -6,3 +7,18 @@ repos:
       - id: ruff-check # Runs the linter
         args: [--fix] # Automatically fixes fixable issues
       - id: ruff-format # Runs the formatter
+  
+  - repo: local
+    hooks:
+      - id: auto-signoff
+        name: Auto-add signoff
+        entry: |
+          bash -c 'if ! grep -q "Signed-off-by:" "$1"; then
+            echo "" >> "$1"
+            echo "Signed-off-by: $(git config user.name) <$(git config user.email)>" >> "$1"
+            echo "Added missing Signed-off-by line"
+          fi'
+        args: [--]
+        language: system
+        stages: [commit-msg]
+        verbose: true
