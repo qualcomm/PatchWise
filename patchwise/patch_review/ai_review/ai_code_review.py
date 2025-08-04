@@ -66,26 +66,17 @@ class AiCodeReview(AiReview):
     SYMBOL_MSG_ID = 3
     DOC_SYMBOL_MSG_ID = 100
 
-    PROMPT_TEMPLATE = """
-# User Prompt
-
-Review the following patch diff and provide inline feedback on the code changes. Additional context will be provided to help you understand the code and its purpose.
-
-## Relevant context
-
-{context}
-
-## Commit text
-
-{commit_text}
-
-## Patch Diff to review
-
-```diff
-{diff}
-```
-
-"""
+    @staticmethod
+    def _load_prompt_template() -> str:
+        """Load the prompt template from the markdown file."""
+        template_path = os.path.join(
+            os.path.dirname(__file__), "prompts", "code_review_prompt.md"
+        )
+        try:
+            with open(template_path, "r") as f:
+                return f.read()
+        except Exception as e:
+            raise RuntimeError(f"Failed to load prompt template: {e}")
 
     @staticmethod
     def get_kernel_coding_style() -> str:
@@ -99,78 +90,23 @@ Review the following patch diff and provide inline feedback on the code changes.
         except Exception as e:
             return f"[Could not load kernel coding style guidelines: {e}]"
 
+    @staticmethod
+    def _load_system_prompt_template() -> str:
+        """Load the system prompt template from the markdown file."""
+        template_path = os.path.join(
+            os.path.dirname(__file__), "prompts", "system_prompt.md"
+        )
+        try:
+            with open(template_path, "r") as f:
+                return f.read()
+        except Exception as e:
+            raise RuntimeError(f"Failed to load system prompt template: {e}")
+
     @classmethod
     def get_system_prompt(cls) -> str:
         """Generate the system prompt including kernel coding style guidelines."""
-        return """
-# System Prompt
-
-## Instructions
-
-You are a Linux kernel maintainer reviewing patches sent to the Linux kernel mailing list. You will receive a patch diff and your task is to provide inline feedback on the code changes. Your task is to find issues in the code, if any. Is it imperative that your diagnosis is accurate, that you correctly identify real bugs that must be addressed and do not provide false positives. You should NOT provide suggestions that place any burden of investigation onto the developer such as "verify" or "you should consider", if it is not worth being concrete and direct about, it's not worth mentioning. Most changes will have few to no bugs, so be very careful with pointing out issues as false positives are strictly not acceptable.
-
-- Do NOT compliment the code.
-- Do not comment on what the code is doing, your comments should exclusively be problems.
-- Do not summarize the change.
-- Do not comment on how the change makes a difference, you are providing feedback to the developer, not the maintainer.
-- Your output must strictly be comments on bugs and what is incorrect.
-- Only point out specific issues in the code.
-- Keep your feedback minimal and to the point.
-- Do NOT comment on what the code does correctly.
-- Stay focused on the issues that need to be fixed.
-- You should not provide a summary or a list of issues outside the inline comments.
-- Do NOT summarize the code or your feedback at the end of the review.
-- Your comments should not be C comments, they should be unquoted, interleaved between the lines of the quoted text (the lines that start with '>').
-- MAKE SURE THAT YOUR SUGGESTIONS FOLLOW KERNEL CODING STYLE GUIDELINES.
-- Use correct grammar and only ASCII characters.
-- Do not tell developers to add comments.
-
-### Positive Feedback
-
-You have been doing a good job of only providing feedback when you are absolutely confident and not commenting on things you are not sure about. You have been doing a great job at keeping each of your comments short and to the point, without unnecessary explanations or compliments. You have been following the Linux kernel coding style guidelines and providing feedback that is relevant to the code changes. You have been doing a great job at providing feedback that is actionable and can be easily understood by the developer.
-
-### Constructive Feedback
-
-You need to work on providing feedback that is more specific and actionable. **You can also do a better job at not summarizing or stating what's correct.** It is not appropriate to tell developers that their code is correct or that they have done a good job. Instead, focus on the specific issues that need to be fixed and provide actionable feedback.
-
-## Example Feedback from Maintainers
-
-```
-> diff --git a/arch/arm64/Kconfig.platforms b/arch/arm64/Kconfig.platforms
-> index a541bb029..0ffd65e36 100644
-> --- a/arch/arm64/Kconfig.platforms
-> +++ b/arch/arm64/Kconfig.platforms
-> @@ -270,6 +270,7 @@ config ARCH_QCOM
->  	select GPIOLIB
->  	select PINCTRL
->  	select HAVE_PWRCTRL if PCI
-> +	select PCI_PWRCTRL_SLOT if PCI
-
-PWRCTL isn't a fundamental feature of ARCH_QCOM, so why do we select it
-here?
-
-> diff --git a/arch/arm64/boot/dts/qcom/sm8550-hdk.dts b/arch/arm64/boot/dts/qcom/sm8550-hdk.dts
-> index 29bc1ddfc7b25f203c9f3b530610e45c44ae4fb2..fe46699804b3a8fb792edc06b58b961778cd8d70 100644
-> --- a/arch/arm64/boot/dts/qcom/sm8550-hdk.dts
-> +++ b/arch/arm64/boot/dts/qcom/sm8550-hdk.dts
-> @@ -857,10 +857,10 @@ vreg_l5n_1p8: ldo5 {{
->  			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
->  		}};
->
-> -		vreg_l6n_3p3: ldo6 {{
-> -			regulator-name = "vreg_l6n_3p3";
-> +		vreg_l6n_3p2: ldo6 {{
-
-Please follow the naming from the board's schematics for the label and
-regulator-name.
-
-> +			regulator-name = "vreg_l6n_3p2";
->  			regulator-min-microvolt = <2800000>;
-```
-
-## Kernel Coding Style Guidelines
-
-""" + cls.get_kernel_coding_style()
+        template = cls._load_system_prompt_template()
+        return template.format(kernel_coding_style=cls.get_kernel_coding_style())
 
     def _read_file_safely(self, file_path: str) -> Optional[str]:
         """Safely read a file and return its contents, or None on error."""
@@ -317,11 +253,15 @@ regulator-name.
                 token = params.get("token")
                 # value = params.get("value", {})
                 if token == "backgroundIndexProgress":
-                    continue
                     self.logger.debug(f"Background index progress: {json.dumps(msg)}")
+                    continue
 
             self.logger.debug(
-                f"Received LSP message with id {msg.get('id')}, expected {expected_id}: {json.dumps(msg, indent=2)}"
+                (
+                    f"Received LSP message with id {msg.get('id')}, "
+                    f"expected {expected_id}: "
+                    f"{json.dumps(msg, indent=2)}"
+                )
             )
 
     def _send_lsp_message(
@@ -374,7 +314,10 @@ regulator-name.
         text: Optional[str] = None,
         language: str = "c",
     ) -> None:
-        """Open a file in the LSP server. If text is not provided, omit it from the message."""
+        """
+        Open a file in the LSP server.
+        If text is not provided, omit it from the message.
+        """
         self.logger.debug(f"Opening file in LSP: {uri}")
         text_document = {"uri": uri, "languageId": language, "version": 1}
         if text is not None:
@@ -411,30 +354,13 @@ regulator-name.
     ) -> Dict[str, Any]:
         # Log the original identifier location
         self.logger.debug(
-            f"Looking up definition for identifier '{identifier}' at location: {uri}:{line}:{character}"
+            (
+                f"Looking up definition for identifier '{identifier}' at location: "
+                f"{uri}:{line}:{character}"
+            )
         )
         current_location = LSPLocation(uri, line, character)
 
-        # # Always perform two definition lookups and only use the second result (first is assumed cache miss)
-        # resp_first = self._find_definition(proc, current_location.uri, current_location.line, current_location.character)
-        # self.logger.debug(f"Clangd response for definition request (assumed cache miss): {json.dumps(resp_first, indent=2)}")
-
-        # # If the first response has a result, open the file containing the supposed definition in the LSP
-        # def_file_uri = None
-        # def_file_text = None
-        # if resp_first.get("result") and len(resp_first["result"]) > 0:
-        #     loc = resp_first["result"][0]
-        #     def_file_uri = loc["uri"]
-        #     def_file_path = def_file_uri.replace("file://", "")
-        #     if os.path.exists(def_file_path):
-        #         def_file_text = self._read_file_safely(def_file_path)
-        #         self._open_file_in_lsp(proc, def_file_uri, def_file_text)
-        #         self.wait_for_diagnostics(proc, def_file_uri, timeout=15)
-        # else:
-        #     self.logger.warning(f"No definition found for {identifier} at {current_location.uri}:{current_location.line}:{current_location.character}.")
-
-        # Wait for clangd indexing for 1 second before retrying
-        # # self.wait_for_clangd_indexing(proc, max_total_wait=15) # TEMP reset to max_total_wait=1
         resp_second = self._find_definition(
             proc,
             current_location.uri,
@@ -442,7 +368,10 @@ regulator-name.
             current_location.character,
         )
         self.logger.debug(
-            f"Clangd response for definition request (used result): {json.dumps(resp_second, indent=2)}"
+            (
+                "Clangd response for definition request (used result): "
+                f"{json.dumps(resp_second, indent=2)}"
+            )
         )
 
         if resp_second.get("result") and len(resp_second["result"]) > 0:
@@ -453,7 +382,10 @@ regulator-name.
                 loc["range"]["start"]["character"],
             )
             self.logger.debug(
-                f"Found at {new_location.uri}:{new_location.line}:{new_location.character} (after forced retry)"
+                (
+                    f"Found at {new_location.uri}:{new_location.line}:"
+                    f"{new_location.character} (after forced retry)"
+                )
             )
         else:
             self.logger.debug(
@@ -528,7 +460,10 @@ regulator-name.
     def _find_symbol_and_parent(
         self, symbols: List[Dict[str, Any]], identifier: str, line: int
     ) -> Optional[Tuple[Dict[str, Any], Optional[Dict[str, Any]]]]:
-        """Recursively search the symbol tree for the symbol matching identifier at the given line."""
+        """
+        Recursively search the symbol tree for the symbol matching identifier
+        at the given line.
+        """
 
         def helper(
             nodes: List[Dict[str, Any]], parent: Optional[Dict[str, Any]] = None
@@ -575,7 +510,9 @@ regulator-name.
         diff_line_numbers: Dict[str, Set[int]],
         def_file: str,
     ) -> Set[int]:
-        """Build set of essential lines to print: diff lines + all definition regions."""
+        """
+        Build set of essential lines to print: diff lines + all definition regions.
+        """
         essential_lines: Set[int] = set()
 
         # Add diff lines
@@ -681,7 +618,10 @@ regulator-name.
         return "\n\n".join(context_parts)
 
     def _setup_lsp_client(self) -> subprocess.Popen[Any]:
-        """Set up and initialize the LSP client, and start background notification logger."""
+        """
+        Set up and initialize the LSP client, and start background
+        notification logger.
+        """
         proc = subprocess.Popen(
             [
                 "clangd",
@@ -719,9 +659,6 @@ regulator-name.
             target=_stderr_reader, args=(proc.stderr, self.logger), daemon=True
         )
         stderr_thread.start()
-
-        # stdout_logger_thread = threading.Thread(target=_stdout_notification_logger, args=(proc.stdout, self.logger), daemon=True)
-        # stdout_logger_thread.start()
 
         self._initialize_lsp(proc, KERNEL_PATH)
         return proc
@@ -797,13 +734,17 @@ regulator-name.
 
             if (
                 ident in printed_defs
-            ):  # TODO we shouldn't be skipping all matching identifiers, we should be only skipping duplicate definitions. It's possible that 2 matching identifiers (at different positions) actually have different definitions.
+            ):  # TODO we shouldn't be skipping all matching identifiers, we should be
+                # only skipping duplicate definitions. It's possible that 2 matching
+                # identifiers (at different positions) actually have different
+                # definitions.
                 continue
 
             resp = self._find_actual_definition(proc, uri, lnum, col, ident)
             if not resp.get("result") or len(resp["result"]) == 0:
                 self.logger.debug(
-                    f"No definition found for {ident} in {uri} at line {lnum + 1}, column {col + 1}."
+                    f"No definition found for {ident} in {uri} at line "
+                    f"{lnum + 1}, column {col + 1}."
                 )
                 continue
 
@@ -872,11 +813,17 @@ regulator-name.
                 params = msg.get("params", {})
                 if params.get("uri") == file_uri:
                     self.logger.debug(
-                        f"Received diagnostics for {file_uri}: {json.dumps(msg, indent=2)}"
+                        (
+                            f"Received diagnostics for {file_uri}: "
+                            f"{json.dumps(msg, indent=2)}"
+                        )
                     )
                     return params
             self.logger.debug(
-                f"Received message that wasn't a diagnostic message for {file_uri}: {json.dumps(msg)}"
+                (
+                    f"Received message that wasn't a diagnostic message for {file_uri}:"
+                    f" {json.dumps(msg)}"
+                )
             )
         self.logger.warning(f"Timeout waiting for diagnostics for {file_uri}")
         return None
@@ -890,8 +837,10 @@ regulator-name.
         max_interval: int = 10,
     ) -> None:
         """
-        Wait for clangd background indexing progress notifications, using exponential backoff.
-        Reads all available messages from proc.stdout without pausing, only sleeps when no messages are available.
+        Wait for clangd background indexing progress notifications,
+        using exponential backoff.
+        Reads all available messages from proc.stdout without pausing,
+        only sleeps when no messages are available.
         Breaks if:
           - percentage reaches 100
           - no $/progress notification is received for max_wait seconds
@@ -927,7 +876,6 @@ regulator-name.
                     if token == "backgroundIndexProgress" and isinstance(value, dict):
                         percentage = value.get("percentage")
                         if percentage is not None:
-                            # self.logger.debug(f"clangd indexing progress: {percentage}%")
                             if percentage == 100:
                                 return
                             if last_percentage == percentage and last_value == value:
@@ -935,7 +883,10 @@ regulator-name.
                                 waited += current_interval
                                 if current_interval >= max_stale_time:
                                     self.logger.error(
-                                        f"No progress in {max_stale_time} seconds, giving up."
+                                        (
+                                            f"No progress in {max_stale_time} seconds, "
+                                            "giving up."
+                                        )
                                     )
                                     return
                             else:
@@ -946,13 +897,19 @@ regulator-name.
                         else:
                             # No percentage, just continue
                             self.logger.debug(
-                                f"Received backgroundIndexProgress without percentage: {json.dumps(value, indent=2)}"
+                                (
+                                    "Received backgroundIndexProgress without"
+                                    f" percentage: {json.dumps(value, indent=2)}"
+                                )
                             )
                             pass
                     else:
                         # Not a backgroundIndexProgress, just continue
                         self.logger.debug(
-                            f"Received $/progress with token {token} but not backgroundIndexProgress: {json.dumps(msg, indent=2)}"
+                            (
+                                f"Received $/progress with token {token} but not "
+                                f"backgroundIndexProgress: {json.dumps(msg, indent=2)}"
+                            )
                         )
                         pass
                 else:
@@ -968,13 +925,19 @@ regulator-name.
                 waited += current_interval
         if time.time() - start_time >= max_total_wait:
             self.logger.warning(
-                f"Clangd indexing did not complete within {max_total_wait} seconds, giving up."
+                (
+                    f"Clangd indexing did not complete within {max_total_wait} seconds,"
+                    " giving up."
+                )
             )
 
     def trick_clangd(
         self, proc: subprocess.Popen[Any], file_adds: Dict[str, Set[int]]
     ) -> None:
-        """Trick clangd into indexing definitions by making a dummy pass and reading messages for 15 seconds."""
+        """
+        Trick clangd into indexing definitions by making a dummy pass and reading
+        messages for 15 seconds.
+        """
         # Dummy query: open the first file if any
         first_file = next(iter(file_adds), None)
         if first_file:
@@ -988,40 +951,16 @@ regulator-name.
 
         self.wait_for_clangd_indexing(proc)
         # Read LSP messages for 15 seconds
-        # start_time = time.time()
-        # while time.time() - start_time < 15:
-        #     try:
-        #         self._read_lsp_response(proc)
-        #     except Exception as e:
-        #         self.logger.debug(f"Exception while reading LSP response: {e}")
-        #         # break
 
     def _collect_definitions(
         self, file_adds: Dict[str, Set[int]]
     ) -> Dict[str, List[Tuple[int, int, str]]]:
-        """Collect all definitions from the diff using LSP, but wait after a dummy pass before real querying."""
+        """
+        Collect all definitions from the diff using LSP, but wait after a dummy pass
+        before real querying.
+        """
         # Start the LSP client and make a dummy query to trigger indexing
         proc = self._setup_lsp_client()
-
-        # self.trick_clangd(proc, file_adds)
-
-        # import psutil
-        # max_wait = 10
-        # interval = 5
-        # waited = 0
-        # while waited < max_wait:
-        #     try:
-        #         self.logger.debug(f"pid: {proc.pid}, waiting for clangd-19 to index files...")
-        #         p = psutil.Process(proc.pid)
-        #         parent_pid = p.ppid()
-        #         sibling_procs = [s for s in psutil.process_iter(['pid', 'ppid', 'name', 'cmdline'])
-        #                          if s.info['ppid'] == parent_pid]
-        #         sibling_pids = [s.info['pid'] for s in sibling_procs]
-        #         self.logger.debug(f"Sibling PIDs (same parent as clangd-19 proc {proc.pid}, parent {parent_pid}): {sibling_pids}")
-        #     except Exception as e:
-        #         self.logger.debug(f"Error listing sibling processes: {e}")
-        #     time.sleep(interval)
-        #     waited += interval
 
         # Now process all identifiers as normal
         printed_defs: Set[str] = set()
@@ -1076,7 +1015,8 @@ regulator-name.
         """Execute the AI code review."""
         self.get_context()
 
-        formatted_prompt = self.PROMPT_TEMPLATE.format(
+        prompt_template = self._load_prompt_template()
+        formatted_prompt = prompt_template.format(
             diff=self.diff, commit_text=self.commit_message, context=self.context
         )
 
