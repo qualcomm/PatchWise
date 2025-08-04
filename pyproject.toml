@@ -21,11 +21,11 @@ dependencies = [
     "tqdm>=4.67.1",
 ]
 
-[dependency-groups]
+[project.optional-dependencies]
 dev = [
     "ruff>=0.1.0",
     "pytest>=8.3.5",
-    "pre-commit>=4.2.0"
+    "pre-commit>=4.2.0",
 ]
 
 [project.scripts]
