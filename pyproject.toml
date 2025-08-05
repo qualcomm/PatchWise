@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "patchwise"
-version = "0.2.1"
+version = "0.2.0"
 description = "A tool for reviewing kernel patches"
 authors = [{ name = "David Gantman", email = "dgantman@qti.qualcomm.com" }]
 requires-python = ">=3.10"
