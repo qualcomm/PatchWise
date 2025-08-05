@@ -7,7 +7,8 @@ import argparse
 import importlib
 import logging
 import pkgutil
-from typing import Iterable
+from pathlib import Path
+from typing import Iterable, Dict, Optional
 
 from git.objects.commit import Commit
 
@@ -29,6 +30,7 @@ from patchwise.patch_review.decorators import (
     LONG_REVIEWS,
     SHORT_REVIEWS,
     STATIC_ANALYSIS_REVIEWS,
+    PATCH_FILES_REVIEWS,
 )
 
 from .patch_review import PatchReview
@@ -37,22 +39,46 @@ logger = logging.getLogger(__name__)
 
 
 class PatchReviewResults:
-    def __init__(self, commit: Commit):
+    def __init__(self, commit: Optional[Commit] = None,
+                 patch_files: Optional[list[Path]] = None):
+        if commit is None and patch_files is None:
+            raise ValueError("PatchReviewResults requires either a 'commit' or 'patch_files' context.")
+        if commit is not None and patch_files is not None:
+            raise ValueError("PatchReviewResults cannot be initialized with both 'commit' and 'patch_files'.")
+
         self.commit = commit
+        self.patch_files = patch_files
         self.results: dict[str, str] = {}
 
     def __repr__(self):
-        return f"PatchReviewResults(commit={self.commit}, results={self.results})"
-
+        if self.commit:
+            return f"PatchReviewResults(commit={self.commit}, results={self.results})"
+        elif self.patch_files:
+            file_names = [p.name for p in self.patch_files]
+            return f"PatchReviewResults(patch_files={file_names}, results={self.results})"
+        else:
+            return f"PatchReviewResults(no_context, results={self.results})"
 
 def run_patch_review(
-    selected_reviews: list[type[PatchReview]], commit: Commit
+    selected_reviews: list[type[PatchReview]], commit: Optional[Commit] = None,
+    patch_files: Optional[list[Path]] = None
 ) -> PatchReviewResults:
-    output = PatchReviewResults(commit)
+    if commit:
+        output = PatchReviewResults(commit=commit)
+    elif patch_files:
+        output = PatchReviewResults(patch_files=patch_files)
+    else:
+        raise ValueError("commit or patch_files missing for PatchReviewResults initialization.")
 
     for selected_review in selected_reviews:
         logger.debug(f"Initializing review: {selected_review.__name__}")
-        cur_review = selected_review(commit)
+
+        if patch_files:
+            cur_review = selected_review(patch_files=patch_files)
+        elif commit:
+            cur_review = selected_review(commit=commit)
+        else:
+            raise ValueError("Either commit or patch_files must be provided for review.")
 
         logger.debug(f"Running review: {selected_review.__name__}")
         result = cur_review.run()
@@ -74,10 +100,21 @@ def review_patch(reviews: set[str], commit: Commit) -> PatchReviewResults:
         logger.debug(f"Verifying dependencies for: {review_cls.__name__}")
         review_cls.verify_dependencies()
 
-    results = run_patch_review(selected_reviews, commit)
+    results = run_patch_review(selected_reviews, commit=commit)
 
     return results
 
+def review_patch_files(reviews: set[str], patch_files: list[Path]) -> Dict[str, str]:
+    all_reviews = {cls.__name__: cls for cls in PATCH_FILES_REVIEWS}
+    selected_reviews = [all_reviews[name] for name in reviews if name in all_reviews]
+
+    for review_cls in selected_reviews:
+        logger.debug(f"Verifying dependencies for: {review_cls.__name__} (for patch file review)")
+        review_cls.verify_dependencies()
+
+    results_obj = run_patch_review(selected_reviews, patch_files=patch_files)
+
+    return results_obj.results
 
 def install_missing_dependencies(reviews: set[str]) -> None:
     """
@@ -134,6 +171,14 @@ def add_review_arguments(
     )
 
     parser_or_group.add_argument(
+        "--patch-files",
+        # Allow one or mutil files
+        nargs="+",
+        type=Path,
+        help=f"Run only checkpatch reviews: [`{_review_list_str(PATCH_FILES_REVIEWS)}`].",
+    )
+
+    parser_or_group.add_argument(
         "--install",
         action="store_true",
         help="Install missing dependencies for the specified reviews. This will not run any reviews, only install dependencies.",
@@ -158,6 +203,8 @@ def get_selected_reviews_from_args(args: argparse.Namespace) -> set[str]:
         group_sets.append(set(cls.__name__ for cls in SHORT_REVIEWS))
     if getattr(args, "long_reviews", False):
         group_sets.append(set(cls.__name__ for cls in LONG_REVIEWS))
+    if getattr(args, "patch_files_reviews", False):
+        group_sets.append(set(cls.__name__ for cls in PATCH_FILES_REVIEWS))
 
     explicit_reviews: set[str] = (
         set(args.reviews) if hasattr(args, "reviews") and args.reviews else set()

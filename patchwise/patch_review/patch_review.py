@@ -10,12 +10,13 @@ import shutil
 import subprocess
 import sys
 import time
-from typing import Any, List, Union
+from typing import Any, List, Optional, Union
 
 from git import Repo
 from git.exc import GitCommandError
 from git.objects.commit import Commit
 from packaging.version import InvalidVersion, Version
+from pathlib import Path
 
 from patchwise import KERNEL_PATH, PACKAGE_NAME, PACKAGE_PATH, SANDBOX_BIN, SANDBOX_PATH
 
@@ -139,19 +140,46 @@ class PatchReview(abc.ABC):
     @classmethod
     def get_logger(cls) -> logging.Logger:
         return logging.getLogger(f"{PACKAGE_NAME}.{cls.__name__.lower()}")
-
-    def __init__(self, commit: Commit, base_commit: Commit | None = None):
+    def __init__(self, commit: Optional[Commit] = None, base_commit: Optional[Commit] = None,
+                 patch_files: Optional[list[Path]] = None):
         self.logger = self.get_logger()
         self.__class__.verify_dependencies()
-        self.repo = Repo(KERNEL_PATH)
-        self.commit = commit
-        # The default for base_commit is the parent of the commit if not provided
-        # TODO alternatively use FETCH_HEAD after a git fetch
-        self.base_commit = base_commit or commit.parents[0]
-        self.build_dir = BUILD_DIR / str(self.commit.hexsha)
-        self.build_dir.mkdir(parents=True, exist_ok=True)
-        self.apply_patches([self.commit])
-        self.rebase_commit = self.repo.head.commit
+
+        if patch_files is not None:
+            self.patch_files = patch_files
+            all_patch_content = ""
+            for p_file in self.patch_files:
+                try:
+                    content = p_file.read_text(encoding='utf-8')
+                    all_patch_content += content + "\n"
+                except Exception as e:
+                    self.logger.error(f"Failed to read patch file {p_file}: {e}")
+                    continue
+            self.diff = all_patch_content
+
+            commit_message_match = re.search(r'^From [a-f0-9]{40} .*?\n(.+?)\n---',
+                                             self.diff, re.DOTALL | re.MULTILINE)
+            if commit_message_match:
+                self.commit_message = commit_message_match.group(1).strip()
+                self.logger.debug(f"Extracted commit message: {self.commit_message[:50]}...")
+            else:
+                self.commit_message = f"Review of {', '.join([p.name for p in self.patch_files])}"
+                self.logger.warning(f"Could not extract commit message from patch file(s). Using: {self.commit_message}")
+
+            self.commit = None
+            self.base_commit = None
+            self.repo = None
+            self.build_dir = None
+        else:
+            self.repo = Repo(KERNEL_PATH)
+            self.commit = commit
+            # The default for base_commit is the parent of the commit if not provided
+            # TODO alternatively use FETCH_HEAD after a git fetch
+            self.base_commit = base_commit or commit.parents[0]
+            self.build_dir = BUILD_DIR / str(self.commit.hexsha)
+            self.apply_patches([self.commit])
+            self.build_dir.mkdir(parents=True, exist_ok=True)
+            self.rebase_commit = self.repo.head.commit
         self.setup()
 
     _sandbox_path_added = False

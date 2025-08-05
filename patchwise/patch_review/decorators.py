@@ -13,6 +13,7 @@ LLM_REVIEWS: List[Type[AiReview]] = []
 STATIC_ANALYSIS_REVIEWS: List[Type[StaticAnalysis]] = []
 SHORT_REVIEWS: List[Type[PatchReview]] = []
 LONG_REVIEWS: List[Type[PatchReview]] = []
+PATCH_FILES_REVIEWS: List[Type[PatchReview]] = []
 
 
 # Decorators for each review type
@@ -46,5 +47,11 @@ def register_short_review(cls: Type[Any]) -> Type[Any]:
 def register_long_review(cls: Type[Any]) -> Type[Any]:
     if cls not in LONG_REVIEWS:
         LONG_REVIEWS.append(cls)
+    register_patch_review(cls)
+    return cls
+
+def register_patch_files_review(cls: Type[Any]) -> Type[Any]:
+    if cls not in PATCH_FILES_REVIEWS:
+        PATCH_FILES_REVIEWS.append(cls)
     register_patch_review(cls)
     return cls

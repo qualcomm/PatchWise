@@ -15,6 +15,7 @@ from .patch_review import (
     get_selected_reviews_from_args,
     install_missing_dependencies,
     review_patch,
+    review_patch_files,
 )
 from .patch_review.ai_review.ai_review import add_ai_arguments, apply_ai_args
 from .patch_review.kernel_tree import create_git_worktree
@@ -91,6 +92,11 @@ def main():
 
     if args.install:
         install_missing_dependencies(reviews)
+        return
+
+    if args.patch_files:
+        logger.info(f"Reviewing patch files: {args.patch_files}")
+        review_patch_files(reviews, args.patch_files)
         return
 
     repo = Repo(args.repo_path)
