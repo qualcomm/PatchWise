@@ -33,6 +33,121 @@
 
 ---
 
+## Architecture
+
+### High-Level Architecture
+
+This diagram shows the main workflow, including the loops for verifying dependencies and running reviews on each patch.
+
+```mermaid
+graph TD
+    subgraph "1&#46 Initialization"
+        A[CLI: *patchwise --options*] --> B{Parse Arguments};
+        B --> C[Get Selected Reviews];
+        C --> D[Get Commits to Review];
+    end
+
+    subgraph "2&#46 Dependency Verification"
+        E{For each selected review};
+        E --> F["review.verify_dependencies()"];
+    end
+
+    subgraph "3&#46 Patch Review Execution"
+        G{For each commit/patch};
+        subgraph "Inner Loop: Run all reviews for one patch"
+            H{For each selected review};
+            H --> I["Construct Review(commit)"];
+            I --> J["review.setup()"];
+            J --> K["review.run()"];
+            K --> L((Store Result));
+            L --> H
+        end
+        G --> H;
+        H --> M{Generate Report for Patch};
+        M --> G;
+    end
+
+    subgraph "4&#46 Finalization"
+        N[Output to Console & Log File];
+    end
+
+    D --> E;
+    E ---> G;
+    G -------> N;
+```
+
+### Detailed Class Inheritance
+
+This diagram shows the class hierarchy with key methods for each class.
+
+```mermaid
+classDiagram
+    class PatchReview {
+        <<abstract>>
+        +_DEPENDENCIES_: list[Dependency]
+        +patch: Commit
+        -verify_dependencies()
+        -install_dependencies()
+        #_setup_()
+        +_run_(): str
+    }
+
+    class StaticAnalysis {
+        <<abstract>>
+        +arch: str
+        #clean_tree()
+        #make_defconfig()
+    }
+
+    class AiReview {
+        <<abstract>>
+        ~model: str
+        ~provider: str
+        <!-- +api_key: str -->
+
+        +provider_api_call(messages: list): str
+        +format_chat_response(text: str): str
+    }
+
+    class Checkpatch {
+        -run_checkpatch(): str
+    }
+    class Coccicheck {
+        -run_coccicheck(): str
+    }
+    class DtCheck {
+        -run_dt_check(): str
+    }
+    class DtbsCheck {
+        -run_dtbs_check(): str
+    }
+    class Sparse {
+        -run_sparse(): str
+    }
+
+    class AiCodeReview {
+        -get_context()
+        -run_ai_code_review(): str
+    }
+    class LLMCommitAudit {
+        -run_llm_commit_audit(): str
+    }
+
+    PatchReview <|-- StaticAnalysis
+    PatchReview <|-- AiReview
+
+    StaticAnalysis <|-- Checkpatch
+    StaticAnalysis <|-- Coccicheck
+    StaticAnalysis <|-- DtCheck
+    StaticAnalysis <|-- DtbsCheck
+    StaticAnalysis <|-- Sparse
+
+    AiReview <|-- AiCodeReview
+    AiReview <|-- LLMCommitAudit
+```
+
+---
+
 ## Getting Started
 
 ### Prerequisites
