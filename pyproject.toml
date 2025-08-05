@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "patchwise"
-version = "0.2.0"
+version = "0.2.1"
 description = "A tool for reviewing kernel patches"
-authors = [{ name = "David Gantman", email = "dgantman@quicinc.com" }]
+authors = [{ name = "David Gantman", email = "dgantman@qti.qualcomm.com" }]
 requires-python = ">=3.10"
 dependencies = [
     "Sphinx>=8.1.3",
-    "litellm>=1.41.1",
+    "litellm>=1.74",
     "cachetools>=5.5.2",
     # "dtschema>=2025.2",
     "yamllint>=1.26.3",
