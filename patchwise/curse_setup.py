@@ -3,10 +3,9 @@
 
 import curses
 import yaml
-from patchwise import PACKAGE_PATH
+from patchwise import CONFIG_PATH
 
-config_dir = PACKAGE_PATH / "patchwise_config.yaml"
-
+config_file = CONFIG_PATH / "patchwise_config.yaml"
 
 
 def setup_curses():
@@ -24,20 +23,7 @@ def terminate_curses(stdscr) -> None:
     curses.endwin()
 
 
-def write_agreement_to_yaml(agreement: str, dont_show_again: bool) -> None:
-    with config_dir.open("r") as file:
-        yaml_dict = yaml.safe_load(file)
-
-    api_config = yaml_dict.get(agreement, {})
-    if not api_config.get("key_agreement"):
-        api_config["key_agreement"] = True
-    if dont_show_again:
-        api_config["show_again"] = False
-    with config_dir.open("w") as file:
-        yaml.dump(yaml_dict, file, default_flow_style=False)
-
-
-def show_agreement_popup(stdscr):
+def show_agreement_popup(stdscr, yaml_dict):
     # this should only occur if open ai key is not in ENV
     agreement_text = [
         "PatchWise uses LiteLLM. Your API key will be",
@@ -67,45 +53,50 @@ def show_agreement_popup(stdscr):
     popup_win.refresh()
     while True:
         key = popup_win.getch()
-        if key == ord("1"):
-            write_agreement_to_yaml("open_ai", dont_show_again=False)
+        if key == ord("2"):
+            exit(1)
         elif key == ord("3"):
-            write_agreement_to_yaml("open_ai", dont_show_again=True)
+            yaml_dict["show_key_disclaimer"] = False
+            write_yaml(yaml_dict)
         terminate_curses(stdscr)
         return False
 
 
-def check_api_key_agreement(api_name: str) -> tuple[bool, bool]:
-    # should check if the key agreement is true as well as if show again is true
+def read_yaml() -> dict:
+    with config_file.open("r") as file:
+        yaml_dict = yaml.safe_load(file)
+        file.close()
+    return yaml_dict
+
+
+def write_yaml(yaml_dict) -> None:
+    with config_file.open("w") as file:
+        yaml.dump(yaml_dict, file)
+        file.close()
+
+
+def show_again() -> bool:
+    if not config_file.exists():
+        raise FileNotFoundError(f"Config file not found: {config_file}")
+
     try:
-        with config_dir.open("r") as file:
-            yaml_dict = yaml.safe_load(file)
-
-        api_config = yaml_dict.get(api_name, {})
-
-        key_agreed = api_config.get("key_agreement")
-        show_again = api_config.get("show_again")
-
-        return key_agreed, show_again
-
-    except FileNotFoundError:
-        raise FileNotFoundError(f"Config file not found at {config_dir}")
+        yaml_dict = read_yaml()
     except yaml.YAMLError as e:
-        raise ValueError(f"YAML parsing error: {e}")
-    except Exception as e:
-        raise RuntimeError(
-            f"Unexpected error reading API key agreement for {api_name}: {e}"
-        )
+        raise yaml.YAMLError(f"Failed to parse YAML: {e}")
+
+    return yaml_dict["show_key_disclaimer"]
 
 
 def curse_pipeline():
-    bool_agree, bool_show = check_api_key_agreement("open_ai")
-    if (bool_agree is False) or (bool_agree is True and bool_show is True):
-        # means key_agreement for open_ai is false, then we should show popup
+    # if config doesn't exist, we need to make one
+
+    # need to check if file exists
+    if not config_file.exists():
+        data = {"show_key_disclaimer": True}
+        write_yaml(data)
+    yaml_dict = read_yaml()
+
+    if yaml_dict["show_key_disclaimer"] == True:
         stdscr = setup_curses()
-        show_agreement_popup(stdscr)
-    elif bool_agree is True and bool_show is False:
-        # means that we won't popup anything since yaml_dict's key agreement is true
-        pass
-    else:
-        exit(1)
+        show_agreement_popup(stdscr, yaml_dict)
+    pass

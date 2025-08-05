@@ -20,18 +20,15 @@ from .patch_review import (
 from .patch_review.ai_review.ai_review import add_ai_arguments, apply_ai_args
 from .patch_review.kernel_tree import create_git_worktree
 from .patch_review.patch_review import PATCH_PATH
-from .curse_setup import curse_pipeline
-from patchwise import PACKAGE_PATH
+from .curse_setup import curse_pipeline, show_again
 
 logger = logging.getLogger(__name__)
 
 
 def parse_args() -> argparse.Namespace:
-
-    if '--help' not in sys.argv and '-h' not in sys.argv:
-        config_dir = PACKAGE_PATH / "patchwise_config.yaml"
-        if config_dir.exists():
-            curse_pipeline()
+    if len(sys.argv) == 1 and "patchwise" in sys.argv[0]:
+        if show_again:
+           curse_pipeline()
 
     parser = argparse.ArgumentParser(formatter_class=RichHelpFormatter)
 
