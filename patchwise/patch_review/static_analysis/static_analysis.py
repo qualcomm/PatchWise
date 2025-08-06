@@ -16,16 +16,19 @@ class StaticAnalysis(PatchReview):
 
     def clean_tree(self, arch: str = "arm"):
         self.logger.debug("Cleaning kernel tree")
+        kernel_dir = self.docker_manager.sandbox_path / "kernel"
         self.run_cmd_with_timer(
             [
                 "make",
+                "-C",
+                str(kernel_dir),
                 f"-j{os.cpu_count()}",
                 "-s",
                 "ARCH=" + arch,
                 "LLVM=1",
                 "mrproper",
             ],
-            cwd=str(self.repo.working_tree_dir),
+            cwd=str(self.docker_manager.build_dir),
             desc="Cleaning tree",
         )
 
@@ -36,9 +39,12 @@ class StaticAnalysis(PatchReview):
         extra_args: list[str] = [],
     ) -> None:
         self.logger.debug(f"Making {config_type}")
+        kernel_dir = self.docker_manager.sandbox_path / "kernel"
         cmd = [
             "make",
-            f"O={self.build_dir}",
+            "-C",
+            str(kernel_dir),
+            f"O={self.docker_manager.build_dir}",
             f"-j{os.cpu_count()}",
             "-s",
             "ARCH=" + arch,
@@ -49,6 +55,6 @@ class StaticAnalysis(PatchReview):
             cmd.extend(extra_args)
         self.run_cmd_with_timer(
             cmd,
-            cwd=str(self.repo.working_tree_dir),
+            cwd=str(self.docker_manager.build_dir),
             desc=config_type,
         )

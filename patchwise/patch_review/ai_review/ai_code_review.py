@@ -12,7 +12,6 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from patchwise import KERNEL_PATH, SANDBOX_PATH
 from patchwise.patch_review.decorators import register_llm_review, register_long_review
-from patchwise.patch_review.patch_review import Dependency
 
 from .ai_review import AiReview
 
@@ -40,19 +39,6 @@ class DefinitionRange:
 @register_long_review
 class AiCodeReview(AiReview):
     """AI-powered code review for Linux kernel patches using LSP and clangd."""
-
-    DEPENDENCIES = getattr(AiReview, "DEPENDENCIES", []) + [
-        Dependency(
-            name="clangd",
-            min_version="14.0.0",
-            max_version="20.0.0",
-        ),
-        Dependency(
-            name="clang",
-            min_version="14.0.0",
-            max_version="20.0.0",
-        ),
-    ]
 
     # LSP Configuration
     MAX_GAP = 5

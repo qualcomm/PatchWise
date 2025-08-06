@@ -13,7 +13,6 @@ from .logger_setup import add_logging_arguments, setup_logger
 from .patch_review import (
     add_review_arguments,
     get_selected_reviews_from_args,
-    install_missing_dependencies,
     review_patch,
 )
 from .patch_review.ai_review.ai_review import add_ai_arguments, apply_ai_args
@@ -104,10 +103,6 @@ def main():
     apply_ai_args(args)
 
     reviews = get_selected_reviews_from_args(args)
-
-    if args.install:
-        install_missing_dependencies(reviews)
-        return
 
     repo = Repo(args.repo_path)
     commits = get_commits(repo, args.commits)

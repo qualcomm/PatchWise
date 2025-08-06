@@ -18,8 +18,6 @@ class Checkpatch(StaticAnalysis):
     Perform static analysis on kernel commits using the checkpatch.pl script.
     """
 
-    DEPENDENCIES = []
-
     def setup(self) -> None:
         pass
 
