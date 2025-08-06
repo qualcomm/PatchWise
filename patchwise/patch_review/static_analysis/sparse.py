@@ -4,56 +4,14 @@
 import os
 import re
 import subprocess
-import tempfile
 
 from git import GitCommandError
 
-from patchwise import SANDBOX_PATH
 from patchwise.patch_review.decorators import (
     register_long_review,
     register_static_analysis_review,
 )
-from patchwise.patch_review.patch_review import Dependency
-
 from .static_analysis import StaticAnalysis
-
-MINIMUM_CLANG_VERSION = 14
-MINIMUM_SPARSE_VERSION = "0.6.4"
-
-
-class SparseDependency(Dependency):
-    # TODO if installing to SANDBOX_PATH and the version still does not work, the user will need to manually clear the SANDBOX_PATH folder because SANDBOX_PATH is at the start of the PATH
-    def install_from_source(self) -> None:
-        """
-        Install sparse from source.
-        """
-        self.logger.info(f"Installing {self.name} from source...")
-        with tempfile.TemporaryDirectory() as tmpdir:
-            src_dir = os.path.join(tmpdir, "sparse")
-            subprocess.run(
-                [
-                    "git",
-                    "clone",
-                    "https://git.kernel.org/pub/scm/devel/sparse/sparse.git",
-                    src_dir,
-                ],
-                check=True,
-            )
-            subprocess.run(["make"], cwd=src_dir, check=True)
-            subprocess.run(
-                ["sudo", "make", f"PREFIX={SANDBOX_PATH}", "install"],
-                cwd=src_dir,
-                check=True,
-            )
-
-    def _do_install(self) -> None:
-        super().install_from_pkg_manager()
-        # Check if the correct version of sparse is installed
-        try:
-            super().check()
-        except ImportError as e:
-            self.logger.warning(f"{e}")
-            self.install_from_source()
 
 
 @register_static_analysis_review
@@ -66,28 +24,6 @@ class Sparse(StaticAnalysis):
         run():
             Runs sparse and returns the results corresponding to the patch sha.
     """
-
-    DEPENDENCIES = [
-        Dependency(
-            name="llvm-config",
-            min_version=MINIMUM_CLANG_VERSION,
-        ),
-        Dependency(
-            name="clang",
-            min_version=MINIMUM_CLANG_VERSION,
-        ),
-        Dependency(
-            name="ld.lld",
-            min_version=MINIMUM_CLANG_VERSION,
-        ),
-        # Dependency(
-        #     name="lld",
-        # ),
-        SparseDependency(
-            name="sparse",
-            min_version=MINIMUM_SPARSE_VERSION,
-        ),
-    ]
 
     def setup(self) -> None:
         pass
@@ -126,9 +62,7 @@ class Sparse(StaticAnalysis):
                 "-s",
                 "CHECK=sparse",
             ],
-            cwd=str(self.repo.working_tree_dir),
             desc="sparse check",
-            # stdout=subprocess.DEVNULL,
         )
 
         output = ""
