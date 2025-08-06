@@ -45,9 +45,10 @@ class PatchReviewResults:
         return f"PatchReviewResults(commit={self.commit}, results={self.results})"
 
 
-def run_patch_review(
-    selected_reviews: list[type[PatchReview]], commit: Commit
-) -> PatchReviewResults:
+def review_patch(reviews: set[str], commit: Commit) -> PatchReviewResults:
+    all_reviews = {cls.__name__: cls for cls in AVAILABLE_PATCH_REVIEWS}
+    selected_reviews = [all_reviews[name] for name in reviews if name in all_reviews]
+
     output = PatchReviewResults(commit)
 
     for selected_review in selected_reviews:
@@ -64,33 +65,6 @@ def run_patch_review(
         output.results[selected_review.__name__] = result
 
     return output
-
-
-def review_patch(reviews: set[str], commit: Commit) -> PatchReviewResults:
-    all_reviews = {cls.__name__: cls for cls in AVAILABLE_PATCH_REVIEWS}
-    selected_reviews = [all_reviews[name] for name in reviews if name in all_reviews]
-
-    for review_cls in selected_reviews:
-        logger.debug(f"Verifying dependencies for: {review_cls.__name__}")
-        review_cls.verify_dependencies()
-
-    results = run_patch_review(selected_reviews, commit)
-
-    return results
-
-
-def install_missing_dependencies(reviews: set[str]) -> None:
-    """
-    Install missing dependencies for the specified reviews.
-    """
-    all_reviews = {cls.__name__: cls for cls in AVAILABLE_PATCH_REVIEWS}
-    selected_reviews = [all_reviews[name] for name in reviews if name in all_reviews]
-
-    for review_cls in selected_reviews:
-        logger.info(f"Installing dependencies for: {review_cls.__name__}")
-        review_cls.verify_dependencies(install=True)
-
-    logger.info("All specified reviews' dependencies are installed.")
 
 
 def _review_list_str(reviews: Iterable[type[PatchReview]]):

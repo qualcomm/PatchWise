@@ -2,147 +2,33 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import abc
-import inspect
 import logging
-import os
-import re
-import shutil
 import subprocess
 import sys
 import time
-from typing import Any, List, Union
+from typing import Any, List
 
 from git import Repo
 from git.exc import GitCommandError
 from git.objects.commit import Commit
-from packaging.version import InvalidVersion, Version
 
-from patchwise import KERNEL_PATH, PACKAGE_NAME, PACKAGE_PATH, SANDBOX_BIN, SANDBOX_PATH
+from patchwise import KERNEL_PATH, PACKAGE_NAME, PACKAGE_PATH, SANDBOX_PATH
+from patchwise.docker import DockerManager
 
 from .kernel_tree import BRANCH_NAME
 
+DOCKERFILES_PATH = PACKAGE_PATH / "dockerfiles"
 PATCH_PATH = PACKAGE_PATH / "patches"
 BUILD_DIR = SANDBOX_PATH / "build"
 
 
-class Dependency:
-    def __init__(
-        self,
-        name: str,
-        min_version: Union[int, float, str, None] = None,
-        max_version: Union[int, float, str, None] = None,
-    ):
-        self.name = name
-        self.logger = logging.getLogger(
-            f"{PACKAGE_NAME}.{__name__.lower()}.{self.name}"
-        )
-        self.min_version: Version | None = None
-        self.max_version: Version | None = None
-        if min_version is not None:
-            self.min_version = Version(str(min_version))
-        if max_version is not None:
-            self.max_version = Version(str(max_version))
-
-    def version_in_range(self, version: Version) -> bool:
-        if (self.min_version is not None and version < self.min_version) or (
-            self.max_version is not None and version > self.max_version
-        ):
-            return False
-        return True
-
-    def get_version(self) -> Version:
-        out = subprocess.check_output([self.name, "--version"], text=True)
-        match = re.search(r"(\d+\.\d+\.\d+)", out)
-        version = Version(match.group(1))
-
-        return version
-
-    def check(self) -> None:
-        cmd_path = shutil.which(self.name)
-        if cmd_path is None or not os.access(cmd_path, os.X_OK):
-            raise ImportError(
-                f"{self.name} is not installed or not executable. Please install {self.name}."
-            )
-        self.logger.debug(f"{self.name} is installed and executable at {cmd_path}.")
-
-        if self.min_version is None and self.max_version is None:
-            return
-
-        minmax: list[str] = []
-        if self.min_version:
-            minmax.append(f">= {self.min_version}")
-        if self.max_version:
-            minmax.append(f"<= {self.max_version}")
-        minmax_str = ", ".join(minmax)
-
-        try:
-            version = self.get_version()
-            if not self.version_in_range(version):
-                raise ImportError(
-                    f"{self.name} version {{{version}}} does not meet the version requirements ({minmax_str})."
-                )
-            self.logger.debug(
-                f"{self.name} version {{{version}}} is installed and meets the version requirements ({minmax_str})."
-            )
-        except (FileNotFoundError, subprocess.CalledProcessError, InvalidVersion):
-            raise ImportError(
-                f"{self.name} is not installed or not working. Please install {self.name} ({minmax_str})."
-            )
-
-    def install_from_pkg_manager(self) -> None:
-        pkg_managers: list[tuple[str, list[str] | None, list[str]]] = [
-            (
-                "apt-get",
-                ["sudo", "apt-get", "update"],
-                ["sudo", "apt-get", "install", "-y", self.name],
-            ),
-            ("dnf", None, ["sudo", "dnf", "install", "-y", self.name]),
-            ("yum", None, ["sudo", "yum", "install", "-y", self.name]),
-            ("zypper", None, ["sudo", "zypper", "install", "-y", self.name]),
-            ("pacman", None, ["sudo", "pacman", "-Sy", self.name]),
-        ]
-        for mgr, pre, install_cmd in pkg_managers:
-            if shutil.which(mgr):
-                try:
-                    if pre:
-                        subprocess.run(pre, check=True)
-                    subprocess.run(install_cmd, check=True)
-                    break
-                except Exception:
-                    continue
-
-    def _do_install(self) -> None:
-        """
-        Subclasses must implement this method to install the dependency.
-        """
-        method_name = (
-            f"{self.__class__.__name__}.{inspect.currentframe().f_code.co_name}"
-        )
-        raise NotImplementedError(
-            f"{self.__class__.__name__} must implement {method_name}."
-        )
-
-    def install(self) -> None:
-        try:
-            self.check()
-        except ImportError as e:
-            self.logger.warning(f"{e}")
-            self.logger.info("Preparing to install...")
-            self._do_install()
-            self.check()
-
-
 class PatchReview(abc.ABC):
-    # Subclasses must define a list of Dependency objects
-    DEPENDENCIES: list[Dependency]
-
     @classmethod
     def get_logger(cls) -> logging.Logger:
         return logging.getLogger(f"{PACKAGE_NAME}.{cls.__name__.lower()}")
 
     def __init__(self, commit: Commit, base_commit: Commit | None = None):
         self.logger = self.get_logger()
-        self.__class__.verify_dependencies()
         self.repo = Repo(KERNEL_PATH)
         self.commit = commit
         # The default for base_commit is the parent of the commit if not provided
@@ -150,43 +36,33 @@ class PatchReview(abc.ABC):
         self.base_commit = base_commit or commit.parents[0]
         self.build_dir = BUILD_DIR / str(self.commit.hexsha)
         self.build_dir.mkdir(parents=True, exist_ok=True)
+
+        dockerfile_path = self.get_dockerfile_path()
+        if dockerfile_path.name == "base.Dockerfile":
+            image_tag = "patchwise-base:latest"
+        else:
+            image_tag = f"{PACKAGE_NAME.lower()}-{self.__class__.__name__.lower()}"
+        container_name = f"{image_tag.replace(':', '-')}-{self.commit.hexsha}"
+
+        self.docker_manager = DockerManager(
+            image_tag=image_tag,
+            container_name=container_name,
+        )
+        self.docker_manager.build_image(dockerfile_path)
+        self.docker_manager.start_container(self.build_dir, KERNEL_PATH)
+
         self.apply_patches([self.commit])
         self.rebase_commit = self.repo.head.commit
         self.setup()
 
-    _sandbox_path_added = False
+    def __del__(self):
+        self.docker_manager.stop_container()
 
-    @staticmethod
-    def add_sandbox_to_path():
-        """
-        Adds the sandbox bin directory to the PATH environment variable if not already present.
-        """
-        if not PatchReview._sandbox_path_added:
-            current_path = os.environ.get("PATH", "")
-            if SANDBOX_BIN not in current_path.split(":"):
-                os.environ["PATH"] = str(SANDBOX_BIN) + ":" + current_path
-                PatchReview.get_logger().debug(f"Added {SANDBOX_BIN} to PATH.")
-            else:
-                PatchReview.get_logger().debug(f"{SANDBOX_BIN} already in PATH.")
-            PatchReview._sandbox_path_added = True
-        else:
-            PatchReview.get_logger().debug("Sandbox path already added to PATH.")
-
-    @classmethod
-    def verify_dependencies(cls, install: bool = False) -> None:
-        """
-        Verifies that all dependencies are installed and meet the minimum version requirements.
-        """
-        cls.add_sandbox_to_path()
-
-        if not getattr(cls, "_dependencies_verified", False):
-            for dependency in cls.DEPENDENCIES:
-                if install:
-                    dependency.install()
-                else:
-                    dependency.check()
-            cls.get_logger().debug(f"{cls.__name__} dependencies are installed.")
-            setattr(cls, "_dependencies_verified", True)
+    def get_dockerfile_path(self):
+        specific_dockerfile = DOCKERFILES_PATH / f"{self.__class__.__name__}.Dockerfile"
+        if specific_dockerfile.exists():
+            return specific_dockerfile
+        return DOCKERFILES_PATH / "base.Dockerfile"
 
     def git_abort(self) -> None:
         """
@@ -210,7 +86,7 @@ class PatchReview(abc.ABC):
         except GitCommandError:
             pass
 
-    def apply_patches(self, commits: list[Commit]) -> None:
+    def apply_patches(self, commits: list[Commit]) -> Commit:
         self.git_abort()
         self.repo.git.switch(BRANCH_NAME, detach=True)
         self.logger.debug(f"Applying patches from {PATCH_PATH} on branch {BRANCH_NAME}")
@@ -229,7 +105,7 @@ class PatchReview(abc.ABC):
                 self.logger.warning(f"Failed to apply patch {patch_file}: {e}")
                 self.repo.git.am("--skip")
 
-        cherry_commits = commits or [self.commit]
+        cherry_commits = commits
         for cherry_commit in cherry_commits:
             self.logger.debug(f"Applying commit: {cherry_commit.hexsha}")
             try:
@@ -239,6 +115,7 @@ class PatchReview(abc.ABC):
                 self.logger.warning(
                     f"Failed to cherry-pick {cherry_commit.hexsha}: {e}"
                 )
+        return self.repo.head.commit
 
     @abc.abstractmethod
     def setup(self) -> None:
@@ -251,9 +128,7 @@ class PatchReview(abc.ABC):
         self,
         cmd: List[str],
         desc: str,
-        cwd: str,
-        stdout: int | None = subprocess.PIPE,
-        stderr: int | None = subprocess.PIPE,
+        cwd: str = str(KERNEL_PATH),
         **kwargs: Any,
     ) -> str:
         """
@@ -263,56 +138,46 @@ class PatchReview(abc.ABC):
         Parameters:
             cmd (str): The command to run using subprocess.Popen().
             desc (str): The title for the timer
-            stdout_path (str, optional): Path to file for stdout. Defaults to None.
-            stderr_path (str, optional): Path to file for stderr. Defaults to None.
+            cwd (str, optional): The working directory for the command. Defaults to None.
             **kwargs: Rest of the args for subprocess.Popen.
 
         Returns:
             str: Output of running the command (stdout + stderr).
-                 To skip stdout/stderr, pass stdout/stderr=subprocess.DEVNULL.
         """
         show_timer = self.logger.isEnabledFor(logging.INFO)
         start = time.time()
 
-        with subprocess.Popen(
-            cmd,
-            cwd=cwd,
-            stdout=stdout,
-            stderr=stderr,
-            text=True,
-            bufsize=1,
-            universal_newlines=True,
-            **kwargs,
-        ) as process:
-            output = ""
-            while True:
-                try:
-                    _stdout, _stderr = process.communicate(timeout=5)
-                    if _stdout:
-                        self.logger.debug(_stdout)
-                        output += _stdout
-                    if _stderr:
-                        self.logger.debug(_stderr)
-                        output += _stderr
+        process = self.docker_manager.run_command(cmd, cwd=cwd, **kwargs)
 
-                    if show_timer:
-                        sys.stdout.write("\r" + " " * 40 + "\r")  # Clear the line
-                        sys.stdout.flush()
-                    elapsed = int(time.time() - start)
-                    self.logger.debug(f"{desc}... {elapsed}s elapsed")
-                    break
+        output = ""
+        while True:
+            try:
+                _stdout, _stderr = process.communicate(timeout=5)
+                if _stdout:
+                    self.logger.debug(_stdout)
+                    output += _stdout
+                if _stderr:
+                    self.logger.debug(_stderr)
+                    output += _stderr
 
-                except subprocess.TimeoutExpired:
-                    elapsed = int(time.time() - start)
-                    if show_timer:
-                        sys.stdout.write(f"\r{desc}... {elapsed}s elapsed")
-                        sys.stdout.flush()
+                if show_timer:
+                    sys.stdout.write("\r" + " " * 40 + "\r")  # Clear the line
+                    sys.stdout.flush()
+                elapsed = int(time.time() - start)
+                self.logger.debug(f"{desc}... {elapsed}s elapsed")
+                break
 
-                except Exception:
-                    process.kill()
-                    raise
+            except subprocess.TimeoutExpired:
+                elapsed = int(time.time() - start)
+                if show_timer:
+                    sys.stdout.write(f"\r{desc}... {elapsed}s elapsed")
+                    sys.stdout.flush()
 
-            return output  # TODO return a tuple of (stdout, stderr) if both are needed
+            except Exception:
+                process.kill()
+                raise
+
+        return output
 
     @abc.abstractmethod
     def run(self) -> str:

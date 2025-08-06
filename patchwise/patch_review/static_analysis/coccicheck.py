@@ -15,8 +15,6 @@ from .static_analysis import StaticAnalysis
 @register_static_analysis_review
 @register_short_review
 class Coccicheck(StaticAnalysis):
-    DEPENDENCIES = []
-
     def _run_coccicheck(self, directory: str) -> str:
         coccicheck_output = super().run_cmd_with_timer(
             [
@@ -31,7 +29,6 @@ class Coccicheck(StaticAnalysis):
                 "MODE=report",
                 f"DEBUG_FILE={self.symlink_path}",  # if hasattr(self, 'symlink_path') else "DEBUG_FILE=/dev/null",
             ],
-            cwd=str(self.repo.working_tree_dir),
             desc="coccicheck running",
         )
         return coccicheck_output
