@@ -5,9 +5,10 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import logging
+import os
 import subprocess
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from patchwise import PACKAGE_NAME, PACKAGE_PATH
 
@@ -21,6 +22,7 @@ class DockerManager:
         self.container_name = container_name
         self.sandbox_path = Path("/home") / PACKAGE_NAME
         self.build_dir = self.sandbox_path / "build"
+        self.kernel_dir = self.sandbox_path / "kernel"
 
     def _stream_build_output(self, process: subprocess.Popen[str]) -> None:
         if process.stdout:
@@ -33,19 +35,34 @@ class DockerManager:
         if process.returncode != 0:
             raise subprocess.CalledProcessError(process.returncode, process.args)
 
-    def build_image(self, dockerfile_path: Path) -> None:
+    def build_image(self, dockerfile_path: Path, repo_path: Path) -> None:
         base_image_tag = "patchwise-base:latest"
         self.logger.info(f"Ensuring base Docker image {base_image_tag} is built...")
         base_dockerfile = PACKAGE_PATH / "dockerfiles" / "base.Dockerfile"
+
+        # Find the common ancestor path for the build context
+        common_path = Path(os.path.commonpath([PACKAGE_PATH, repo_path]))
+        self.logger.debug(f"Using common path for build context: {common_path}")
+
+        # Calculate relative paths for the build context
+        relative_package_path = PACKAGE_PATH.relative_to(common_path)
+        relative_repo_path = repo_path.relative_to(common_path)
+        self.logger.debug(f"Relative package path: {relative_package_path}")
+        self.logger.debug(f"Relative repo path: {relative_repo_path}")
+
         process = subprocess.Popen(
             [
                 "docker",
                 "build",
                 "-f",
                 str(base_dockerfile),
+                "--build-arg",
+                f"PACKAGE_PATH={relative_package_path}",
+                "--build-arg",
+                f"KERNEL_PATH={relative_repo_path}",
                 "-t",
                 base_image_tag,
-                str(PACKAGE_PATH),
+                str(common_path),
             ],
             text=True,
         )
@@ -77,7 +94,7 @@ class DockerManager:
                 raise subprocess.CalledProcessError(process.returncode, process.args)
             self.logger.info(f"Docker image {self.image_tag} built successfully.")
 
-    def start_container(self, build_path: Path, kernel_path: Path) -> None:
+    def start_container(self, build_path: Path) -> None:
         try:
             subprocess.run(
                 ["docker", "container", "inspect", self.container_name],
@@ -94,8 +111,6 @@ class DockerManager:
                 self.container_name,
                 "-v",
                 f"{build_path}:{self.build_dir}",
-                "-v",
-                f"{kernel_path}:{self.sandbox_path / 'kernel'}:ro",
                 self.image_tag,
                 "tail",
                 "-f",
@@ -129,7 +144,7 @@ class DockerManager:
             )
 
     def run_command(
-        self, command: list[str], cwd: str | None, **kwargs: Any
+        self, command: list[str], cwd: Optional[str], **kwargs: Any
     ) -> subprocess.Popen[str]:
         if not cwd:
             cwd = str(self.sandbox_path)
