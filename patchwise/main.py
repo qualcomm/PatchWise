@@ -110,7 +110,7 @@ def main():
 
     for commit in commits:
         logger.info(f"Reviewing commit {commit.hexsha}...")
-        review_patch(reviews, commit)
+        review_patch(reviews, commit, args.repo_path)
 
 
 if __name__ == "__main__":

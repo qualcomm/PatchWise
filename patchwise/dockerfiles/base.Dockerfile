@@ -48,4 +48,8 @@ WORKDIR /home/patchwise
 # Set up the build directory
 RUN mkdir /home/patchwise/build && chown -R patchwise:patchwise /home/patchwise/build
 
+# Copy the kernel tree into the image
+ARG KERNEL_PATH
+COPY --chown=patchwise:patchwise $KERNEL_PATH /home/patchwise/kernel
+
 USER patchwise

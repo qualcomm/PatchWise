@@ -6,13 +6,14 @@ import logging
 import subprocess
 import sys
 import time
-from typing import Any, List
+from pathlib import Path
+from typing import Any, List, Optional
 
 from git import Repo
 from git.exc import GitCommandError
 from git.objects.commit import Commit
 
-from patchwise import KERNEL_PATH, PACKAGE_NAME, PACKAGE_PATH, SANDBOX_PATH
+from patchwise import PACKAGE_NAME, PACKAGE_PATH, SANDBOX_PATH
 from patchwise.docker import DockerManager
 
 from .kernel_tree import BRANCH_NAME
@@ -27,9 +28,14 @@ class PatchReview(abc.ABC):
     def get_logger(cls) -> logging.Logger:
         return logging.getLogger(f"{PACKAGE_NAME}.{cls.__name__.lower()}")
 
-    def __init__(self, commit: Commit, base_commit: Commit | None = None):
+    def __init__(
+        self,
+        repo_path: str,
+        commit: Commit,
+        base_commit: Commit | None = None,
+    ):
         self.logger = self.get_logger()
-        self.repo = Repo(KERNEL_PATH)
+        self.repo = Repo(repo_path)
         self.commit = commit
         # The default for base_commit is the parent of the commit if not provided
         # TODO alternatively use FETCH_HEAD after a git fetch
@@ -48,8 +54,8 @@ class PatchReview(abc.ABC):
             image_tag=image_tag,
             container_name=container_name,
         )
-        self.docker_manager.build_image(dockerfile_path)
-        self.docker_manager.start_container(self.build_dir, KERNEL_PATH)
+        self.docker_manager.build_image(dockerfile_path, Path(repo_path))
+        self.docker_manager.start_container(self.build_dir)
 
         self.apply_patches([self.commit])
         self.rebase_commit = self.repo.head.commit
@@ -128,7 +134,7 @@ class PatchReview(abc.ABC):
         self,
         cmd: List[str],
         desc: str,
-        cwd: str = str(KERNEL_PATH),
+        cwd: Optional[str] = None,
         **kwargs: Any,
     ) -> str:
         """

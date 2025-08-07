@@ -7,7 +7,7 @@ import argparse
 import importlib
 import logging
 import pkgutil
-from typing import Iterable
+from typing import Iterable, Union
 
 from git.objects.commit import Commit
 
@@ -45,7 +45,9 @@ class PatchReviewResults:
         return f"PatchReviewResults(commit={self.commit}, results={self.results})"
 
 
-def review_patch(reviews: set[str], commit: Commit) -> PatchReviewResults:
+def review_patch(
+    reviews: set[str], commit: Commit, repo_path: str
+) -> PatchReviewResults:
     all_reviews = {cls.__name__: cls for cls in AVAILABLE_PATCH_REVIEWS}
     selected_reviews = [all_reviews[name] for name in reviews if name in all_reviews]
 
@@ -53,7 +55,7 @@ def review_patch(reviews: set[str], commit: Commit) -> PatchReviewResults:
 
     for selected_review in selected_reviews:
         logger.debug(f"Initializing review: {selected_review.__name__}")
-        cur_review = selected_review(commit)
+        cur_review = selected_review(repo_path, commit)
 
         logger.debug(f"Running review: {selected_review.__name__}")
         result = cur_review.run()
@@ -73,7 +75,7 @@ def _review_list_str(reviews: Iterable[type[PatchReview]]):
 
 
 def add_review_arguments(
-    parser_or_group: argparse.ArgumentParser | argparse._ArgumentGroup,
+    parser_or_group: Union[argparse.ArgumentParser, argparse._ArgumentGroup],
 ):
     # Case-insensitive review name handling
     available_review_names = {
@@ -121,7 +123,7 @@ def get_selected_reviews_from_args(args: argparse.Namespace) -> set[str]:
     Given parsed args, return the set of review class names to run.
     This logic is shared by all entry points.
     """
-    group_sets: list[set[str]] = []
+    group_sets: "list[set[str]]" = []
     if getattr(args, "all_reviews", False):
         group_sets.append(set(cls.__name__ for cls in AVAILABLE_PATCH_REVIEWS))
     if getattr(args, "llm_reviews", False):
@@ -138,7 +140,7 @@ def get_selected_reviews_from_args(args: argparse.Namespace) -> set[str]:
     )
 
     if group_sets:
-        return set().union(*group_sets)
+        return {str(item) for group in group_sets for item in group}
     else:
         # Default: all reviews
         return explicit_reviews
