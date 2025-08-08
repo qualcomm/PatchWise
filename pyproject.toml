@@ -20,6 +20,7 @@ dependencies = [
     "pytest>=8.3.5",
     "rich-argparse>=1.7.0",
     "tqdm>=4.67.1",
+    "platformdirs>=4.3.8"
 ]
 
 [project.scripts]
@@ -30,4 +31,4 @@ where = ["."]
 include = ["patchwise*"]
 
 [tool.setuptools.package-data]
-patchwise = ["patches/**"]
+patchwise = ["patches/**", "default_config.yaml"]

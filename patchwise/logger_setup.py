@@ -68,11 +68,12 @@ def setup_logger(log_file: str = LOG_PATH, log_level: str = "INFO"):
 
 def add_logging_arguments(
     parser_or_group: argparse.ArgumentParser | argparse._ArgumentGroup,
+    config: dict
 ):
     parser_or_group.add_argument(
         "--log-level",
         choices=("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"),
-        default="INFO",
+        default=config["log_level"],
         help="Set the logging level. (default: %(default)s)",
     )
     parser_or_group.add_argument(

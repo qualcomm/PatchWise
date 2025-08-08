@@ -19,11 +19,12 @@ from .patch_review import (
 from .patch_review.ai_review.ai_review import add_ai_arguments, apply_ai_args
 from .patch_review.kernel_tree import create_git_worktree
 from .patch_review.patch_review import PATCH_PATH
+from .utils.config import parse_config
 
 logger = logging.getLogger(__name__)
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(config: dict) -> argparse.Namespace:
     parser = argparse.ArgumentParser(formatter_class=RichHelpFormatter)
 
     review_group = parser.add_argument_group("Patch Review Options")
@@ -46,7 +47,7 @@ def parse_args() -> argparse.Namespace:
     add_ai_arguments(ai_group)
 
     logging_group = parser.add_argument_group("Logging Options")
-    add_logging_arguments(logging_group)
+    add_logging_arguments(logging_group, config)
 
     return parser.parse_args()
 
@@ -56,7 +57,7 @@ def get_patches(repo: Repo, commits: list[Commit]):
     dest_dir.mkdir(parents=True, exist_ok=True)
     for idx, commit in enumerate(commits, 1):
         patch_file = dest_dir / f"{idx:04d}-{commit}.patch"
-        diff = repo.git.format_patch(f"-1", commit, stdout=True)
+        diff = repo.git.format_patch("-1", commit, stdout=True)
         logger.debug(f"Writing patch for commit {commit} to {patch_file}")
         patch_file.write_text(diff)
 
@@ -81,7 +82,9 @@ def get_commits(repo: Repo, commits: list[str]) -> list[Commit]:
 
 
 def main():
-    args = parse_args()
+    config = parse_config()
+
+    args = parse_args(config)
 
     setup_logger(log_file=args.log_file, log_level=args.log_level)
 
