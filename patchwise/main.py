@@ -3,6 +3,7 @@
 
 import argparse
 import logging
+import sys
 from pathlib import Path
 
 from git import Repo
@@ -19,11 +20,16 @@ from .patch_review import (
 from .patch_review.ai_review.ai_review import add_ai_arguments, apply_ai_args
 from .patch_review.kernel_tree import create_git_worktree
 from .patch_review.patch_review import PATCH_PATH
+from .curse_setup import curse_pipeline, show_again
 
 logger = logging.getLogger(__name__)
 
 
 def parse_args() -> argparse.Namespace:
+    if len(sys.argv) == 1 and "patchwise" in sys.argv[0]:
+        if show_again:
+           curse_pipeline()
+
     parser = argparse.ArgumentParser(formatter_class=RichHelpFormatter)
 
     review_group = parser.add_argument_group("Patch Review Options")
@@ -56,7 +62,7 @@ def get_patches(repo: Repo, commits: list[Commit]):
     dest_dir.mkdir(parents=True, exist_ok=True)
     for idx, commit in enumerate(commits, 1):
         patch_file = dest_dir / f"{idx:04d}-{commit}.patch"
-        diff = repo.git.format_patch(f"-1", commit, stdout=True)
+        diff = repo.git.format_patch("-1", commit, stdout=True)
         logger.debug(f"Writing patch for commit {commit} to {patch_file}")
         patch_file.write_text(diff)
 
