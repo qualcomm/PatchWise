@@ -7,7 +7,7 @@ import argparse
 import importlib
 import logging
 import pkgutil
-from typing import Iterable
+from typing import Iterable, Union
 
 from git.objects.commit import Commit
 
@@ -45,14 +45,17 @@ class PatchReviewResults:
         return f"PatchReviewResults(commit={self.commit}, results={self.results})"
 
 
-def run_patch_review(
-    selected_reviews: list[type[PatchReview]], commit: Commit
+def review_commit(
+    reviews: set[str], commit: Commit, repo_path: str
 ) -> PatchReviewResults:
+    all_reviews = {cls.__name__: cls for cls in AVAILABLE_PATCH_REVIEWS}
+    selected_reviews = [all_reviews[name] for name in reviews if name in all_reviews]
+
     output = PatchReviewResults(commit)
 
     for selected_review in selected_reviews:
         logger.debug(f"Initializing review: {selected_review.__name__}")
-        cur_review = selected_review(commit)
+        cur_review = selected_review(repo_path, commit)
 
         logger.debug(f"Running review: {selected_review.__name__}")
         result = cur_review.run()
@@ -66,40 +69,13 @@ def run_patch_review(
     return output
 
 
-def review_patch(reviews: set[str], commit: Commit) -> PatchReviewResults:
-    all_reviews = {cls.__name__: cls for cls in AVAILABLE_PATCH_REVIEWS}
-    selected_reviews = [all_reviews[name] for name in reviews if name in all_reviews]
-
-    for review_cls in selected_reviews:
-        logger.debug(f"Verifying dependencies for: {review_cls.__name__}")
-        review_cls.verify_dependencies()
-
-    results = run_patch_review(selected_reviews, commit)
-
-    return results
-
-
-def install_missing_dependencies(reviews: set[str]) -> None:
-    """
-    Install missing dependencies for the specified reviews.
-    """
-    all_reviews = {cls.__name__: cls for cls in AVAILABLE_PATCH_REVIEWS}
-    selected_reviews = [all_reviews[name] for name in reviews if name in all_reviews]
-
-    for review_cls in selected_reviews:
-        logger.info(f"Installing dependencies for: {review_cls.__name__}")
-        review_cls.verify_dependencies(install=True)
-
-    logger.info("All specified reviews' dependencies are installed.")
-
-
 def _review_list_str(reviews: Iterable[type[PatchReview]]):
     """Helper to format review names for help messages"""
     return ", ".join(sorted({cls.__name__ for cls in reviews})) or "(none)"
 
 
 def add_review_arguments(
-    parser_or_group: argparse.ArgumentParser | argparse._ArgumentGroup,
+    parser_or_group: Union[argparse.ArgumentParser, argparse._ArgumentGroup],
 ):
     # Case-insensitive review name handling
     available_review_names = {
@@ -147,7 +123,7 @@ def get_selected_reviews_from_args(args: argparse.Namespace) -> set[str]:
     Given parsed args, return the set of review class names to run.
     This logic is shared by all entry points.
     """
-    group_sets: list[set[str]] = []
+    group_sets: "list[set[str]]" = []
     if getattr(args, "all_reviews", False):
         group_sets.append(set(cls.__name__ for cls in AVAILABLE_PATCH_REVIEWS))
     if getattr(args, "llm_reviews", False):
@@ -164,7 +140,7 @@ def get_selected_reviews_from_args(args: argparse.Namespace) -> set[str]:
     )
 
     if group_sets:
-        return set().union(*group_sets)
+        return {str(item) for group in group_sets for item in group}
     else:
         # Default: all reviews
         return explicit_reviews

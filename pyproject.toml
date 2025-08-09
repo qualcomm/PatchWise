@@ -30,4 +30,4 @@ where = ["."]
 include = ["patchwise*"]
 
 [tool.setuptools.package-data]
-patchwise = ["patches/**"]
+patchwise = ["patches/**", "dockerfiles/*"]
