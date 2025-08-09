@@ -45,7 +45,7 @@ class PatchReviewResults:
         return f"PatchReviewResults(commit={self.commit}, results={self.results})"
 
 
-def review_patch(
+def review_commit(
     reviews: set[str], commit: Commit, repo_path: str
 ) -> PatchReviewResults:
     all_reviews = {cls.__name__: cls for cls in AVAILABLE_PATCH_REVIEWS}

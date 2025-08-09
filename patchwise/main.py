@@ -13,11 +13,9 @@ from .logger_setup import add_logging_arguments, setup_logger
 from .patch_review import (
     add_review_arguments,
     get_selected_reviews_from_args,
-    review_patch,
+    review_commit,
 )
 from .patch_review.ai_review.ai_review import add_ai_arguments, apply_ai_args
-from .patch_review.kernel_tree import create_git_worktree
-from .patch_review.patch_review import PATCH_PATH
 from .utils.config import parse_config, update_user_config
 from .utils.tui import display_prompt_with_options
 
@@ -52,16 +50,6 @@ def parse_args(config: dict) -> argparse.Namespace:
     return parser.parse_args()
 
 
-def get_patches(repo: Repo, commits: list[Commit]):
-    dest_dir = PATCH_PATH / "user"
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    for idx, commit in enumerate(commits, 1):
-        patch_file = dest_dir / f"{idx:04d}-{commit}.patch"
-        diff = repo.git.format_patch("-1", commit, stdout=True)
-        logger.debug(f"Writing patch for commit {commit} to {patch_file}")
-        patch_file.write_text(diff)
-
-
 def get_commits(repo: Repo, commits: list[str]) -> list[Commit]:
     """
     Given a repo and a list of commit refs or a commit range, return a list of Commit objects.
@@ -73,8 +61,12 @@ def get_commits(repo: Repo, commits: list[str]) -> list[Commit]:
     if len(commits) == 1 and ".." in commits[0]:
         # Range mode
         commit_range = commits[0]
-        # git rev-list returns commits in reverse chronological order
-        commit_shas = list(repo.git.rev_list(commit_range).splitlines())
+        # Split the range into start and end
+        start, end = commit_range.split("..", 1)
+        # Get all commits reachable from start (inclusive) up to end (inclusive)
+        # Use git rev-list --reverse start^..end to get chronological order
+        inclusive_range = f"{start}^..{end}"
+        commit_shas = list(repo.git.rev_list('--reverse', inclusive_range).splitlines())
         return [repo.commit(sha) for sha in commit_shas]
     else:
         # List of refs/SHAs
@@ -106,11 +98,10 @@ def main():
 
     repo = Repo(args.repo_path)
     commits = get_commits(repo, args.commits)
-    create_git_worktree(repo)
 
     for commit in commits:
         logger.info(f"Reviewing commit {commit.hexsha}...")
-        review_patch(reviews, commit, args.repo_path)
+        review_commit(reviews, commit, args.repo_path)
 
 
 if __name__ == "__main__":
