@@ -65,12 +65,6 @@ class DtCheck(StaticAnalysis):
         )
         return output.strip()
 
-    def __get_unique_lines(self, baseline_log: str, new_log: str) -> str:
-        last_lines = set(baseline_log.splitlines())
-        current_lines = set(new_log.splitlines())
-        unique_lines = current_lines - last_lines
-        return "\n".join(unique_lines)
-
     def __get_dt_checker_logs(self, commit: Optional[Commit] = None) -> tuple[str, str]:
         # TODO Extract yamllint warnings/errors
         """
@@ -80,10 +74,8 @@ class DtCheck(StaticAnalysis):
         logs_dir = Path(SANDBOX_PATH) / "dt-checker-logs"
         logs_dir.mkdir(parents=True, exist_ok=True)
 
-        if commit:
-            self.apply_patches([commit])
-        else:
-            commit = self.apply_patches([])
+        if not commit:
+            commit = self.commit
 
         refcheckdocs_log_path = logs_dir / f"{commit.hexsha}_refcheckdocs.log"
         dt_binding_check_log_path = logs_dir / f"{commit.hexsha}_dt_binding_check.log"
@@ -123,18 +115,14 @@ class DtCheck(StaticAnalysis):
         self.logger.debug(f"Preparing kernel tree for dt checks")
         # super().clean_tree()
         super().make_config()  # TODO change back to _make_allmodconfig
-        base_refcheck, base_binding = self.__get_dt_checker_logs()
-        patch_refcheck, patch_binding = self.__get_dt_checker_logs(self.commit)
+        refcheck, binding = self.__get_dt_checker_logs(self.commit)
 
-        refcheckdocs_output = self.__get_unique_lines(base_refcheck, patch_refcheck)
-        dt_binding_check_output = self.__get_unique_lines(base_binding, patch_binding)
-
-        if not refcheckdocs_output and not dt_binding_check_output:
+        if not refcheck and not binding:
             self.logger.info("No dt-checker errors")
             return output
-        if len(refcheckdocs_output) > 0:
-            output += f"refcheckdocs:\n{refcheckdocs_output}\n"
-        if len(dt_binding_check_output) > 0:
-            output += f"dt_binding_check:\n{dt_binding_check_output}\n"
+        if len(refcheck) > 0:
+            output += f"refcheckdocs:\n{refcheck}\n"
+        if len(binding) > 0:
+            output += f"dt_binding_check:\n{binding}\n"
 
         return output
