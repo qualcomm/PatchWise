@@ -1,6 +1,9 @@
 # Use a base image with common development tools
 FROM debian:bookworm-slim
 
+# Ensure all packages are updated to the latest security patches
+# RUN apt-get update && apt-get upgrade -y --no-install-recommends && rm -rf /var/lib/apt/lists/*
+
 # Install essential build tools and dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
@@ -59,4 +62,9 @@ RUN cd /home/patchwise/kernel && \
     git config --global --add safe.directory /home/patchwise/kernel && \
     git reset --hard $CURRENT_COMMIT_SHA && \
     git clean -fdx
+
+RUN python3 -m venv /home/patchwise/.venv
+ENV PATH="/home/patchwise/.venv/bin:$PATH"
+
+
 USER patchwise
