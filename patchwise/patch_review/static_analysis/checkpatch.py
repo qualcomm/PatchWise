@@ -44,7 +44,7 @@ class Checkpatch(StaticAnalysis):
                     ]
                 ),
                 "--git",
-                self.base_commit.hexsha + "..." + self.commit.hexsha,
+                self.commit.hexsha,
             ],
             cwd=str(self.docker_manager.kernel_dir),
             desc="checkpatch",

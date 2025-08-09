@@ -35,7 +35,9 @@ class DockerManager:
         if process.returncode != 0:
             raise subprocess.CalledProcessError(process.returncode, process.args)
 
-    def build_image(self, dockerfile_path: Path, repo_path: Path) -> None:
+    def build_image(
+        self, dockerfile_path: Path, repo_path: Path, current_commit_sha: str
+    ) -> None:
         base_image_tag = "patchwise-base:latest"
         self.logger.info(f"Ensuring base Docker image {base_image_tag} is built...")
         base_dockerfile = PACKAGE_PATH / "dockerfiles" / "base.Dockerfile"
@@ -60,6 +62,8 @@ class DockerManager:
                 f"PACKAGE_PATH={relative_package_path}",
                 "--build-arg",
                 f"KERNEL_PATH={relative_repo_path}",
+                "--build-arg",
+                f"CURRENT_COMMIT_SHA={current_commit_sha}",
                 "-t",
                 base_image_tag,
                 str(common_path),

@@ -52,4 +52,11 @@ RUN mkdir /home/patchwise/build && chown -R patchwise:patchwise /home/patchwise/
 ARG KERNEL_PATH
 COPY --chown=patchwise:patchwise $KERNEL_PATH /home/patchwise/kernel
 
+# Checkout the current commit
+USER root
+ARG CURRENT_COMMIT_SHA
+RUN cd /home/patchwise/kernel && \
+    git config --global --add safe.directory /home/patchwise/kernel && \
+    git reset --hard $CURRENT_COMMIT_SHA && \
+    git clean -fdx
 USER patchwise
