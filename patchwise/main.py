@@ -19,7 +19,8 @@ from .patch_review import (
 from .patch_review.ai_review.ai_review import add_ai_arguments, apply_ai_args
 from .patch_review.kernel_tree import create_git_worktree
 from .patch_review.patch_review import PATCH_PATH
-from .utils.config import parse_config
+from .utils.config import parse_config, update_user_config
+from .utils.tui import display_prompt_with_options
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +84,18 @@ def get_commits(repo: Repo, commits: list[str]) -> list[Commit]:
 
 def main():
     config = parse_config()
+
+    api_key_conf = config["api_key_disclaimer"]
+
+    if not api_key_conf["no_reprompt"]:
+        selected_option = display_prompt_with_options(
+            api_key_conf["message"], api_key_conf["options"]
+        )
+        if selected_option == "Yes. Don't show again":
+            api_key_conf["no_reprompt"] = True
+            update_user_config(config)
+        elif selected_option != "Yes":
+            return
 
     args = parse_args(config)
 
