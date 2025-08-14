@@ -188,6 +188,20 @@ class PatchReview(abc.ABC):
             cls.get_logger().debug(f"{cls.__name__} dependencies are installed.")
             setattr(cls, "_dependencies_verified", True)
 
+    def reset_worktree(self) -> None:
+        """
+        Resets the Git worktree to a clean state.
+        """
+        self.logger.debug("Resetting worktree to a clean state.")
+        self.git_abort()
+        try:
+            self.repo.git.reset("--hard", BRANCH_NAME)
+            self.repo.git.clean("-fdx")
+            self.repo.git.checkout(BRANCH_NAME)
+        except GitCommandError as e:
+            self.logger.error(f"Failed to reset worktree: {e}")
+            raise
+
     def git_abort(self) -> None:
         """
         Abort any ongoing git operations.
@@ -211,34 +225,15 @@ class PatchReview(abc.ABC):
             pass
 
     def apply_patches(self, commits: list[Commit]) -> None:
-        self.git_abort()
-        self.repo.git.switch(BRANCH_NAME, detach=True)
-        self.logger.debug(f"Applying patches from {PATCH_PATH} on branch {BRANCH_NAME}")
-        general_patch_files = sorted((PATCH_PATH / "general").glob("*.patch"))
-        self.logger.debug(f"Applying general patches: {general_patch_files}")
-        review_patch_files = sorted(
-            (PATCH_PATH / self.__class__.__name__.lower()).glob("*.patch")
-        )
-        self.logger.debug(f"Applying review patches: {review_patch_files}")
-        patch_files = general_patch_files + review_patch_files
-        for patch_file in patch_files:
-            self.logger.debug(f"Applying patch: {patch_file}")
-            try:
-                self.repo.git.am(str(patch_file))
-            except Exception as e:
-                self.logger.warning(f"Failed to apply patch {patch_file}: {e}")
-                self.repo.git.am("--skip")
-
-        cherry_commits = commits or [self.commit]
-        for cherry_commit in cherry_commits:
-            self.logger.debug(f"Applying commit: {cherry_commit.hexsha}")
-            try:
-                self.repo.git.cherry_pick(cherry_commit.hexsha)
-            except Exception as e:
-                # If the commit is already applied or cherry-pick fails, log and continue
-                self.logger.warning(
-                    f"Failed to cherry-pick {cherry_commit.hexsha}: {e}"
-                )
+        target_commit = commits[0] if commits else self.commit
+        self.logger.debug(f"Checking out commit: {target_commit.hexsha}")
+        self.reset_worktree() # Reset to clean state before checkout
+        try:
+            # Checkout the specific commit in a detached HEAD state
+            self.repo.git.checkout(target_commit.hexsha)
+        except Exception as e:
+            self.logger.error(f"Failed to checkout {target_commit.hexsha}: {e}")
+            raise
 
     @abc.abstractmethod
     def setup(self) -> None:
@@ -323,3 +318,8 @@ class PatchReview(abc.ABC):
         for the specific type of patch review being performed.
         """
         pass
+
+def review_patch(reviews: list[type[PatchReview]], commit: Commit):
+    for review_class in reviews:
+        review = review_class(commit)
+        review.run()

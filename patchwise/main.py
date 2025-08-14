@@ -71,11 +71,22 @@ def get_commits(repo: Repo, commits: list[str]) -> list[Commit]:
     if isinstance(commits, str):
         commits = [commits]
     if len(commits) == 1 and ".." in commits[0]:
-        # Range mode
-        commit_range = commits[0]
-        # git rev-list returns commits in reverse chronological order
-        commit_shas = list(repo.git.rev_list(commit_range).splitlines())
-        return [repo.commit(sha) for sha in commit_shas]
+        # Range mode: sha1..sha2
+        start_sha, end_sha = commits[0].split("..")
+
+        # git rev-list end_sha --not start_sha^
+        # This gets all commits from end_sha back to start_sha (inclusive)
+        # in reverse chronological order.
+        # We then reverse the list to get them in chronological order.
+        try:
+            commit_shas = list(repo.git.rev_list(f"{end_sha}", f"--not", f"{start_sha}^").splitlines())
+            # Add the start_sha itself, as --not start_sha^ excludes it.
+            # Then reverse the list for chronological order.
+            result_shas = [start_sha] + commit_shas
+            return [repo.commit(sha) for sha in reversed(result_shas)]
+        except Exception as e:
+            logger.error(f"Error resolving commit range {commits[0]}: {e}")
+            raise
     else:
         # List of refs/SHAs
         return [repo.commit(ref) for ref in commits]
