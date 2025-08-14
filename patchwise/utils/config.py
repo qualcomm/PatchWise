@@ -44,3 +44,8 @@ def parse_config() -> Dict[str, Any]:
     }
 
     return combined_options
+
+
+def update_user_config(dict: Dict[str, Any]) -> None:
+    with open(USER_CONFIG_PATH, "w") as file:
+        yaml.dump(dict, file)
