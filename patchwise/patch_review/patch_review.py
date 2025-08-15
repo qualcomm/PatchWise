@@ -18,6 +18,10 @@ from patchwise.docker import DockerManager
 DOCKERFILES_PATH = PACKAGE_PATH / "dockerfiles"
 BUILD_DIR = SANDBOX_PATH / "build"
 
+# Global tracking for container orchestration
+_containers_built: set[str] = set()
+_build_volume_initialized = False
+
 
 class PatchReview(abc.ABC):
     @classmethod
@@ -29,6 +33,8 @@ class PatchReview(abc.ABC):
         repo_path: str,
         commit: Commit,
     ):
+        global _build_volume_initialized
+        
         self.logger = self.get_logger()
         self.repo = Repo(repo_path)
         self.commit = commit
@@ -45,11 +51,23 @@ class PatchReview(abc.ABC):
         self.docker_manager = DockerManager(
             image_tag=image_tag,
             container_name=container_name,
+            commit_sha=self.commit.hexsha,
         )
-        self.docker_manager.build_image(
-            dockerfile_path, Path(repo_path), self.commit.hexsha
-        )
-        self.docker_manager.start_container(self.build_dir)
+        
+        # Build the image if not already built
+        if image_tag not in _containers_built:
+            self.docker_manager.build_image(
+                dockerfile_path, Path(repo_path), self.commit.hexsha
+            )
+            _containers_built.add(image_tag)
+        
+        # Initialize shared build volume once using base container
+        if not _build_volume_initialized:
+            DockerManager.initialize_shared_build_volume(Path(repo_path), self.commit.hexsha)
+            _build_volume_initialized = True
+        
+        # Start container with shared volume
+        self.docker_manager.start_container_with_shared_volume()
 
         self.setup()
 
