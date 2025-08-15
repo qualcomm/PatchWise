@@ -61,7 +61,10 @@ class Dependency:
         cmd_path = shutil.which(self.name)
         if cmd_path is None or not os.access(cmd_path, os.X_OK):
             raise ImportError(
-                f"{self.name} is not installed or not executable. Please install {self.name}."
+                (
+                    f"{self.name} is not installed or not executable. "
+                    f"Please install {self.name}."
+                )
             )
         self.logger.debug(f"{self.name} is installed and executable at {cmd_path}.")
 
@@ -79,14 +82,23 @@ class Dependency:
             version = self.get_version()
             if not self.version_in_range(version):
                 raise ImportError(
-                    f"{self.name} version {{{version}}} does not meet the version requirements ({minmax_str})."
+                    (
+                        f"{self.name} version {{{version}}} does not meet the "
+                        f"version requirements ({minmax_str})."
+                    )
                 )
             self.logger.debug(
-                f"{self.name} version {{{version}}} is installed and meets the version requirements ({minmax_str})."
+                (
+                    f"{self.name} version {{{version}}} is installed and meets the "
+                    f"version requirements ({minmax_str})."
+                )
             )
         except (FileNotFoundError, subprocess.CalledProcessError, InvalidVersion):
             raise ImportError(
-                f"{self.name} is not installed or not working. Please install {self.name} ({minmax_str})."
+                (
+                    f"{self.name} is not installed or not working. "
+                    f"Please install {self.name} ({minmax_str})."
+                )
             )
 
     def install_from_pkg_manager(self) -> None:
@@ -159,7 +171,8 @@ class PatchReview(abc.ABC):
     @staticmethod
     def add_sandbox_to_path():
         """
-        Adds the sandbox bin directory to the PATH environment variable if not already present.
+        Adds the sandbox bin directory to the PATH environment variable
+        if not already present.
         """
         if not PatchReview._sandbox_path_added:
             current_path = os.environ.get("PATH", "")
@@ -175,7 +188,8 @@ class PatchReview(abc.ABC):
     @classmethod
     def verify_dependencies(cls, install: bool = False) -> None:
         """
-        Verifies that all dependencies are installed and meet the minimum version requirements.
+        Verifies that all dependencies are installed and meet the minimum
+        version requirements.
         """
         cls.add_sandbox_to_path()
 
@@ -235,7 +249,7 @@ class PatchReview(abc.ABC):
             try:
                 self.repo.git.cherry_pick(cherry_commit.hexsha)
             except Exception as e:
-                # If the commit is already applied or cherry-pick fails, log and continue
+                # If the commit is already applied or cherry-pick fails, log & continue
                 self.logger.warning(
                     f"Failed to cherry-pick {cherry_commit.hexsha}: {e}"
                 )

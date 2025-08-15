@@ -29,7 +29,7 @@ class Coccicheck(StaticAnalysis):
                 "coccicheck",
                 f"M={directory}",
                 "MODE=report",
-                f"DEBUG_FILE={self.symlink_path}",  # if hasattr(self, 'symlink_path') else "DEBUG_FILE=/dev/null",
+                f"DEBUG_FILE={self.symlink_path}",
             ],
             cwd=str(self.repo.working_tree_dir),
             desc="coccicheck running",
@@ -38,7 +38,8 @@ class Coccicheck(StaticAnalysis):
 
     def setup(self) -> None:
         # Create symlink /tmp/{package_name}_null -> /dev/null
-        # Necessary to trick the coccicheck script into piping stdout to /dev/null otherwise it combines stdout and stderr for some reason
+        # Necessary to trick the coccicheck script into piping stdout to /dev/null.
+        # Otherwise, it combines stdout and stderr for some reason.
         package_name = __package__ or "coccicheck"
         self.symlink_path = f"/tmp/{package_name}_null"
         target = "/dev/null"
