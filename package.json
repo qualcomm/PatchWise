@@ -1,0 +1,11 @@
+{
+  "name": "patchwise-dev-tools",
+  "private": true,
+  "scripts": {
+    "lint:md": "markdownlint-cli2 --config .markdownlint.json .",
+    "lint:md:fix": "markdownlint-cli2 --config .markdownlint.json --fix ."
+  },
+  "devDependencies": {
+    "markdownlint-cli2": "^0.13.0"
+  }
+}
