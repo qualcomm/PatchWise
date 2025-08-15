@@ -26,6 +26,5 @@ MANIFEST
 .venv
 .vscode/
 .checkpatch-camelcase.git.
-patchwise/sandbox/**
 **/patch_review/patches/
-**/patch_review/kernel/
+.github/copilot-instructions.md
