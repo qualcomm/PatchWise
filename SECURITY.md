@@ -9,7 +9,7 @@ other patch as described in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 If you are dealing with a not-yet released or urgent issue, please contact us
 via our [Product Security team](mailto:product-security@qualcomm.com) or
-see our 
+see our
 [Report a Bug](https://www.qualcomm.com/company/product-security/report-a-bug)
 page, including as many details as
 possible: including the version, and any example code, if available.

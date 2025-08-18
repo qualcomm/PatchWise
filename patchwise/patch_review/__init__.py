@@ -3,7 +3,7 @@
 
 import argparse
 
-# Automatically import all patch review modules so all @register_patch_review classes are registered
+# Import all patch review modules so all @register_patch_review classes are registered
 import importlib
 import logging
 import pkgutil
@@ -11,7 +11,16 @@ from typing import Iterable
 
 from git.objects.commit import Commit
 
+from patchwise.patch_review.decorators import (
+    AVAILABLE_PATCH_REVIEWS,
+    LLM_REVIEWS,
+    LONG_REVIEWS,
+    SHORT_REVIEWS,
+    STATIC_ANALYSIS_REVIEWS,
+)
+
 from . import ai_review, static_analysis
+from .patch_review import PatchReview
 
 # Import all modules in static_analysis subpackage
 for _, modname, ispkg in pkgutil.iter_modules(static_analysis.__path__):
@@ -22,16 +31,6 @@ for _, modname, ispkg in pkgutil.iter_modules(static_analysis.__path__):
 for _, modname, ispkg in pkgutil.iter_modules(ai_review.__path__):
     if not ispkg:
         importlib.import_module(f"{__name__}.ai_review.{modname}")
-
-from patchwise.patch_review.decorators import (
-    AVAILABLE_PATCH_REVIEWS,
-    LLM_REVIEWS,
-    LONG_REVIEWS,
-    SHORT_REVIEWS,
-    STATIC_ANALYSIS_REVIEWS,
-)
-
-from .patch_review import PatchReview
 
 logger = logging.getLogger(__name__)
 
@@ -113,7 +112,10 @@ def add_review_arguments(
         if lower_name not in available_review_names:
             # This error message is more consistent with argparse's default
             raise argparse.ArgumentTypeError(
-                f"invalid choice: '{review_name}' (choose from {', '.join(available_review_choices)})"
+                (
+                    f"invalid choice: '{review_name}' "
+                    f"(choose from {', '.join(available_review_choices)})"
+                )
             )
         return available_review_names[lower_name]
 
@@ -130,13 +132,19 @@ def add_review_arguments(
     parser_or_group.add_argument(
         "--short-reviews",
         action="store_true",
-        help=f"Run only short reviews: [`{_review_list_str(SHORT_REVIEWS)}`]. Overrides --reviews.",
+        help=(
+            f"Run only short reviews: [`{_review_list_str(SHORT_REVIEWS)}`]. "
+            "Overrides --reviews."
+        ),
     )
 
     parser_or_group.add_argument(
         "--install",
         action="store_true",
-        help="Install missing dependencies for the specified reviews. This will not run any reviews, only install dependencies.",
+        help=(
+            "Install missing dependencies for the specified reviews. "
+            "This will not run any reviews, only install dependencies."
+        ),
     )
 
     return parser_or_group

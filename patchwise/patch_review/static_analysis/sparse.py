@@ -22,7 +22,9 @@ MINIMUM_SPARSE_VERSION = "0.6.4"
 
 
 class SparseDependency(Dependency):
-    # TODO if installing to SANDBOX_PATH and the version still does not work, the user will need to manually clear the SANDBOX_PATH folder because SANDBOX_PATH is at the start of the PATH
+    # TODO: If installing to SANDBOX_PATH and the version still does not work, the user
+    # will need to manually clear the SANDBOX_PATH folder because SANDBOX_PATH is at the
+    # start of the PATH.
     def install_from_source(self) -> None:
         """
         Install sparse from source.

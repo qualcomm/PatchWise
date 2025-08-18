@@ -1,0 +1,6 @@
+{
+  "default": true,
+  "ignores": [
+    "patchwise/patch_review/ai_review/prompts/**"
+  ]
+}
