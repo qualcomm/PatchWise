@@ -23,6 +23,13 @@ dependencies = [
     "platformdirs>=4.3.8"
 ]
 
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.1.0",
+    "pytest>=8.3.5",
+    "pre-commit>=4.2.0",
+]
+
 [project.scripts]
 patchwise = "patchwise.main:main"
 
@@ -32,3 +39,19 @@ include = ["patchwise*"]
 
 [tool.setuptools.package-data]
 patchwise = ["patches/**", "default_config.yaml"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "TID252", # Require absolute imports
+    "I",    # isort (import sorting)
+]
+
+exclude = [
+    ".github",
+    ".pytest_cache",
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["patchwise"]
