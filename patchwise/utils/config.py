@@ -1,11 +1,13 @@
 # Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 
-from platformdirs import user_config_dir
-from patchwise import PACKAGE_PATH
 from pathlib import Path
-from typing import Dict, Any, cast
+from typing import Any, Dict, cast
+
 import yaml
+from platformdirs import user_config_dir
+
+from patchwise import PACKAGE_PATH
 
 CONFIG_DIR = Path(user_config_dir())
 DEFAULT_CONFIG_PATH = PACKAGE_PATH / "default_config.yaml"
@@ -27,7 +29,8 @@ def read_from_config(path: Path) -> Dict[str, Any]:
 
 def parse_config() -> Dict[str, Any]:
     """
-    Parses both user and default configuration files and returns the union of the two with user taking precedence.
+    Parses both user and default configuration files and returns the union of the two
+    with user taking precedence.
     """
     default_options = read_from_config(DEFAULT_CONFIG_PATH)
     try:

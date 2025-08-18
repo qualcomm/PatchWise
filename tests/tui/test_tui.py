@@ -1,9 +1,10 @@
 # Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 
+from unittest.mock import Mock, patch
+
 import pytest
 import yaml
-from unittest.mock import Mock, patch
 
 from patchwise.utils.tui import display_prompt_with_options
 
