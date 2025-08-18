@@ -1,6 +1,8 @@
 # Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 
+import os
+
 from patchwise.patch_review.decorators import register_llm_review, register_short_review
 
 from .ai_review import AiReview
@@ -11,43 +13,24 @@ from .ai_review import AiReview
 class LLMCommitAudit(AiReview):
     DEPENDENCIES = getattr(AiReview, "DEPENDENCIES", [])
 
-    PROMPT_TEMPLATE = """
-**Prompt:**
-You are an AI language model tasked with evaluating commit text for patches sent to the Linux Kernel. Your goal is to ensure that the commit text adheres to the Linux Kernel's guidelines. Specifically, you should focus on the following areas:
-
-Justification of Code Changes: Ensure that the commit text clearly explains why the code changes are necessary.
-Correct Imperative Tense: Verify that the commit text is written in the correct imperative tense.
-Problem Description: Confirm that the commit text sufficiently describes the problem that the code changes aim to address.
-Additionally, your suggestions should avoid making the commit text overly detailed or verbose.
-
-**Commit Text:**
-
-```
-{commit_text}
-```
-
-**Patch Details:**
-
-```
-{diff}
-```
-
-**Output:**
-
-The format of the output should be as follows:
- - A short review.
- - Rewrite the commit text in imperative mode as needed and incorporates suggestions.
- - Briefly describe the changes made to the commit text.
- - A list of suggestions the author can take to make the commit text even better after incorporating your revisions.
-Do not provide a rating.
-The output should use only ASCII characters.
-"""
+    @staticmethod
+    def _load_prompt_template() -> str:
+        """Load the prompt template from the markdown file."""
+        template_path = os.path.join(
+            os.path.dirname(__file__), "prompts", "commit_audit_prompt.md"
+        )
+        try:
+            with open(template_path, "r") as f:
+                return f.read()
+        except Exception as e:
+            raise RuntimeError(f"Failed to load commit audit prompt template: {e}")
 
     def setup(self) -> None:
         super().setup()
 
     def run(self) -> str:
-        formatted_prompt = LLMCommitAudit.PROMPT_TEMPLATE.format(
+        prompt_template = self._load_prompt_template()
+        formatted_prompt = prompt_template.format(
             diff=self.diff,
             commit_text=str(self.commit_message),
         )
