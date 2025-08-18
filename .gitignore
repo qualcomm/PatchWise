@@ -29,3 +29,5 @@ MANIFEST
 patchwise/sandbox/**
 **/patch_review/patches/
 **/patch_review/kernel/
+
+node_modules/
