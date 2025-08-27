@@ -90,14 +90,22 @@ Review the following patch diff and provide inline feedback on the code changes.
     @staticmethod
     def get_kernel_coding_style() -> str:
         """Load kernel coding style guidelines from documentation."""
-        coding_style_path = os.path.join(
-            KERNEL_PATH, "Documentation/process/coding-style.rst"
-        )
-        try:
-            with open(coding_style_path, "r") as f:
-                return f.read()
-        except Exception as e:
-            return f"[Could not load kernel coding style guidelines: {e}]"
+        coding_style_docs = [
+            {"name": "Kernel Coding Style Guidelines",
+             "path": "Documentation/process/coding-style.rst"},
+        ]
+        guidelines_doc = ""
+        for doc in coding_style_docs:
+            doc_path = os.path.join(KERNEL_PATH, doc["path"])
+            guidelines_doc += f"## {doc['name']}:\n\n"
+            try:
+                with open(doc_path, "r") as f:
+                    guidelines_doc += f.read()
+            except Exception as e:
+                guidelines_doc += f"[Could not load {doc['name']} file {doc_path}: {e}]"
+            guidelines_doc += "\n"
+
+        return guidelines_doc
 
     @classmethod
     def get_system_prompt(cls) -> str:
@@ -167,8 +175,6 @@ regulator-name.
 > +			regulator-name = "vreg_l6n_3p2";
 >  			regulator-min-microvolt = <2800000>;
 ```
-
-## Kernel Coding Style Guidelines
 
 """ + cls.get_kernel_coding_style()
 
