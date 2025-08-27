@@ -34,7 +34,7 @@ class SparseDependency(Dependency):
                 [
                     "git",
                     "clone",
-                    "git://git.kernel.org/pub/scm/devel/sparse/sparse.git",
+                    "https://git.kernel.org/pub/scm/devel/sparse/sparse.git",
                     src_dir,
                 ],
                 check=True,
