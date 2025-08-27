@@ -93,6 +93,10 @@ Review the following patch diff and provide inline feedback on the code changes.
         coding_style_docs = [
             {"name": "Kernel Coding Style Guidelines",
              "path": "Documentation/process/coding-style.rst"},
+            {"name": "Devicetree Coding Style Guidelines",
+             "path": "Documentation/devicetree/bindings/dts-coding-style.rst"},
+            {"name": "Kernel Rust Coding Style Guidelines",
+             "path": "Documentation/rust/coding-guidelines.rst"},
         ]
         guidelines_doc = ""
         for doc in coding_style_docs:
