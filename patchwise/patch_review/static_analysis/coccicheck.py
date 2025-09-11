@@ -15,11 +15,46 @@ from .static_analysis import StaticAnalysis
 @register_static_analysis_review
 @register_short_review
 class Coccicheck(StaticAnalysis):
+    def _prepare_kernel_build(self) -> None:
+        """Prepare the kernel build system for coccicheck."""
+        self.logger.debug("Preparing kernel build system for coccicheck")
+        kernel_dir = self.docker_manager.sandbox_path / "kernel"
+        
+        # First, run defconfig to set up basic configuration
+        try:
+            super().make_config(arch="arm64")
+            self.logger.debug("Kernel configuration prepared successfully")
+        except Exception as e:
+            self.logger.warning(f"Failed to prepare kernel configuration: {e}")
+        
+        # Run make scripts to ensure coccicheck infrastructure is available
+        try:
+            super().run_cmd_with_timer(
+                [
+                    "make",
+                    "-C",
+                    str(kernel_dir),
+                    f"O={self.docker_manager.build_dir}",
+                    "ARCH=arm64",
+                    "LLVM=1",
+                    "scripts"
+                ],
+                cwd=str(self.docker_manager.build_dir),
+                desc="preparing kernel scripts",
+            )
+            self.logger.debug("Kernel scripts prepared successfully")
+        except Exception as e:
+            self.logger.warning(f"Failed to prepare kernel scripts: {e}")
+            # Continue anyway, coccicheck might still work
+
     def _run_coccicheck(self, directory: str) -> str:
+        kernel_dir = self.docker_manager.sandbox_path / "kernel"
         coccicheck_output = super().run_cmd_with_timer(
             [
                 "make",
-                f"O={self.build_dir}",
+                "-C",
+                str(kernel_dir),
+                f"O={self.docker_manager.build_dir}",
                 f"-j{os.cpu_count()}",
                 "ARCH=arm64",
                 "LLVM=1",
@@ -27,8 +62,9 @@ class Coccicheck(StaticAnalysis):
                 "coccicheck",
                 f"M={directory}",
                 "MODE=report",
-                f"DEBUG_FILE={self.symlink_path}",  # if hasattr(self, 'symlink_path') else "DEBUG_FILE=/dev/null",
+                f"DEBUG_FILE={self.symlink_path}",
             ],
+            cwd=str(self.docker_manager.build_dir),
             desc="coccicheck running",
         )
         return coccicheck_output
@@ -46,6 +82,10 @@ class Coccicheck(StaticAnalysis):
     def run(self) -> str:
         # TODO make sure that setup() runs in order for run() to run
         self.logger.debug(f"Running cocci_check")
+        
+        # First, prepare the kernel build system
+        self._prepare_kernel_build()
+        
         output = ""
         modified_files = set(self.commit.stats.files.keys())
         line_re = re.compile(r"^([^:]+):\d+:\d+-\d+:.*")
