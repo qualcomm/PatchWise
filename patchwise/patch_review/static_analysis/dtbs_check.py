@@ -22,7 +22,7 @@ class DtbsCheck(StaticAnalysis):
     DEPENDENCIES = []
 
     def __run_dtbs_check(self, sha: str) -> str:
-        kernel_tree = str(self.repo.working_tree_dir)
+        kernel_dir = self.docker_manager.sandbox_path / "kernel"
         cfg_opts = [
             "CONFIG_ARM64_ERRATUM_843419=n",
             "CONFIG_ARM64_USE_LSE_ATOMICS=n",
@@ -36,15 +36,17 @@ class DtbsCheck(StaticAnalysis):
         dtbs_check_output = super().run_cmd_with_timer(
             cmd=[
                 "make",
+                "-C",
+                str(kernel_dir),
                 f"-j{os.cpu_count()}",
                 "-s",
-                f"O={self.build_dir}",
+                f"O={self.docker_manager.build_dir}",
                 f"ARCH={arch}",
                 "LLVM=1",
                 "dtbs_check",
             ]
             + cfg_opts,
-            cwd=kernel_tree,
+            cwd=str(self.docker_manager.build_dir),
             desc=f"dtbs_check",
         )
         # logfile.write_text(dtbs_check_output) # TODO log to file and check for cache
