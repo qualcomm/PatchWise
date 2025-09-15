@@ -66,7 +66,7 @@ def get_commits(repo: Repo, commits: list[str]) -> list[Commit]:
         # Get all commits reachable from start (inclusive) up to end (inclusive)
         # Use git rev-list --reverse start^..end to get chronological order
         inclusive_range = f"{start}^..{end}"
-        commit_shas = list(repo.git.rev_list('--reverse', inclusive_range).splitlines())
+        commit_shas = list(repo.git.rev_list("--reverse", inclusive_range).splitlines())
         return [repo.commit(sha) for sha in commit_shas]
     else:
         # List of refs/SHAs

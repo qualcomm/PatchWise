@@ -86,9 +86,7 @@ class DtCheck(StaticAnalysis):
         self.logger.debug(f"Saved refcheckdocs logs to {refcheckdocs_log_path}")
         dt_binding_check_logs = self.__make_dt_binding_check()
         dt_binding_check_log_path.write_text(dt_binding_check_logs)
-        self.logger.debug(
-            f"Saved dt_binding_check logs to {dt_binding_check_log_path}"
-        )
+        self.logger.debug(f"Saved dt_binding_check logs to {dt_binding_check_log_path}")
 
         return refcheckdocs_log_path.read_text(), dt_binding_check_log_path.read_text()
 

@@ -34,7 +34,7 @@ class PatchReview(abc.ABC):
         commit: Commit,
     ):
         global _build_volume_initialized
-        
+
         self.logger = self.get_logger()
         self.repo = Repo(repo_path)
         self.commit = commit
@@ -53,19 +53,21 @@ class PatchReview(abc.ABC):
             container_name=container_name,
             commit_sha=self.commit.hexsha,
         )
-        
+
         # Build the image if not already built
         if image_tag not in _containers_built:
             self.docker_manager.build_image(
                 dockerfile_path, Path(repo_path), self.commit.hexsha
             )
             _containers_built.add(image_tag)
-        
+
         # Initialize shared build volume once using base container
         if not _build_volume_initialized:
-            DockerManager.initialize_shared_build_volume(Path(repo_path), self.commit.hexsha)
+            DockerManager.initialize_shared_build_volume(
+                Path(repo_path), self.commit.hexsha
+            )
             _build_volume_initialized = True
-        
+
         # Start container with shared volume
         self.docker_manager.start_container_with_shared_volume()
 

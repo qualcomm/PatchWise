@@ -19,14 +19,14 @@ class Coccicheck(StaticAnalysis):
         """Prepare the kernel build system for coccicheck."""
         self.logger.debug("Preparing kernel build system for coccicheck")
         kernel_dir = self.docker_manager.sandbox_path / "kernel"
-        
+
         # First, run defconfig to set up basic configuration
         try:
             super().make_config(arch="arm64")
             self.logger.debug("Kernel configuration prepared successfully")
         except Exception as e:
             self.logger.warning(f"Failed to prepare kernel configuration: {e}")
-        
+
         # Run make scripts to ensure coccicheck infrastructure is available
         try:
             super().run_cmd_with_timer(
@@ -37,7 +37,7 @@ class Coccicheck(StaticAnalysis):
                     f"O={self.docker_manager.build_dir}",
                     "ARCH=arm64",
                     "LLVM=1",
-                    "scripts"
+                    "scripts",
                 ],
                 cwd=str(self.docker_manager.build_dir),
                 desc="preparing kernel scripts",
@@ -82,10 +82,10 @@ class Coccicheck(StaticAnalysis):
     def run(self) -> str:
         # TODO make sure that setup() runs in order for run() to run
         self.logger.debug(f"Running cocci_check")
-        
+
         # First, prepare the kernel build system
         self._prepare_kernel_build()
-        
+
         output = ""
         modified_files = set(self.commit.stats.files.keys())
         line_re = re.compile(r"^([^:]+):\d+:\d+-\d+:.*")

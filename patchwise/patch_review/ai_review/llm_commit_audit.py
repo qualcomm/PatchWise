@@ -9,7 +9,6 @@ from .ai_review import AiReview
 @register_llm_review
 @register_short_review
 class LLMCommitAudit(AiReview):
-
     PROMPT_TEMPLATE = """
 **Prompt:**
 You are an AI language model tasked with evaluating commit text for patches sent to the Linux Kernel. Your goal is to ensure that the commit text adheres to the Linux Kernel's guidelines. Specifically, you should focus on the following areas:

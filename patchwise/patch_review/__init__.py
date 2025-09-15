@@ -52,42 +52,42 @@ def prepare_containers_and_build_volume(
     from patchwise.docker import DockerManager
     from patchwise.patch_review.patch_review import DOCKERFILES_PATH
     from pathlib import Path
-    
+
     all_reviews = {cls.__name__: cls for cls in AVAILABLE_PATCH_REVIEWS}
     selected_reviews = [all_reviews[name] for name in reviews if name in all_reviews]
-    
+
     logger.info("Building required Docker containers...")
-    
+
     # Always ensure base container is built first
     base_dockerfile = DOCKERFILES_PATH / "base.Dockerfile"
     base_image_tag = "patchwise-base:latest"
     base_container_name = f"patchwise-base-latest-{commit.hexsha}"
-    
+
     base_manager = DockerManager(base_image_tag, base_container_name)
     base_manager.build_image(base_dockerfile, Path(repo_path), commit.hexsha)
-    
+
     # Build all other required containers
     built_images = {base_image_tag}
     for review_class in selected_reviews:
         dockerfile_path = DOCKERFILES_PATH / f"{review_class.__name__}.Dockerfile"
         if not dockerfile_path.exists():
             dockerfile_path = base_dockerfile
-            
+
         if dockerfile_path.name == "base.Dockerfile":
             image_tag = base_image_tag
         else:
             image_tag = f"patchwise-{review_class.__name__.lower()}"
-            
+
         if image_tag not in built_images:
             container_name = f"{image_tag.replace(':', '-')}-{commit.hexsha}"
             manager = DockerManager(image_tag, container_name)
             manager.build_image(dockerfile_path, Path(repo_path), commit.hexsha)
             built_images.add(image_tag)
-    
+
     # Initialize shared build volume using base container
     logger.info("Initializing shared build volume...")
     DockerManager.initialize_shared_build_volume(Path(repo_path), commit.hexsha)
-    
+
     logger.info("Container preparation complete.")
 
 
