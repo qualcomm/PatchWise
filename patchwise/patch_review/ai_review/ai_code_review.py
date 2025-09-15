@@ -76,12 +76,18 @@ Review the following patch diff and provide inline feedback on the code changes.
     def get_kernel_coding_style() -> str:
         """Load kernel coding style guidelines from documentation."""
         coding_style_docs = [
-            {"name": "Kernel Coding Style Guidelines",
-             "path": "Documentation/process/coding-style.rst"},
-            {"name": "Devicetree Coding Style Guidelines",
-             "path": "Documentation/devicetree/bindings/dts-coding-style.rst"},
-            {"name": "Kernel Rust Coding Style Guidelines",
-             "path": "Documentation/rust/coding-guidelines.rst"},
+            {
+                "name": "Kernel Coding Style Guidelines",
+                "path": "Documentation/process/coding-style.rst",
+            },
+            {
+                "name": "Devicetree Coding Style Guidelines",
+                "path": "Documentation/devicetree/bindings/dts-coding-style.rst",
+            },
+            {
+                "name": "Kernel Rust Coding Style Guidelines",
+                "path": "Documentation/rust/coding-guidelines.rst",
+            },
         ]
         guidelines_doc = ""
         for doc in coding_style_docs:
@@ -190,7 +196,7 @@ regulator-name.
         """Run a make command with consistent arguments using Docker container."""
         kernel_dir = self.docker_manager.sandbox_path / "kernel"
         build_dir = self.docker_manager.build_dir
-        
+
         base_args = [
             "make",
             "-C",
@@ -213,7 +219,9 @@ regulator-name.
                 cwd=str(build_dir),
             )
             # Write to container path, not host path
-            container_stdout_file = stdout_file.replace(str(self.build_dir), str(build_dir))
+            container_stdout_file = stdout_file.replace(
+                str(self.build_dir), str(build_dir)
+            )
             write_cmd = ["sh", "-c", f"cat > {container_stdout_file}"]
             process = self.docker_manager.run_command(write_cmd, cwd=str(build_dir))
             if process.stdin:
@@ -237,7 +245,7 @@ regulator-name.
         self.logger.debug("Generating compile commands")
         kernel_dir = self.docker_manager.sandbox_path / "kernel"
         build_dir = self.docker_manager.build_dir
-        
+
         gen_compile_cmd = [
             "python3",
             str(kernel_dir / "scripts" / "clang-tools" / "gen_compile_commands.py"),
@@ -246,8 +254,10 @@ regulator-name.
             "-o",
             str(build_dir / "compile_commands.json"),
         ]
-        
-        self.run_cmd_with_timer(gen_compile_cmd, "generate compile commands", cwd=str(build_dir))
+
+        self.run_cmd_with_timer(
+            gen_compile_cmd, "generate compile commands", cwd=str(build_dir)
+        )
         self.logger.debug("compile_commands.json generated")
 
     def _create_lsp_message(
@@ -269,7 +279,10 @@ regulator-name.
         self._send_lsp_message(proc, message)
 
     def _read_lsp_response(
-        self, proc: subprocess.Popen[Any], expected_id: Optional[int] = None, timeout: int = 30
+        self,
+        proc: subprocess.Popen[Any],
+        expected_id: Optional[int] = None,
+        timeout: int = 30,
     ) -> Dict[str, Any]:
         """Read and parse LSP response from process with timeout."""
         import select
@@ -279,7 +292,7 @@ regulator-name.
             raise RuntimeError("Process stdout is None")
 
         start_time = time.time()
-        
+
         while True:
             # Check if process is still alive
             if proc.poll() is not None:
@@ -288,11 +301,15 @@ regulator-name.
                     stderr_output = proc.stderr.read()
                     if stderr_output:
                         self.logger.error(f"clangd stderr: {stderr_output}")
-                raise RuntimeError(f"clangd process died with return code {proc.returncode}")
-            
+                raise RuntimeError(
+                    f"clangd process died with return code {proc.returncode}"
+                )
+
             # Check timeout
             if time.time() - start_time > timeout:
-                raise RuntimeError(f"Timeout waiting for LSP response after {timeout} seconds")
+                raise RuntimeError(
+                    f"Timeout waiting for LSP response after {timeout} seconds"
+                )
 
             # Use select to check if data is available with timeout
             ready, _, _ = select.select([proc.stdout], [], [], 1.0)
@@ -309,17 +326,21 @@ regulator-name.
                     if not char:
                         # Check if process died
                         if proc.poll() is not None:
-                            raise RuntimeError(f"clangd process died with return code {proc.returncode}")
+                            raise RuntimeError(
+                                f"clangd process died with return code {proc.returncode}"
+                            )
                         # Check timeout
                         if time.time() - start_time > timeout:
-                            raise RuntimeError(f"Timeout reading LSP headers after {timeout} seconds")
+                            raise RuntimeError(
+                                f"Timeout reading LSP headers after {timeout} seconds"
+                            )
                         time.sleep(0.01)  # Very short sleep
                         continue
                     headers += char
-                    
+
                     # Reduce header logging noise - only log if there's an issue
                     pass
-                    
+
                     # Check for different possible header endings
                     if "\r\n\r\n" in headers:
                         self.logger.debug("Found \\r\\n\\r\\n header separator")
@@ -329,22 +350,26 @@ regulator-name.
                         break
                     elif headers.startswith('{"jsonrpc"'):
                         # This means there are no headers, just JSON content
-                        self.logger.debug("No LSP headers found, appears to be direct JSON response")
+                        self.logger.debug(
+                            "No LSP headers found, appears to be direct JSON response"
+                        )
                         # Treat the entire thing as content, no headers
                         content = headers
                         # Continue reading until we have a complete JSON object
-                        brace_count = content.count('{') - content.count('}')
+                        brace_count = content.count("{") - content.count("}")
                         while brace_count > 0:
                             char = proc.stdout.read(1)
                             if not char:
                                 break
                             content += char
-                            if char == '{':
+                            if char == "{":
                                 brace_count += 1
-                            elif char == '}':
+                            elif char == "}":
                                 brace_count -= 1
-                        
-                        self.logger.debug(f"Read complete JSON without headers: {content[:200]}...")
+
+                        self.logger.debug(
+                            f"Read complete JSON without headers: {content[:200]}..."
+                        )
                         try:
                             msg = json.loads(content)
                             if expected_id is None or msg.get("id") == expected_id:
@@ -353,11 +378,13 @@ regulator-name.
                         except json.JSONDecodeError as e:
                             self.logger.error(f"Failed to parse JSON: {e}")
                             raise RuntimeError(f"Invalid JSON in LSP response: {e}")
-                        
+
                 except Exception as e:
                     # Check timeout on any exception
                     if time.time() - start_time > timeout:
-                        raise RuntimeError(f"Timeout reading LSP headers after {timeout} seconds: {e}")
+                        raise RuntimeError(
+                            f"Timeout reading LSP headers after {timeout} seconds: {e}"
+                        )
                     time.sleep(0.01)
                     continue
 
@@ -374,7 +401,9 @@ regulator-name.
             # Read content
             content = proc.stdout.read(content_length)
             if content is None or len(content) != content_length:
-                raise RuntimeError(f"Failed to read complete content from process stdout. Expected {content_length}, got {len(content) if content else 0}")
+                raise RuntimeError(
+                    f"Failed to read complete content from process stdout. Expected {content_length}, got {len(content) if content else 0}"
+                )
 
             try:
                 msg = json.loads(content)
@@ -431,7 +460,9 @@ regulator-name.
 
         # Check if clangd process is still alive before sending messages
         if proc.poll() is not None:
-            raise RuntimeError(f"clangd process died before initialization with return code {proc.returncode}")
+            raise RuntimeError(
+                f"clangd process died before initialization with return code {proc.returncode}"
+            )
 
         init_msg = self._create_lsp_message(
             "initialize",
@@ -454,18 +485,23 @@ regulator-name.
             self.INIT_MSG_ID,
         )
 
-        self.logger.debug(f"Sending LSP initialize message: {json.dumps(init_msg, indent=2)}")
-        
+        self.logger.debug(
+            f"Sending LSP initialize message: {json.dumps(init_msg, indent=2)}"
+        )
+
         try:
             self._send_lsp_message(proc, init_msg)
             self.logger.debug("Initialize message sent, waiting for response...")
-            
+
             # Test if clangd is responding at all by checking if there's any data available
             import select
+
             self.logger.debug("Checking if clangd has any response data available...")
             ready, _, _ = select.select([proc.stdout], [], [], 2.0)  # Wait 2 seconds
             if not ready:
-                self.logger.error("No response from clangd after 2 seconds - clangd may not be processing LSP messages")
+                self.logger.error(
+                    "No response from clangd after 2 seconds - clangd may not be processing LSP messages"
+                )
                 # Try to read stderr to see if there are any error messages
                 if proc.stderr:
                     try:
@@ -477,31 +513,37 @@ regulator-name.
                                 self.logger.error(f"clangd stderr: {stderr_output}")
                     except Exception as e:
                         self.logger.debug(f"Could not read stderr: {e}")
-                
+
                 raise RuntimeError("clangd is not responding to LSP initialize message")
-            
+
             self.logger.debug("clangd has response data available, reading...")
-            
+
             # Use shorter timeout for initialization to fail fast if there's an issue
-            init_response = self._read_lsp_response(proc, expected_id=self.INIT_MSG_ID, timeout=10)
-            self.logger.debug(f"Received initialize response: {json.dumps(init_response, indent=2)}")
+            init_response = self._read_lsp_response(
+                proc, expected_id=self.INIT_MSG_ID, timeout=10
+            )
+            self.logger.debug(
+                f"Received initialize response: {json.dumps(init_response, indent=2)}"
+            )
 
             initialized_msg = self._create_lsp_message("initialized", {})
             self.logger.debug("Sending initialized notification...")
             self._send_lsp_message(proc, initialized_msg)
-            
+
             self.logger.debug("LSP initialized successfully")
-            
+
         except Exception as e:
             # If initialization fails, try to get stderr for debugging
             if proc.stderr:
                 try:
                     stderr_output = proc.stderr.read()
                     if stderr_output:
-                        self.logger.error(f"clangd stderr during initialization: {stderr_output}")
+                        self.logger.error(
+                            f"clangd stderr during initialization: {stderr_output}"
+                        )
                 except Exception:
                     pass
-            
+
             self.logger.error(f"LSP initialization failed: {e}")
             raise RuntimeError(f"Failed to initialize LSP connection: {e}")
 
@@ -536,10 +578,14 @@ regulator-name.
             self.DEFINITION_MSG_ID,
         )
 
-        self.logger.debug(f"Sending LSP definition request: {json.dumps(def_msg, indent=2)}")
+        self.logger.debug(
+            f"Sending LSP definition request: {json.dumps(def_msg, indent=2)}"
+        )
         self._send_lsp_message(proc, def_msg)
         response = self._read_lsp_response(proc, expected_id=self.DEFINITION_MSG_ID)
-        self.logger.debug(f"Received LSP definition response: {json.dumps(response, indent=2)}")
+        self.logger.debug(
+            f"Received LSP definition response: {json.dumps(response, indent=2)}"
+        )
         return response
 
     def _find_actual_definition(
@@ -818,29 +864,31 @@ regulator-name.
     ) -> str:
         """Build the final context string from collected definitions."""
         # Debug what definitions were collected
-        self.logger.info(f"Building context from {len(collected_defs)} files with definitions:")
+        self.logger.info(
+            f"Building context from {len(collected_defs)} files with definitions:"
+        )
         for def_file, defs in collected_defs.items():
             rel_path = os.path.relpath(def_file, KERNEL_PATH)
             self.logger.info(f"  {rel_path}: {len(defs)} definitions")
             for start, end, identifier in defs[:3]:  # Show first 3 definitions per file
                 self.logger.info(f"    - {identifier} (lines {start}-{end})")
-        
+
         diff_line_numbers = {file: set(lines) for file, lines in file_adds.items()}
         context_parts = self._get_definition_context(collected_defs, diff_line_numbers)
-        
+
         self.logger.info(f"Generated {len(context_parts)} context parts")
         for i, part in enumerate(context_parts):
             # Log first line of each context part to see what files are included
-            first_line = part.split('\n')[0] if part else ""
-            self.logger.info(f"  Context part {i+1}: {first_line}")
-        
+            first_line = part.split("\n")[0] if part else ""
+            self.logger.info(f"  Context part {i + 1}: {first_line}")
+
         return "\n\n".join(context_parts)
 
     def _setup_lsp_client(self) -> subprocess.Popen[Any]:
         """Set up and initialize the LSP client using Docker exec."""
         kernel_dir = self.docker_manager.sandbox_path / "kernel"
         build_dir = self.docker_manager.build_dir
-        
+
         # First, test if the container is still running
         self.logger.debug("Checking if container is still running...")
         try:
@@ -853,8 +901,10 @@ regulator-name.
             if test_proc.returncode != 0:
                 raise RuntimeError("Docker container is not responding")
         except Exception as e:
-            raise RuntimeError(f"Docker container appears to have died during build process: {e}")
-        
+            raise RuntimeError(
+                f"Docker container appears to have died during build process: {e}"
+            )
+
         # Now test if clangd is available in the container
         self.logger.debug("Testing clangd availability in container...")
         try:
@@ -874,26 +924,32 @@ regulator-name.
                 if ls_proc.stdout:
                     stdout_output = ls_proc.stdout.read()
                     self.logger.debug(f"Available clang tools: {stdout_output}")
-                
-                raise RuntimeError("clangd not found in Docker container - container may have crashed during build")
+
+                raise RuntimeError(
+                    "clangd not found in Docker container - container may have crashed during build"
+                )
         except Exception as e:
             raise RuntimeError(f"Failed to test clangd availability: {e}")
-        
+
         # Comprehensive compile_commands.json debugging
         compile_commands_path = build_dir / "compile_commands.json"
         self.logger.info(f"=== COMPILE_COMMANDS.JSON DEBUGGING ===")
         self.logger.info(f"Expected path: {compile_commands_path}")
-        self.logger.info(f"clangd will be started with --compile-commands-dir={build_dir}")
-        
+        self.logger.info(
+            f"clangd will be started with --compile-commands-dir={build_dir}"
+        )
+
         # Check if file exists
         check_proc = self.docker_manager.run_command(
             ["test", "-f", str(compile_commands_path)],
             cwd=str(kernel_dir),
         )
         check_proc.wait()
-        
+
         if check_proc.returncode != 0:
-            self.logger.error(f"compile_commands.json NOT FOUND at {compile_commands_path}")
+            self.logger.error(
+                f"compile_commands.json NOT FOUND at {compile_commands_path}"
+            )
             # List what files are actually in the build directory
             ls_proc = self.docker_manager.run_command(
                 ["ls", "-la", str(build_dir)],
@@ -905,7 +961,7 @@ regulator-name.
                 self.logger.info(f"Build directory contents: {ls_output}")
         else:
             self.logger.info(f"compile_commands.json EXISTS at {compile_commands_path}")
-            
+
             # Get file stats
             stat_proc = self.docker_manager.run_command(
                 ["stat", str(compile_commands_path)],
@@ -915,7 +971,7 @@ regulator-name.
             if stat_proc.stdout:
                 stat_output = stat_proc.stdout.read()
                 self.logger.info(f"File stats: {stat_output}")
-            
+
             # Get file size and first few lines
             wc_proc = self.docker_manager.run_command(
                 ["wc", "-l", str(compile_commands_path)],
@@ -925,7 +981,7 @@ regulator-name.
             if wc_proc.stdout:
                 wc_output = wc_proc.stdout.read()
                 self.logger.info(f"File line count: {wc_output}")
-            
+
             # Show first few entries
             head_proc = self.docker_manager.run_command(
                 ["head", "-20", str(compile_commands_path)],
@@ -935,7 +991,7 @@ regulator-name.
             if head_proc.stdout:
                 head_output = head_proc.stdout.read()
                 self.logger.info(f"First 20 lines: {head_output}")
-            
+
             # Check if qcom_eud.c is in the compile commands
             grep_proc = self.docker_manager.run_command(
                 ["grep", "-n", "qcom_eud.c", str(compile_commands_path)],
@@ -949,13 +1005,15 @@ regulator-name.
                 else:
                     self.logger.warning("qcom_eud.c NOT found in compile_commands.json")
             else:
-                self.logger.warning("Could not search for qcom_eud.c in compile_commands.json")
-        
+                self.logger.warning(
+                    "Could not search for qcom_eud.c in compile_commands.json"
+                )
+
         self.logger.info(f"=== END COMPILE_COMMANDS.JSON DEBUGGING ===")
-        
+
         # Clean up any existing clangd processes
         self.docker_manager.cleanup_clangd()
-        
+
         # Configure clangd with persistent index in build directory
         index_dir = build_dir / ".clangd"
         clangd_args = [
@@ -968,16 +1026,17 @@ regulator-name.
             "--log=error",
             f"--j={os.cpu_count() or 4}",  # Parallel indexing
         ]
-        
-        self.logger.debug(f"Starting clangd LSP server with args: {' '.join(clangd_args)}")
-        
+
+        self.logger.debug(
+            f"Starting clangd LSP server with args: {' '.join(clangd_args)}"
+        )
+
         # Start clangd via docker exec with direct stdin/stdout
         proc = self.docker_manager.start_clangd_lsp(clangd_args, cwd=str(kernel_dir))
-        
+
         # Initialize LSP connection
         self._initialize_lsp(proc, KERNEL_PATH)
         return proc
-
 
     def _process_file_identifiers(
         self,
@@ -1003,14 +1062,14 @@ regulator-name.
 
         # Extract identifiers from added lines AND surrounding context
         idents_with_pos: List[Tuple[str, int, int]] = []
-        
+
         # Process added lines
         for lnum in lines:
             if lnum < len(file_lines):
                 idents_with_pos.extend(
                     self.extract_identifiers_with_positions(file_lines[lnum], lnum)
                 )
-        
+
         # Also process the entire file to find all function calls and identifiers
         # This ensures we catch functions like qcom_scm_io_writel that might be used
         # in existing code but not in the added lines
@@ -1034,27 +1093,38 @@ regulator-name.
         symbols = symbol_resp.get("result", [])
 
         # Check if we have the specific identifier we're looking for
-        target_identifiers = ['qcom_scm_io_writel', 'usb_role_switch_set_role', 'platform_device', 'devm_add_action_or_reset']
-        found_targets = [ident for ident, _, _ in idents_with_pos if ident in target_identifiers]
-        
+        target_identifiers = [
+            "qcom_scm_io_writel",
+            "usb_role_switch_set_role",
+            "platform_device",
+            "devm_add_action_or_reset",
+        ]
+        found_targets = [
+            ident for ident, _, _ in idents_with_pos if ident in target_identifiers
+        ]
+
         self.logger.info(f"Found {len(idents_with_pos)} identifiers in {filename}")
-        
+
         # Log the actual added lines to see what we're working with
         self.logger.info(f"Processing added lines: {sorted(lines)}")
         for lnum in sorted(lines)[:5]:  # Show first 5 added lines
             if lnum < len(file_lines):
                 self.logger.info(f"  Line {lnum + 1}: {repr(file_lines[lnum].strip())}")
-        
+
         # Log all identifiers found to see if qcom_scm_io_writel is there with a different name
         all_identifiers = [ident for ident, _, _ in idents_with_pos]
-        qcom_identifiers = [ident for ident in all_identifiers if 'qcom' in ident.lower()]
+        qcom_identifiers = [
+            ident for ident in all_identifiers if "qcom" in ident.lower()
+        ]
         if qcom_identifiers:
             self.logger.info(f"Found qcom-related identifiers: {qcom_identifiers}")
-        
+
         if found_targets:
             self.logger.info(f"Found target identifiers: {found_targets}")
         else:
-            self.logger.info(f"No target identifiers found. Looking for: {target_identifiers}")
+            self.logger.info(
+                f"No target identifiers found. Looking for: {target_identifiers}"
+            )
 
         # Wait for clangd to index the file
         time.sleep(5)
@@ -1062,14 +1132,14 @@ regulator-name.
         # Process only target identifiers first to see what's happening
         definitions_found = 0
         external_definitions_found = 0
-        
+
         for ident, lnum, col in idents_with_pos:
             if ident in printed_defs:
                 continue
 
             # Focus on target identifiers for detailed logging
             is_target = ident in target_identifiers
-            
+
             # Log detailed information for each identifier
             self.logger.info(f"=== PROCESSING IDENTIFIER ===")
             self.logger.info(f"Identifier: '{ident}'")
@@ -1078,43 +1148,57 @@ regulator-name.
                 line_content = file_lines[lnum].strip()
                 self.logger.info(f"Line content: {repr(line_content)}")
             self.logger.info(f"Is target identifier: {is_target}")
-            
+
             try:
                 resp = self._find_actual_definition(proc, uri, lnum, col, ident)
-                
+
                 # Log the complete LSP response for this identifier
                 self.logger.info(f"LSP Definition Response for '{ident}':")
                 self.logger.info(json.dumps(resp, indent=2))
-                
+
                 if not resp.get("result") or len(resp["result"]) == 0:
-                    self.logger.warning(f"No definition found for identifier '{ident}' at {uri}:{lnum + 1}:{col + 1}")
+                    self.logger.warning(
+                        f"No definition found for identifier '{ident}' at {uri}:{lnum + 1}:{col + 1}"
+                    )
                     if is_target:
-                        self.logger.error(f"TARGET IDENTIFIER '{ident}' HAS NO DEFINITION!")
+                        self.logger.error(
+                            f"TARGET IDENTIFIER '{ident}' HAS NO DEFINITION!"
+                        )
                     continue
 
                 loc = resp["result"][0]
                 def_file = loc["uri"].replace("file://", "")
-                
+
                 # Check if this is an external definition (different file)
                 is_external = def_file != abs_path
                 if is_external:
                     external_definitions_found += 1
-                
+
                 if is_target or is_external:
-                    self.logger.info(f"Found definition for '{ident}' in {def_file} (external: {is_external})")
-                
+                    self.logger.info(
+                        f"Found definition for '{ident}' in {def_file} (external: {is_external})"
+                    )
+
                 # Debug: Log ALL external definitions found
                 if is_external:
-                    self.logger.warning(f"EXTERNAL DEFINITION: '{ident}' found in {def_file} at lines {loc['range']['start']['line']}-{loc['range']['end']['line']}")
+                    self.logger.warning(
+                        f"EXTERNAL DEFINITION: '{ident}' found in {def_file} at lines {loc['range']['start']['line']}-{loc['range']['end']['line']}"
+                    )
 
                 if not os.path.exists(def_file):
                     if is_target or is_external:
-                        self.logger.warning(f"Definition file does not exist: {def_file}")
+                        self.logger.warning(
+                            f"Definition file does not exist: {def_file}"
+                        )
                         # Try to find the file in common kernel locations
                         possible_paths = [
                             def_file,
-                            def_file.replace("/home/patchwise/kernel/", str(KERNEL_PATH) + "/"),
-                            def_file.replace("/home/patchwise/", str(KERNEL_PATH.parent) + "/"),
+                            def_file.replace(
+                                "/home/patchwise/kernel/", str(KERNEL_PATH) + "/"
+                            ),
+                            def_file.replace(
+                                "/home/patchwise/", str(KERNEL_PATH.parent) + "/"
+                            ),
                         ]
                         for alt_path in possible_paths:
                             if os.path.exists(alt_path):
@@ -1122,16 +1206,22 @@ regulator-name.
                                 def_file = alt_path
                                 break
                         else:
-                            self.logger.error(f"Could not find definition file anywhere: {def_file}")
+                            self.logger.error(
+                                f"Could not find definition file anywhere: {def_file}"
+                            )
                             continue
 
                 header_contents = self._read_file_safely(def_file)
                 if not header_contents:
                     if is_target:
-                        self.logger.warning(f"Could not read definition file: {def_file}")
+                        self.logger.warning(
+                            f"Could not read definition file: {def_file}"
+                        )
                     continue
 
-                def_symbol = self._get_document_symbols(proc, loc["uri"], header_contents, ident)
+                def_symbol = self._get_document_symbols(
+                    proc, loc["uri"], header_contents, ident
+                )
 
                 if def_symbol:
                     start = def_symbol["location"]["range"]["start"]["line"]
@@ -1154,20 +1244,28 @@ regulator-name.
                         if prng:
                             parent_range = (prng["start"]["line"], prng["end"]["line"])
 
-                self._collect_definition(def_file, start, end, ident, collected_defs, parent_range)
+                self._collect_definition(
+                    def_file, start, end, ident, collected_defs, parent_range
+                )
                 printed_defs.add(ident)
                 printed_locations.add(def_loc)
                 definitions_found += 1
-                
+
                 if is_target or is_external:
-                    self.logger.info(f"Successfully collected definition for '{ident}' (total: {definitions_found})")
-                
+                    self.logger.info(
+                        f"Successfully collected definition for '{ident}' (total: {definitions_found})"
+                    )
+
             except Exception as e:
                 if is_target:
-                    self.logger.error(f"Error processing target identifier '{ident}': {e}")
+                    self.logger.error(
+                        f"Error processing target identifier '{ident}': {e}"
+                    )
                 continue
 
-        self.logger.info(f"Finished processing {filename}: found {definitions_found} definitions ({external_definitions_found} external) out of {len(idents_with_pos)} identifiers")
+        self.logger.info(
+            f"Finished processing {filename}: found {definitions_found} definitions ({external_definitions_found} external) out of {len(idents_with_pos)} identifiers"
+        )
 
     def wait_for_diagnostics(
         self, proc: subprocess.Popen[Any], file_uri: str, timeout: int = 10
@@ -1326,14 +1424,19 @@ regulator-name.
             printed_defs: Set[str] = set()
             printed_locations: Set[Tuple[str, int, int]] = set()
             collected_defs: Dict[str, List[Tuple[int, int, str]]] = {}
-            
+
             for filename, lines in file_adds.items():
                 self._process_file_identifiers(
-                    proc, filename, lines, collected_defs, printed_defs, printed_locations
+                    proc,
+                    filename,
+                    lines,
+                    collected_defs,
+                    printed_defs,
+                    printed_locations,
                 )
-            
+
             return collected_defs
-            
+
         finally:
             # Clean up clangd process
             try:
@@ -1346,10 +1449,9 @@ regulator-name.
                     proc.kill()
                 except Exception:
                     pass
-            
+
             # Clean up any remaining clangd processes in container
             self.docker_manager.cleanup_clangd()
-
 
     def process_diff_and_print_definitions(self, diff_lines: List[str]) -> None:
         """Process diff and collect definitions for context building."""
