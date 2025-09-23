@@ -18,8 +18,6 @@ class Checkpatch(StaticAnalysis):
     Perform static analysis on kernel commits using the checkpatch.pl script.
     """
 
-    DEPENDENCIES = []
-
     def setup(self) -> None:
         pass
 
@@ -46,8 +44,8 @@ class Checkpatch(StaticAnalysis):
                     ]
                 ),
                 "--git",
-                self.base_commit.hexsha + "..." + self.commit.hexsha,
+                self.commit.hexsha,
             ],
-            cwd=str(self.repo.working_tree_dir),
+            cwd=str(self.docker_manager.kernel_dir),
             desc="checkpatch",
         )

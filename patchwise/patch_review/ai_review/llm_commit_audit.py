@@ -17,7 +17,7 @@ class LLMCommitAudit(AiReview):
     def _load_prompt_template() -> str:
         """Load the prompt template from the markdown file."""
         template_path = os.path.join(
-            os.path.dirname(__file__), "prompts", "commit_audit_prompt.md"
+            os.path.dirname(__file__), "prompts", "commit_audit.md"
         )
         try:
             with open(template_path, "r") as f:

@@ -149,7 +149,7 @@ class AiReview(PatchReview):
 
         litellm.client_session = httpx.Client(verify=False)
 
-        self.diff = self.repo.git.diff(self.base_commit, self.commit).strip()
+        self.diff = self.repo.git.diff(self.commit.parents[0], self.commit).strip()
         if not self.diff:
             self.logger.error("Failed to retrieve diff.")
 

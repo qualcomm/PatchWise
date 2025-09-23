@@ -7,7 +7,7 @@ import argparse
 import importlib
 import logging
 import pkgutil
-from typing import Iterable
+from typing import Any, Iterable
 
 from git.objects.commit import Commit
 
@@ -44,14 +44,66 @@ class PatchReviewResults:
         return f"PatchReviewResults(commit={self.commit}, results={self.results})"
 
 
-def run_patch_review(
-    selected_reviews: list[type[PatchReview]], commit: Commit
+def prepare_containers_and_build_volume(
+    reviews: set[str], commit: Commit, repo_path: str
+) -> None:
+    """Build all required containers and initialize shared build volume upfront."""
+    from patchwise.docker import DockerManager
+    from patchwise.patch_review.patch_review import DOCKERFILES_PATH
+    from pathlib import Path
+
+    all_reviews = {cls.__name__: cls for cls in AVAILABLE_PATCH_REVIEWS}
+    selected_reviews = [all_reviews[name] for name in reviews if name in all_reviews]
+
+    logger.info("Building required Docker containers...")
+
+    # Always ensure base container is built first
+    base_dockerfile = DOCKERFILES_PATH / "base.Dockerfile"
+    base_image_tag = "patchwise-base:latest"
+    base_container_name = f"patchwise-base-latest-{commit.hexsha}"
+
+    base_manager = DockerManager(base_image_tag, base_container_name)
+    base_manager.build_image(base_dockerfile, Path(repo_path), commit.hexsha)
+
+    # Build all other required containers
+    built_images = {base_image_tag}
+    for review_class in selected_reviews:
+        dockerfile_path = DOCKERFILES_PATH / f"{review_class.__name__}.Dockerfile"
+        if not dockerfile_path.exists():
+            dockerfile_path = base_dockerfile
+
+        if dockerfile_path.name == "base.Dockerfile":
+            image_tag = base_image_tag
+        else:
+            image_tag = f"patchwise-{review_class.__name__.lower()}"
+
+        if image_tag not in built_images:
+            container_name = f"{image_tag.replace(':', '-')}-{commit.hexsha}"
+            manager = DockerManager(image_tag, container_name)
+            manager.build_image(dockerfile_path, Path(repo_path), commit.hexsha)
+            built_images.add(image_tag)
+
+    # Initialize shared build volume using base container
+    logger.info("Initializing shared build volume...")
+    DockerManager.initialize_shared_build_volume(Path(repo_path), commit.hexsha)
+
+    logger.info("Container preparation complete.")
+
+
+def review_commit(
+    reviews: set[str], commit: Commit, repo_path: str
 ) -> PatchReviewResults:
+    all_reviews = {cls.__name__: cls for cls in AVAILABLE_PATCH_REVIEWS}
+    selected_reviews = [all_reviews[name] for name in reviews if name in all_reviews]
+
+    # Prepare containers and build volume upfront
+    prepare_containers_and_build_volume(reviews, commit, repo_path)
+
     output = PatchReviewResults(commit)
 
     for selected_review in selected_reviews:
         logger.debug(f"Initializing review: {selected_review.__name__}")
-        cur_review = selected_review(commit)
+        cur_review = selected_review(repo_path, commit)
 
         logger.debug(f"Running review: {selected_review.__name__}")
         result = cur_review.run()
@@ -65,40 +117,13 @@ def run_patch_review(
     return output
 
 
-def review_patch(reviews: set[str], commit: Commit) -> PatchReviewResults:
-    all_reviews = {cls.__name__: cls for cls in AVAILABLE_PATCH_REVIEWS}
-    selected_reviews = [all_reviews[name] for name in reviews if name in all_reviews]
-
-    for review_cls in selected_reviews:
-        logger.debug(f"Verifying dependencies for: {review_cls.__name__}")
-        review_cls.verify_dependencies()
-
-    results = run_patch_review(selected_reviews, commit)
-
-    return results
-
-
-def install_missing_dependencies(reviews: set[str]) -> None:
-    """
-    Install missing dependencies for the specified reviews.
-    """
-    all_reviews = {cls.__name__: cls for cls in AVAILABLE_PATCH_REVIEWS}
-    selected_reviews = [all_reviews[name] for name in reviews if name in all_reviews]
-
-    for review_cls in selected_reviews:
-        logger.info(f"Installing dependencies for: {review_cls.__name__}")
-        review_cls.verify_dependencies(install=True)
-
-    logger.info("All specified reviews' dependencies are installed.")
-
-
 def _review_list_str(reviews: Iterable[type[PatchReview]]):
     """Helper to format review names for help messages"""
     return ", ".join(sorted({cls.__name__ for cls in reviews})) or "(none)"
 
 
 def add_review_arguments(
-    parser_or_group: argparse.ArgumentParser | argparse._ArgumentGroup,
+    parser_or_group: Any,
 ):
     # Case-insensitive review name handling
     available_review_names = {
@@ -155,7 +180,7 @@ def get_selected_reviews_from_args(args: argparse.Namespace) -> set[str]:
     Given parsed args, return the set of review class names to run.
     This logic is shared by all entry points.
     """
-    group_sets: list[set[str]] = []
+    group_sets: "list[set[str]]" = []
     if getattr(args, "all_reviews", False):
         group_sets.append(set(cls.__name__ for cls in AVAILABLE_PATCH_REVIEWS))
     if getattr(args, "llm_reviews", False):
@@ -172,7 +197,7 @@ def get_selected_reviews_from_args(args: argparse.Namespace) -> set[str]:
     )
 
     if group_sets:
-        return set().union(*group_sets)
+        return {str(item) for group in group_sets for item in group}
     else:
         # Default: all reviews
         return explicit_reviews

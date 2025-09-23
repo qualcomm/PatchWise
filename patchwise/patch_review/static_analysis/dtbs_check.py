@@ -2,9 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import os
-from pathlib import Path
 
-from patchwise import SANDBOX_PATH
 from patchwise.patch_review.decorators import (
     register_long_review,
     register_static_analysis_review,
@@ -24,10 +22,7 @@ class DtbsCheck(StaticAnalysis):
     DEPENDENCIES = []
 
     def __run_dtbs_check(self, sha: str) -> str:
-        kernel_tree = str(self.repo.working_tree_dir)
-        log_dir = Path(SANDBOX_PATH) / "dtbs-logs"
-        log_dir.mkdir(parents=True, exist_ok=True)
-        logfile = log_dir / f"build-dtbs-{sha}.log"
+        kernel_dir = self.docker_manager.sandbox_path / "kernel"
         cfg_opts = [
             "CONFIG_ARM64_ERRATUM_843419=n",
             "CONFIG_ARM64_USE_LSE_ATOMICS=n",
@@ -41,25 +36,21 @@ class DtbsCheck(StaticAnalysis):
         dtbs_check_output = super().run_cmd_with_timer(
             cmd=[
                 "make",
+                "-C",
+                str(kernel_dir),
                 f"-j{os.cpu_count()}",
                 "-s",
-                f"O={self.build_dir}",
+                f"O={self.docker_manager.build_dir}",
                 f"ARCH={arch}",
                 "LLVM=1",
                 "dtbs_check",
             ]
             + cfg_opts,
-            cwd=kernel_tree,
+            cwd=str(self.docker_manager.build_dir),
             desc=f"dtbs_check",
         )
         # logfile.write_text(dtbs_check_output) # TODO log to file and check for cache
         return dtbs_check_output
-
-    def __get_unique_lines(self, baseline_log: str, new_log: str) -> str:
-        last_lines = set(baseline_log.splitlines())
-        current_lines = set(new_log.splitlines())
-        unique_lines = current_lines - last_lines
-        return "\n".join(unique_lines)
 
     def setup(self) -> None:
         pass
@@ -74,18 +65,10 @@ class DtbsCheck(StaticAnalysis):
             return ""
         self.logger.debug(f"Modified DT files: {dt_files}")
 
-        self.logger.debug(
-            f"Running dtbs_check for base commit: {self.base_commit.message}"
-        )
-        self.apply_patches([self.base_commit])
-        baseline_output = self.__run_dtbs_check(self.base_commit.hexsha)
+        self.logger.debug(f"Running dtbs_check for commit: {self.commit.message}")
+        output = self.__run_dtbs_check(self.commit.hexsha)
 
-        self.logger.debug(f"Running dtbs_check for patch commit: {self.commit.message}")
-        self.apply_patches([self.commit])
-        patch_output = self.__run_dtbs_check(self.commit.hexsha)
-
-        diff_output = self.__get_unique_lines(baseline_output, patch_output)
-        if not diff_output:
+        if not output:
             self.logger.info("No dtbs_check errors found")
 
-        return diff_output
+        return output
