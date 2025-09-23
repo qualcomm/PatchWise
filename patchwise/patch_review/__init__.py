@@ -48,9 +48,10 @@ def prepare_containers_and_build_volume(
     reviews: set[str], commit: Commit, repo_path: str
 ) -> None:
     """Build all required containers and initialize shared build volume upfront."""
+    from pathlib import Path
+
     from patchwise.docker import DockerManager
     from patchwise.patch_review.patch_review import DOCKERFILES_PATH
-    from pathlib import Path
 
     all_reviews = {cls.__name__: cls for cls in AVAILABLE_PATCH_REVIEWS}
     selected_reviews = [all_reviews[name] for name in reviews if name in all_reviews]

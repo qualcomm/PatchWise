@@ -8,6 +8,7 @@ from patchwise.patch_review.decorators import (
     register_long_review,
     register_static_analysis_review,
 )
+
 from .static_analysis import StaticAnalysis
 
 
@@ -91,7 +92,8 @@ class Sparse(StaticAnalysis):
             )
 
             logger.debug(
-                f"Sparse command completed. Output length: {len(sparse_warnings)} characters"
+                "Sparse command completed. Output length: %d characters",
+                len(sparse_warnings),
             )
             # logger.debug("=== RAW SPARSE OUTPUT START ===")
             # logger.debug(sparse_warnings)

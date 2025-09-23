@@ -103,7 +103,8 @@ class PatchReview(abc.ABC):
         Parameters:
             cmd (str): The command to run using subprocess.Popen().
             desc (str): The title for the timer
-            cwd (str, optional): The working directory for the command. Defaults to None.
+            cwd (str, optional): The working directory for the command.
+                Defaults to None.
             **kwargs: Rest of the args for subprocess.Popen.
 
         Returns:

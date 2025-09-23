@@ -1,4 +1,4 @@
-## List of contributors
+# List of contributors
 
 David Gantman <david.gantman@oss.qualcomm.com>
 

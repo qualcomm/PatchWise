@@ -154,7 +154,10 @@ class DockerManager:
             )
 
     def start_container(self, build_path: Path) -> None:
-        """Legacy method for backward compatibility. Use start_container_with_shared_volume instead."""
+        """
+        Legacy method for backward compatibility.
+        Use start_container_with_shared_volume instead.
+        """
         try:
             subprocess.run(
                 ["docker", "container", "inspect", self.container_name],
@@ -177,7 +180,10 @@ class DockerManager:
                 "/dev/null",
             ]
             self.logger.info(
-                f"Starting container {self.container_name} with args {' '.join(args)}..."
+                (
+                    f"Starting container {self.container_name} with args "
+                    f"{' '.join(args)}..."
+                )
             )
             subprocess.run(
                 args,
@@ -233,7 +239,10 @@ class DockerManager:
         return process
 
     def ensure_clangd_index_dir(self) -> None:
-        """Ensure clangd index directory exists in build volume with proper permissions."""
+        """
+        Ensure clangd index directory exists in build volume with proper
+        permissions.
+        """
         index_dir = self.build_dir / ".clangd"
 
         self.logger.debug(f"Ensuring clangd index directory: {index_dir}")

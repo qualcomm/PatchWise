@@ -38,6 +38,7 @@ where = ["."]
 include = ["patchwise*"]
 
 [tool.setuptools.package-data]
+patchwise = ["patches/**", "default_config.yaml", "dockerfiles/*"]
 
 [tool.ruff.lint]
 select = [
@@ -54,4 +55,3 @@ exclude = [
 
 [tool.ruff.lint.isort]
 known-first-party = ["patchwise"]
-patchwise = ["patches/**", "default_config.yaml", "dockerfiles/*"]

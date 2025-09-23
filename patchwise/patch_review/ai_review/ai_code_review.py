@@ -96,9 +96,7 @@ class AiCodeReview(AiReview):
     @staticmethod
     def _load_system_prompt_template() -> str:
         """Load the system prompt template from the markdown file."""
-        template_path = os.path.join(
-            os.path.dirname(__file__), "prompts", "system.md"
-        )
+        template_path = os.path.join(os.path.dirname(__file__), "prompts", "system.md")
         try:
             with open(template_path, "r") as f:
                 return f.read()
@@ -208,7 +206,9 @@ class AiCodeReview(AiReview):
         return message
 
     def _make_message_string(self, msg: Dict[str, Any]) -> str:
-        """Convert LSP message to string with proper headers for text mode subprocess."""
+        """
+        Convert LSP message to string with proper headers for text mode subprocess.
+        """
         msg_json = json.dumps(msg)
         return f"Content-Length: {len(msg_json.encode('utf-8'))}\r\n\r\n{msg_json}"
 
@@ -240,7 +240,7 @@ class AiCodeReview(AiReview):
                     if stderr_output:
                         self.logger.error(f"clangd stderr: {stderr_output}")
                 raise RuntimeError(
-                    f"clangd process died with return code {proc.returncode}"
+                    (f"clangd process died with return code {proc.returncode}")
                 )
 
             # Check timeout
@@ -265,7 +265,8 @@ class AiCodeReview(AiReview):
                         # Check if process died
                         if proc.poll() is not None:
                             raise RuntimeError(
-                                f"clangd process died with return code {proc.returncode}"
+                                f"clangd process died with "
+                                f"return code {proc.returncode}"
                             )
                         # Check timeout
                         if time.time() - start_time > timeout:
@@ -340,7 +341,11 @@ class AiCodeReview(AiReview):
             content = proc.stdout.read(content_length)
             if content is None or len(content) != content_length:
                 raise RuntimeError(
-                    f"Failed to read complete content from process stdout. Expected {content_length}, got {len(content) if content else 0}"
+                    (
+                        f"Failed to read complete content from process stdout. "
+                        f"Expected {content_length}, "
+                        f"got {len(content) if content else 0}"
+                    )
                 )
 
             try:
@@ -403,7 +408,10 @@ class AiCodeReview(AiReview):
         # Check if clangd process is still alive before sending messages
         if proc.poll() is not None:
             raise RuntimeError(
-                f"clangd process died before initialization with return code {proc.returncode}"
+                (
+                    f"clangd process died before initialization with return code "
+                    f"{proc.returncode}"
+                )
             )
 
         init_msg = self._create_lsp_message(
@@ -435,14 +443,18 @@ class AiCodeReview(AiReview):
             self._send_lsp_message(proc, init_msg)
             self.logger.debug("Initialize message sent, waiting for response...")
 
-            # Test if clangd is responding at all by checking if there's any data available
+            # Test if clangd is responding at all by checking if there's any data
+            # available
             import select
 
             self.logger.debug("Checking if clangd has any response data available...")
             ready, _, _ = select.select([proc.stdout], [], [], 2.0)  # Wait 2 seconds
             if not ready:
                 self.logger.error(
-                    "No response from clangd after 2 seconds - clangd may not be processing LSP messages"
+                    (
+                        "No response from clangd after 2 seconds - "
+                        "clangd may not be processing LSP messages"
+                    )
                 )
                 # Try to read stderr to see if there are any error messages
                 if proc.stderr:
@@ -865,7 +877,8 @@ class AiCodeReview(AiReview):
                     self.logger.debug(f"Available clang tools: {stdout_output}")
 
                 raise RuntimeError(
-                    "clangd not found in Docker container - container may have crashed during build"
+                    "clangd not found in Docker container - container may have "
+                    "crashed during build"
                 )
         except Exception as e:
             raise RuntimeError(f"Failed to test clangd availability: {e}")
@@ -1050,7 +1063,8 @@ class AiCodeReview(AiReview):
             if lnum < len(file_lines):
                 self.logger.info(f"  Line {lnum + 1}: {repr(file_lines[lnum].strip())}")
 
-        # Log all identifiers found to see if qcom_scm_io_writel is there with a different name
+        # Log all identifiers found to see if qcom_scm_io_writel is there
+        # with a different name
         all_identifiers = [ident for ident, _, _ in idents_with_pos]
         qcom_identifiers = [
             ident for ident in all_identifiers if "qcom" in ident.lower()
@@ -1097,7 +1111,10 @@ class AiCodeReview(AiReview):
 
                 if not resp.get("result") or len(resp["result"]) == 0:
                     self.logger.warning(
-                        f"No definition found for identifier '{ident}' at {uri}:{lnum + 1}:{col + 1}"
+                        (
+                            f"No definition found for identifier '{ident}' at "
+                            f"{uri}:{lnum + 1}:{col + 1}"
+                        )
                     )
                     if is_target:
                         self.logger.error(
@@ -1115,13 +1132,20 @@ class AiCodeReview(AiReview):
 
                 if is_target or is_external:
                     self.logger.info(
-                        f"Found definition for '{ident}' in {def_file} (external: {is_external})"
+                        (
+                            f"Found definition for '{ident}' in {def_file} "
+                            f"(external: {is_external})"
+                        )
                     )
 
                 # Debug: Log ALL external definitions found
                 if is_external:
                     self.logger.warning(
-                        f"EXTERNAL DEFINITION: '{ident}' found in {def_file} at lines {loc['range']['start']['line']}-{loc['range']['end']['line']}"
+                        (
+                            f"EXTERNAL DEFINITION: '{ident}' "
+                            f"found in {def_file} at lines "
+                            f"{loc['range']['start']['line']}-{loc['range']['end']['line']}"
+                        )
                     )
 
                 if not os.path.exists(def_file):
@@ -1192,7 +1216,10 @@ class AiCodeReview(AiReview):
 
                 if is_target or is_external:
                     self.logger.info(
-                        f"Successfully collected definition for '{ident}' (total: {definitions_found})"
+                        (
+                            f"Successfully collected definition for '{ident}' "
+                            f"(total: {definitions_found})"
+                        )
                     )
 
             except Exception as e:
@@ -1203,7 +1230,12 @@ class AiCodeReview(AiReview):
                 continue
 
         self.logger.info(
-            f"Finished processing {filename}: found {definitions_found} definitions ({external_definitions_found} external) out of {len(idents_with_pos)} identifiers"
+            (
+                f"Finished processing {filename}: "
+                f"found {definitions_found} definitions "
+                f"({external_definitions_found} external) out of "
+                f"{len(idents_with_pos)} identifiers"
+            )
         )
 
     def wait_for_diagnostics(
