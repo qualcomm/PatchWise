@@ -318,11 +318,12 @@ class DockerManager:
 
         self.logger.debug(f"Docker command: {' '.join(docker_command)}")
 
+        # Redirect stderr to /dev/null to prevent pipe blocking
         process = subprocess.Popen(
             docker_command,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
             text=True,
             bufsize=0,  # Unbuffered for real-time LSP communication
             universal_newlines=True,
@@ -333,15 +334,10 @@ class DockerManager:
         # Give clangd a moment to start and check if it's still running
         time.sleep(1)
         if process.poll() is not None:
-            # Process died immediately, read stderr for debugging
-            stderr_output = (
-                process.stderr.read() if process.stderr else "No stderr available"
-            )
             self.logger.error(
                 f"clangd process died immediately with return code {process.returncode}"
             )
-            self.logger.error(f"clangd stderr: {stderr_output}")
-            raise RuntimeError(f"clangd failed to start: {stderr_output}")
+            raise RuntimeError(f"clangd failed to start (stderr redirected to /dev/null)")
 
         return process
 
