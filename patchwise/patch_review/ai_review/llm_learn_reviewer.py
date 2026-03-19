@@ -10,11 +10,11 @@ from pathlib import Path
 from git.objects.commit import Commit
 
 from patchwise import SANDBOX_PATH
-from patchwise.patch_review.decorators import register_llm_review
+from patchwise.patch_review.decorators import register_patch_review
 from .ai_review import AiReview
 from .fetch_reviewer_comment import LoreCrawler
 
-@register_llm_review
+@register_patch_review
 class LLMLearnReviewer(AiReview):
 
     PROMPT_TEMPLATE = """
