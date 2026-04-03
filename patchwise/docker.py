@@ -2,20 +2,18 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import logging
-import stat
 import subprocess
 import time
 from pathlib import Path
 from typing import Any, Optional
 
-from patchwise import PACKAGE_NAME, PACKAGE_PATH, SANDBOX_PATH
+from patchwise import PACKAGE_NAME, PACKAGE_PATH
 
 
 class DockerManager:
     # Class-level tracking for initialization
     build_volume_initialized = False
     _build_volume_name = "patchwise-shared-build"
-    _overlay_root = SANDBOX_PATH / "overlays"
 
     def __init__(
         self,
@@ -34,51 +32,89 @@ class DockerManager:
         self.sandbox_path = Path("/home") / PACKAGE_NAME
         self.build_dir = self.sandbox_path / "build"
         self.kernel_dir = self.sandbox_path / "kernel"
-        self._overlay_ref_uid: Optional[int] = None
-        self._overlay_ref_gid: Optional[int] = None
-        self._overlay_ref_mode: Optional[str] = None
-
-    @property
-    def _overlay_dir(self) -> Path:
-        return self._overlay_root / self.container_name
 
     @property
     def _kernel_volume_name(self) -> str:
         """Docker volume name for this container's kernel overlay."""
         return f"patchwise-kernel-{self.container_name}"
 
+    @property
+    def _kernel_backing_volume_name(self) -> str:
+        """Docker volume name for this container's overlay backing storage (upper/work)."""
+        return f"patchwise-kernel-backing-{self.container_name}"
+
     def _setup_kernel_overlay(self) -> str:
         """Create a Docker volume with overlay driver options.
 
-        Uses Docker's local volume driver with overlay mount options. The local
-        driver passes its options directly to the ``mount`` syscall, so the
-        overlay is created inside Docker's volume infrastructure.
+        Uses a Docker backing volume to hold the overlay upper/work
+        directories, avoiding any dependency on the host SANDBOX_PATH (which
+        may be a small tmpfs).  A helper container initialises the scratch
+        directories inside the backing volume; Docker then creates a second
+        local volume of type overlay that uses those paths as upperdir/workdir.
 
-        Returns the Docker volume name.
+        The working/merged directories for the overlay stay on the host inside
+        Docker's own volume storage, which is typically on a large persistent
+        filesystem rather than a tmpfs.
+
+        Returns the Docker overlay volume name.
         """
-        overlay = self._overlay_dir
-        upper = overlay / "upper"
-        work = overlay / "work"
-
-        for d in (upper, work):
-            d.mkdir(parents=True, exist_ok=True)
-
-        st = self._overlay_root.stat()
-        self._overlay_ref_uid = st.st_uid
-        self._overlay_ref_gid = st.st_gid
-        self._overlay_ref_mode = oct(stat.S_IMODE(st.st_mode))[-3:]
-        self.logger.debug(
-            f"Overlay reference metadata: uid={self._overlay_ref_uid}, "
-            f"gid={self._overlay_ref_gid}, mode={self._overlay_ref_mode}"
-        )
-
+        backing_volume = self._kernel_backing_volume_name
         volume_name = self._kernel_volume_name
 
-        # Remove a stale volume with the same name (if any) so we always
-        # get a fresh overlay that points at the current directories.
-        subprocess.run(
-            ["docker", "volume", "rm", "-f", volume_name],
+        # Remove stale volumes with the same names (if any) so we always get
+        # a fresh overlay.
+        for vol in (volume_name, backing_volume):
+            subprocess.run(["docker", "volume", "rm", "-f", vol])
+
+        # Create the backing volume that will hold upper/ and work/.
+        self.logger.info(
+            f"Creating kernel overlay backing volume '{backing_volume}' "
+            f"for {self.container_name}..."
         )
+        subprocess.run(
+            ["docker", "volume", "create", backing_volume],
+            check=True,
+            capture_output=True,
+        )
+
+        # Initialise the scratch directories inside the backing volume using a
+        # short-lived helper container.
+        subprocess.run(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "--user",
+                "root",
+                "-v",
+                f"{backing_volume}:/backing",
+                "patchwise-base:latest",
+                "mkdir",
+                "/backing/upper",
+                "/backing/work",
+            ],
+            check=True,
+            capture_output=True,
+        )
+
+        # Resolve the backing volume's host mountpoint so we can pass absolute
+        # paths to the overlay mount options.
+        result = subprocess.run(
+            [
+                "docker",
+                "volume",
+                "inspect",
+                backing_volume,
+                "-f",
+                "{{.Mountpoint}}",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        backing_mountpoint = result.stdout.strip()
+        upper = f"{backing_mountpoint}/upper"
+        work = f"{backing_mountpoint}/work"
 
         self.logger.info(
             f"Creating kernel overlay volume '{volume_name}' for {self.container_name}..."
@@ -104,72 +140,10 @@ class DockerManager:
         self.logger.info(f"Kernel overlay volume '{volume_name}' created.")
         return volume_name
 
-    def _restore_kernel_overlay_permissions(self) -> None:
-        """Restore original ownership and permissions on the kernel tree.
-
-        Uses the uid/gid/mode captured from the overlays/ directory when
-        the overlay was set up.  With metacopy=on, chown/chmod only copy
-        metadata to the upper layer, so this is fast even on the full tree.
-        """
-        if (
-            self._overlay_ref_uid is None
-            or self._overlay_ref_gid is None
-            or self._overlay_ref_mode is None
-        ):
-            self.logger.warning(
-                "Overlay metadata not initialized, skipping permission restoration."
-            )
-            return
-
-        subprocess.run(
-            [
-                "docker",
-                "exec",
-                "--user",
-                "root",
-                self.container_name,
-                "chown",
-                "-R",
-                f"{self._overlay_ref_uid}:{self._overlay_ref_gid}",
-                str(self.kernel_dir),
-            ],
-            capture_output=True,
-            check=True,
-        )
-        subprocess.run(
-            [
-                "docker",
-                "exec",
-                "--user",
-                "root",
-                self.container_name,
-                "chmod",
-                "-R",
-                self._overlay_ref_mode,
-                str(self.kernel_dir),
-            ],
-            capture_output=True,
-            check=True,
-        )
-        self.logger.debug(
-            f"Restored kernel overlay permissions: uid={self._overlay_ref_uid}, "
-            f"gid={self._overlay_ref_gid}, mode={self._overlay_ref_mode}"
-        )
-
     def _cleanup_kernel_overlay(self) -> None:
-        """Remove the Docker overlay volume and host-side overlay directories for this container."""
-        volume_name = self._kernel_volume_name
-
-        subprocess.run(
-            ["docker", "volume", "rm", "-f", volume_name],
-        )
-
-        overlay = self._overlay_dir
-        subprocess.run(
-            ["rm", "-rf", str(overlay)],
-            check=True,
-            capture_output=True,
-        )
+        """Remove the Docker overlay volume and backing volume for this container."""
+        for vol in (self._kernel_volume_name, self._kernel_backing_volume_name):
+            subprocess.run(["docker", "volume", "rm", "-f", vol])
         self.logger.info(f"Kernel overlay for {self.container_name} cleaned up.")
 
     def _stream_build_output(self, process: subprocess.Popen[str]) -> None:
@@ -461,31 +435,22 @@ class DockerManager:
     def stop_container(self) -> None:
         self.logger.info(f"Stopping container {self.container_name}...")
         try:
-            try:
-                self._restore_kernel_overlay_permissions()
-            except subprocess.CalledProcessError as e:
-                self.logger.error(
-                    f"Failed to restore kernel overlay permissions: {e}\nstderr: {e.stderr}"
-                )
-                raise
-
-            try:
-                subprocess.run(
-                    ["docker", "stop", self.container_name],
-                    check=True,
-                    capture_output=True,
-                )
-                subprocess.run(
-                    ["docker", "rm", self.container_name],
-                    check=True,
-                    capture_output=True,
-                )
-            except subprocess.CalledProcessError as e:
-                self.logger.error(
-                    f"Failed to stop container {self.container_name}: {e}\nstderr: {e.stderr}"
-                )
-                raise
+            subprocess.run(
+                ["docker", "stop", self.container_name],
+                check=True,
+                capture_output=True,
+            )
+            subprocess.run(
+                ["docker", "rm", self.container_name],
+                check=True,
+                capture_output=True,
+            )
             self.logger.info(f"Container {self.container_name} stopped and removed.")
+        except subprocess.CalledProcessError as e:
+            self.logger.error(
+                f"Failed to stop container {self.container_name}: {e}\nstderr: {e.stderr}"
+            )
+            raise
         finally:
             self._cleanup_kernel_overlay()
 
