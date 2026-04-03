@@ -98,21 +98,34 @@ def prepare_containers_and_build_volume(
 
 
 def _cleanup_all_containers() -> None:
-    """Stop all tracked containers and clean up their overlays."""
+    """Stop all tracked containers and clean up their overlays.
+
+    Ignores SIGINT/SIGTERM so that cleanup subprocess calls are not
+    interrupted by additional Ctrl-C presses.
+    """
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+
     for container_name, manager in list(CONTAINERS_BUILT.items()):
         logger.debug(f"Cleaning up container: {container_name}")
         try:
             manager.stop_container()
-            del CONTAINERS_BUILT[container_name]
-        except Exception as e:
+        except Exception:
             logger.warning(f"Failed to clean up docker container {container_name}.")
+        CONTAINERS_BUILT.pop(container_name, None)
 
 
 def register_containers_cleanup() -> None:
     atexit.register(_cleanup_all_containers)
 
     def signal_handler(*args):
-        """Give a chance for atexit handler to run with a normal program termination"""
+        """Trigger a normal exit so the atexit handler runs.
+
+        Immediately switches to SIG_IGN so that a second Ctrl-C while
+        sys.exit() unwinds the stack does not re-enter the handler.
+        """
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
         import sys
 
         sys.exit(0)
