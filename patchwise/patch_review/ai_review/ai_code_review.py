@@ -3,16 +3,27 @@
 
 import json
 import os
+from pathlib import Path
 import re
 import subprocess
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Set, Tuple
+from urllib.parse import urlparse, unquote
 
 from patchwise import KERNEL_PATH, SANDBOX_PATH
 from patchwise.patch_review.decorators import register_llm_review, register_long_review
 
 from .ai_review import AiReview
+
+
+def path_to_uri(path: str) -> str:
+    """Convert a file path to a file:// URI."""
+    return Path(path).absolute().resolve().as_uri()
+
+def uri_to_path(uri: str) -> str:
+    """Convert a file:// URI to file path."""
+    return unquote(urlparse(uri).path)
 
 
 @dataclass
@@ -467,7 +478,7 @@ regulator-name.
         init_msg = self._create_lsp_message(
             "initialize",
             {
-                "rootUri": f"file://{project_root}",
+                "rootUri": path_to_uri(project_root),
                 "capabilities": {
                     "window": {
                         "showDocument": {"support": True},
@@ -1049,7 +1060,7 @@ regulator-name.
     ) -> None:
         """Process identifiers in a specific file."""
         abs_path = os.path.join(KERNEL_PATH, filename)
-        uri = f"file://{abs_path}"
+        uri = path_to_uri(abs_path)
 
         if not os.path.exists(abs_path):
             return
@@ -1167,7 +1178,7 @@ regulator-name.
                     continue
 
                 loc = resp["result"][0]
-                def_file = loc["uri"].replace("file://", "")
+                def_file = uri_to_path(loc["uri"])
 
                 # Check if this is an external definition (different file)
                 is_external = def_file != abs_path
@@ -1399,7 +1410,7 @@ regulator-name.
                 file_lines = self._get_file_lines(abs_path)
                 if file_lines:
                     self._open_file_in_lsp(
-                        proc, f"file://{abs_path}", "".join(file_lines)
+                        proc, path_to_uri(abs_path), "".join(file_lines)
                     )
 
         self.wait_for_clangd_indexing(proc)
