@@ -105,6 +105,8 @@
    patchwise --help
    ```
 
+### Note: The default sandbox location is at /tmp/patchwise/sandbox. To override, set PATCHWISE_SANDBOX_PATH=<path/to/sandbox>
+
 ### Example Workflow
 
 ```bash

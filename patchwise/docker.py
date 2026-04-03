@@ -2,32 +2,175 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import logging
-import os
+import stat
 import subprocess
 import time
 from pathlib import Path
 from typing import Any, Optional
 
-from patchwise import PACKAGE_NAME, PACKAGE_PATH
+from patchwise import PACKAGE_NAME, PACKAGE_PATH, SANDBOX_PATH
 
 
 class DockerManager:
     # Class-level tracking for initialization
-    _build_volume_initialized = False
+    build_volume_initialized = False
     _build_volume_name = "patchwise-shared-build"
+    _overlay_root = SANDBOX_PATH / "overlays"
 
     def __init__(
-        self, image_tag: str, container_name: str, commit_sha: Optional[str] = None
+        self,
+        image_tag: str,
+        container_name: str,
+        repo_path: Path,
+        commit_sha: str,
     ):
         self.logger = logging.getLogger(
             f"{PACKAGE_NAME}.{self.__class__.__name__.lower()}"
         )
         self.image_tag = image_tag
         self.container_name = container_name
+        self.repo_path = repo_path
         self.commit_sha = commit_sha
         self.sandbox_path = Path("/home") / PACKAGE_NAME
         self.build_dir = self.sandbox_path / "build"
         self.kernel_dir = self.sandbox_path / "kernel"
+        self._overlay_ref_uid: Optional[int] = None
+        self._overlay_ref_gid: Optional[int] = None
+        self._overlay_ref_mode: Optional[str] = None
+
+    @property
+    def _overlay_dir(self) -> Path:
+        return self._overlay_root / self.container_name
+
+    @property
+    def _kernel_volume_name(self) -> str:
+        """Docker volume name for this container's kernel overlay."""
+        return f"patchwise-kernel-{self.container_name}"
+
+    def _setup_kernel_overlay(self) -> str:
+        """Create a Docker volume with overlay driver options.
+
+        Uses Docker's local volume driver with overlay mount options. The local
+        driver passes its options directly to the ``mount`` syscall, so the
+        overlay is created inside Docker's volume infrastructure.
+
+        Returns the Docker volume name.
+        """
+        overlay = self._overlay_dir
+        upper = overlay / "upper"
+        work = overlay / "work"
+
+        for d in (upper, work):
+            d.mkdir(parents=True, exist_ok=True)
+
+        st = self._overlay_root.stat()
+        self._overlay_ref_uid = st.st_uid
+        self._overlay_ref_gid = st.st_gid
+        self._overlay_ref_mode = oct(stat.S_IMODE(st.st_mode))[-3:]
+        self.logger.debug(
+            f"Overlay reference metadata: uid={self._overlay_ref_uid}, "
+            f"gid={self._overlay_ref_gid}, mode={self._overlay_ref_mode}"
+        )
+
+        volume_name = self._kernel_volume_name
+
+        # Remove a stale volume with the same name (if any) so we always
+        # get a fresh overlay that points at the current directories.
+        subprocess.run(
+            ["docker", "volume", "rm", "-f", volume_name],
+        )
+
+        self.logger.info(
+            f"Creating kernel overlay volume '{volume_name}' for {self.container_name}..."
+        )
+        subprocess.run(
+            [
+                "docker",
+                "volume",
+                "create",
+                "--driver",
+                "local",
+                "--opt",
+                "type=overlay",
+                "--opt",
+                f"o=lowerdir={self.repo_path},upperdir={upper},workdir={work},metacopy=on",
+                "--opt",
+                "device=overlay",
+                volume_name,
+            ],
+            check=True,
+            capture_output=True,
+        )
+        self.logger.info(f"Kernel overlay volume '{volume_name}' created.")
+        return volume_name
+
+    def _restore_kernel_overlay_permissions(self) -> None:
+        """Restore original ownership and permissions on the kernel tree.
+
+        Uses the uid/gid/mode captured from the overlays/ directory when
+        the overlay was set up.  With metacopy=on, chown/chmod only copy
+        metadata to the upper layer, so this is fast even on the full tree.
+        """
+        if (
+            self._overlay_ref_uid is None
+            or self._overlay_ref_gid is None
+            or self._overlay_ref_mode is None
+        ):
+            self.logger.warning(
+                "Overlay metadata not initialized, skipping permission restoration."
+            )
+            return
+
+        subprocess.run(
+            [
+                "docker",
+                "exec",
+                "--user",
+                "root",
+                self.container_name,
+                "chown",
+                "-R",
+                f"{self._overlay_ref_uid}:{self._overlay_ref_gid}",
+                str(self.kernel_dir),
+            ],
+            capture_output=True,
+            check=True,
+        )
+        subprocess.run(
+            [
+                "docker",
+                "exec",
+                "--user",
+                "root",
+                self.container_name,
+                "chmod",
+                "-R",
+                self._overlay_ref_mode,
+                str(self.kernel_dir),
+            ],
+            capture_output=True,
+            check=True,
+        )
+        self.logger.debug(
+            f"Restored kernel overlay permissions: uid={self._overlay_ref_uid}, "
+            f"gid={self._overlay_ref_gid}, mode={self._overlay_ref_mode}"
+        )
+
+    def _cleanup_kernel_overlay(self) -> None:
+        """Remove the Docker overlay volume and host-side overlay directories for this container."""
+        volume_name = self._kernel_volume_name
+
+        subprocess.run(
+            ["docker", "volume", "rm", "-f", volume_name],
+        )
+
+        overlay = self._overlay_dir
+        subprocess.run(
+            ["rm", "-rf", str(overlay)],
+            check=True,
+            capture_output=True,
+        )
+        self.logger.info(f"Kernel overlay for {self.container_name} cleaned up.")
 
     def _stream_build_output(self, process: subprocess.Popen[str]) -> None:
         if process.stdout:
@@ -40,23 +183,10 @@ class DockerManager:
         if process.returncode != 0:
             raise subprocess.CalledProcessError(process.returncode, process.args)
 
-    def build_image(
-        self, dockerfile_path: Path, repo_path: Path, current_commit_sha: str
-    ) -> None:
+    def build_image(self, dockerfile_path: Path) -> None:
         base_image_tag = "patchwise-base:latest"
-        kernel_dockerfile = PACKAGE_PATH / "dockerfiles" / "kernel.Dockerfile"
 
-        # Find the common ancestor path for the build context
-        common_path = Path(os.path.commonpath([PACKAGE_PATH, repo_path]))
-        self.logger.debug(f"Using common path for build context: {common_path}")
-
-        # Calculate relative paths for the build context
-        relative_package_path = PACKAGE_PATH.relative_to(common_path)
-        relative_repo_path = repo_path.relative_to(common_path)
-        self.logger.debug(f"Relative package path: {relative_package_path}")
-        self.logger.debug(f"Relative repo path: {relative_repo_path}")
-
-        # Stage 1: Build base image (no kernel)
+        # Stage 1: Build base image
         self.logger.info(f"Building base Docker image {base_image_tag}...")
         base_dockerfile = PACKAGE_PATH / "dockerfiles" / "base.Dockerfile"
         process = subprocess.Popen(
@@ -78,9 +208,7 @@ class DockerManager:
 
         # Stage 2: Build tool-specific image (if not base)
         if self.image_tag != base_image_tag:
-            intermediate_tag = f"{self.image_tag}-intermediate"
-            self.logger.info(f"Building tool-specific image {intermediate_tag}...")
-
+            self.logger.info(f"Building tool-specific image {self.image_tag}...")
             process = subprocess.Popen(
                 [
                     "docker",
@@ -88,7 +216,7 @@ class DockerManager:
                     "-f",
                     str(dockerfile_path),
                     "-t",
-                    intermediate_tag,
+                    self.image_tag,
                     str(PACKAGE_PATH),
                 ],
                 text=True,
@@ -97,64 +225,19 @@ class DockerManager:
             if process.returncode != 0:
                 raise subprocess.CalledProcessError(process.returncode, process.args)
             self.logger.info(
-                f"Tool-specific image {intermediate_tag} built successfully."
-            )
-
-            # Stage 3: Build final image with kernel
-            self.logger.info(f"Building final image {self.image_tag} with kernel...")
-            process = subprocess.Popen(
-                [
-                    "docker",
-                    "build",
-                    "-f",
-                    str(kernel_dockerfile),
-                    "--build-arg",
-                    f"TOOL_IMAGE={intermediate_tag}",
-                    "--build-arg",
-                    f"KERNEL_PATH={relative_repo_path}",
-                    "--build-arg",
-                    f"CURRENT_COMMIT_SHA={current_commit_sha}",
-                    "-t",
-                    self.image_tag,
-                    str(common_path),
-                ],
-                text=True,
-            )
-            process.wait()
-            if process.returncode != 0:
-                raise subprocess.CalledProcessError(process.returncode, process.args)
-            self.logger.info(f"Final Docker image {self.image_tag} built successfully.")
-
-        else:
-            # For base image, still need to add kernel
-            self.logger.info(f"Building base image with kernel...")
-            process = subprocess.Popen(
-                [
-                    "docker",
-                    "build",
-                    "-f",
-                    str(kernel_dockerfile),
-                    "--build-arg",
-                    f"TOOL_IMAGE={base_image_tag}",
-                    "--build-arg",
-                    f"KERNEL_PATH={relative_repo_path}",
-                    "--build-arg",
-                    f"CURRENT_COMMIT_SHA={current_commit_sha}",
-                    "-t",
-                    self.image_tag,
-                    str(common_path),
-                ],
-                text=True,
-            )
-            process.wait()
-            if process.returncode != 0:
-                raise subprocess.CalledProcessError(process.returncode, process.args)
-            self.logger.info(
-                f"Base image with kernel {self.image_tag} built successfully."
+                f"Tool-specific image {self.image_tag} built successfully."
             )
 
     def start_container(self, build_path: Path) -> None:
         """Legacy method for backward compatibility. Use start_container_with_shared_volume instead."""
+        try:
+            self._kernel_overlay_volume = self._setup_kernel_overlay()
+        except subprocess.CalledProcessError as e:
+            self.logger.error(
+                f"Failed to create kernel overlay volume: {e}\nstderr:{e.stderr}"
+            )
+            raise
+
         try:
             subprocess.run(
                 ["docker", "container", "inspect", self.container_name],
@@ -171,6 +254,8 @@ class DockerManager:
                 self.container_name,
                 "-v",
                 f"{build_path}:{self.build_dir}",
+                "-v",
+                f"{self._kernel_overlay_volume}:{self.kernel_dir}",
                 self.image_tag,
                 "tail",
                 "-f",
@@ -179,12 +264,28 @@ class DockerManager:
             self.logger.info(
                 f"Starting container {self.container_name} with args {' '.join(args)}..."
             )
-            subprocess.run(
-                args,
-                check=True,
-                capture_output=True,
-            )
+            try:
+                subprocess.run(
+                    args,
+                    check=True,
+                    capture_output=True,
+                )
+            except subprocess.CalledProcessError as e:
+                self.logger.info(
+                    f"Failed to start container {self.container_name}: {e}\nstderr: {e.stderr}"
+                )
+                self._cleanup_kernel_overlay()
+                raise
             self.logger.info(f"Container {self.container_name} started successfully.")
+
+            try:
+                self._prepare_kernel_tree()
+            except subprocess.CalledProcessError as e:
+                self.logger.error(
+                    f"Failed to prepare kernel tree at {self.commit_sha}: {e}\nstderr: {e.stderr}"
+                )
+                self._cleanup_kernel_overlay()
+                raise
 
     def run_command(
         self, command: list[str], cwd: Optional[str], **kwargs: Any
@@ -287,7 +388,7 @@ class DockerManager:
             )
         except subprocess.CalledProcessError as e:
             self.logger.warning(
-                f"Failed to fix permissions for clangd index directory: {e}"
+                f"Failed to fix permissions for clangd index directory: {e}\nstderr: {e.stderr}"
             )
 
     def start_clangd_lsp(
@@ -359,13 +460,34 @@ class DockerManager:
 
     def stop_container(self) -> None:
         self.logger.info(f"Stopping container {self.container_name}...")
-        subprocess.run(
-            ["docker", "stop", self.container_name], check=True, capture_output=True
-        )
-        subprocess.run(
-            ["docker", "rm", self.container_name], check=True, capture_output=True
-        )
-        self.logger.info(f"Container {self.container_name} stopped and removed.")
+        try:
+            try:
+                self._restore_kernel_overlay_permissions()
+            except subprocess.CalledProcessError as e:
+                self.logger.error(
+                    f"Failed to restore kernel overlay permissions: {e}\nstderr: {e.stderr}"
+                )
+                raise
+
+            try:
+                subprocess.run(
+                    ["docker", "stop", self.container_name],
+                    check=True,
+                    capture_output=True,
+                )
+                subprocess.run(
+                    ["docker", "rm", self.container_name],
+                    check=True,
+                    capture_output=True,
+                )
+            except subprocess.CalledProcessError as e:
+                self.logger.error(
+                    f"Failed to stop container {self.container_name}: {e}\nstderr: {e.stderr}"
+                )
+                raise
+            self.logger.info(f"Container {self.container_name} stopped and removed.")
+        finally:
+            self._cleanup_kernel_overlay()
 
     @classmethod
     def create_shared_build_volume(cls) -> None:
@@ -398,7 +520,7 @@ class DockerManager:
         """Initialize the shared build volume using the base container."""
         logger = logging.getLogger(f"{PACKAGE_NAME}.{cls.__name__.lower()}")
 
-        if cls._build_volume_initialized:
+        if cls.build_volume_initialized:
             logger.debug("Build volume already initialized, skipping.")
             return
 
@@ -446,7 +568,7 @@ class DockerManager:
             )
 
             logger.info("Shared build volume initialized successfully.")
-            cls._build_volume_initialized = True
+            cls.build_volume_initialized = True
 
         finally:
             # Clean up the temporary container
@@ -469,6 +591,14 @@ class DockerManager:
     def start_container_with_shared_volume(self) -> None:
         """Start container with the shared build volume instead of bind mount."""
         try:
+            self._kernel_overlay_volume = self._setup_kernel_overlay()
+        except subprocess.CalledProcessError as e:
+            self.logger.error(
+                f"Failed to create kernel overlay volume: {e}\nstderr:{e.stderr}"
+            )
+            raise
+
+        try:
             subprocess.run(
                 ["docker", "container", "inspect", self.container_name],
                 check=True,
@@ -486,6 +616,8 @@ class DockerManager:
                 f"{self._build_volume_name}:/shared/build",
                 "-v",
                 f"{self._build_volume_name}:{self.build_dir}",
+                "-v",
+                f"{self._kernel_overlay_volume}:{self.kernel_dir}",
                 self.image_tag,
                 "tail",
                 "-f",
@@ -494,15 +626,112 @@ class DockerManager:
             self.logger.info(
                 f"Starting container {self.container_name} with shared volume..."
             )
-            subprocess.run(
-                args,
-                check=True,
-                capture_output=True,
-            )
+            try:
+                subprocess.run(
+                    args,
+                    check=True,
+                    capture_output=True,
+                )
+            except subprocess.CalledProcessError as e:
+                self.logger.info(
+                    f"Failed to start container {self.container_name}: {e}\nstderr: {e.stderr}"
+                )
+                self._cleanup_kernel_overlay()
+                raise
             self.logger.info(f"Container {self.container_name} started successfully.")
 
             # Ensure the specific build directory has proper permissions
-            self._fix_build_directory_permissions()
+            try:
+                self._fix_build_directory_permissions()
+            except subprocess.CalledProcessError as e:
+                self.logger.error(
+                    f"Failed to fix build directory permissions: {e}\nstderr: {e.stderr}"
+                )
+                self._cleanup_kernel_overlay()
+                raise
+
+            try:
+                self._prepare_kernel_tree()
+            except subprocess.CalledProcessError as e:
+                self.logger.error(
+                    f"Failed to prepare kernel tree at {self.commit_sha}: {e}\nstderr: {e.stderr}"
+                )
+                self._cleanup_kernel_overlay()
+                raise
+
+    def _prepare_kernel_tree(self) -> None:
+        """Set git safe.directory and reset the kernel tree to the target commit."""
+        self.logger.debug(
+            f"Preparing kernel tree at {self.commit_sha} in {self.container_name}..."
+        )
+        subprocess.run(
+            [
+                "docker",
+                "exec",
+                "--user",
+                "root",
+                "--workdir",
+                str(self.kernel_dir),
+                self.container_name,
+                "git",
+                "config",
+                "--global",
+                "--add",
+                "safe.directory",
+                str(self.kernel_dir),
+            ],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            [
+                "docker",
+                "exec",
+                "--user",
+                "root",
+                "--workdir",
+                str(self.kernel_dir),
+                self.container_name,
+                "git",
+                "reset",
+                "--hard",
+                self.commit_sha,
+            ],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            [
+                "docker",
+                "exec",
+                "--user",
+                "root",
+                "--workdir",
+                str(self.kernel_dir),
+                self.container_name,
+                "git",
+                "clean",
+                "-fdx",
+            ],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            [
+                "docker",
+                "exec",
+                "--user",
+                "root",
+                self.container_name,
+                "chown",
+                "-R",
+                "patchwise:patchwise",
+                str(self.kernel_dir),
+            ],
+            check=True,
+            capture_output=True,
+        )
+        self.logger.debug(f"Kernel tree at {self.commit_sha} prepared.")
 
     def _fix_build_directory_permissions(self) -> None:
         """Fix permissions for the specific build directory inside the container."""
@@ -512,58 +741,56 @@ class DockerManager:
             )
             return
 
-        try:
-            # Create and fix permissions for the commit-specific directory
-            subprocess.run(
-                [
-                    "docker",
-                    "exec",
-                    "--user",
-                    "root",
-                    self.container_name,
-                    "mkdir",
-                    "-p",
-                    f"/shared/build/{self.commit_sha}",
-                ],
-                check=True,
-                capture_output=True,
-            )
+        # Create and fix permissions for the commit-specific directory
+        subprocess.run(
+            [
+                "docker",
+                "exec",
+                "--user",
+                "root",
+                self.container_name,
+                "mkdir",
+                "-p",
+                f"/shared/build/{self.commit_sha}",
+            ],
+            check=True,
+            capture_output=True,
+        )
 
-            subprocess.run(
-                [
-                    "docker",
-                    "exec",
-                    "--user",
-                    "root",
-                    self.container_name,
-                    "chown",
-                    "-R",
-                    "patchwise:patchwise",
-                    f"/shared/build/{self.commit_sha}",
-                ],
-                check=True,
-                capture_output=True,
-            )
+        subprocess.run(
+            [
+                "docker",
+                "exec",
+                "--user",
+                "root",
+                self.container_name,
+                "chown",
+                "-R",
+                "patchwise:patchwise",
+                f"/shared/build/{self.commit_sha}",
+            ],
+            check=True,
+            capture_output=True,
+        )
 
-            subprocess.run(
-                [
-                    "docker",
-                    "exec",
-                    "--user",
-                    "root",
-                    self.container_name,
-                    "chmod",
-                    "-R",
-                    "755",
-                    f"/shared/build/{self.commit_sha}",
-                ],
-                check=True,
-                capture_output=True,
-            )
+        subprocess.run(
+            [
+                "docker",
+                "exec",
+                "--user",
+                "root",
+                self.container_name,
+                "chmod",
+                "-R",
+                "755",
+                f"/shared/build/{self.commit_sha}",
+            ],
+            check=True,
+            capture_output=True,
+        )
 
-            self.logger.debug(
-                f"Fixed permissions for build directory: {self.commit_sha}"
-            )
+        self.logger.debug(f"Fixed permissions for build directory: {self.commit_sha}")
 
-        except subprocess.CalledProcessError as e:
-            self.logger.warning(f"Failed to fix build directory permissions: {e}")
+
+# Global tracking for container orchestration
+CONTAINERS_BUILT: dict[str, DockerManager] = {}
