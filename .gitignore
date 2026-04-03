@@ -28,3 +28,6 @@ MANIFEST
 .checkpatch-camelcase.git.
 **/patch_review/patches/
 .github/copilot-instructions.md
+
+sandbox/
+

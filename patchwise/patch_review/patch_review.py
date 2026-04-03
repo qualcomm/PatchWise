@@ -13,14 +13,10 @@ from git import Repo
 from git.objects.commit import Commit
 
 from patchwise import PACKAGE_NAME, PACKAGE_PATH, SANDBOX_PATH
-from patchwise.docker import DockerManager
+from patchwise.docker import DockerManager, CONTAINERS_BUILT
 
 DOCKERFILES_PATH = PACKAGE_PATH / "dockerfiles"
 BUILD_DIR = SANDBOX_PATH / "build"
-
-# Global tracking for container orchestration
-_containers_built: set[str] = set()
-_build_volume_initialized = False
 
 
 class PatchReview(abc.ABC):
@@ -33,8 +29,6 @@ class PatchReview(abc.ABC):
         repo_path: str,
         commit: Commit,
     ):
-        global _build_volume_initialized
-
         self.logger = self.get_logger()
         self.repo = Repo(repo_path)
         self.commit = commit
@@ -51,22 +45,21 @@ class PatchReview(abc.ABC):
         self.docker_manager = DockerManager(
             image_tag=image_tag,
             container_name=container_name,
+            repo_path=Path(repo_path),
             commit_sha=self.commit.hexsha,
         )
 
         # Build the image if not already built
-        if image_tag not in _containers_built:
-            self.docker_manager.build_image(
-                dockerfile_path, Path(repo_path), self.commit.hexsha
-            )
-            _containers_built.add(image_tag)
+        if container_name not in CONTAINERS_BUILT:
+            self.docker_manager.build_image(dockerfile_path)
+            CONTAINERS_BUILT[container_name] = self.docker_manager
 
         # Initialize shared build volume once using base container
-        if not _build_volume_initialized:
+        if not DockerManager.build_volume_initialized:
             DockerManager.initialize_shared_build_volume(
                 Path(repo_path), self.commit.hexsha
             )
-            _build_volume_initialized = True
+            DockerManager.build_volume_initialized = True
 
         # Start container with shared volume
         self.docker_manager.start_container_with_shared_volume()
@@ -74,7 +67,9 @@ class PatchReview(abc.ABC):
         self.setup()
 
     def __del__(self):
-        self.docker_manager.stop_container()
+        if self.docker_manager.container_name in CONTAINERS_BUILT:
+            self.docker_manager.stop_container()
+            del CONTAINERS_BUILT[self.docker_manager.container_name]
 
     def get_dockerfile_path(self):
         specific_dockerfile = DOCKERFILES_PATH / f"{self.__class__.__name__}.Dockerfile"
@@ -137,8 +132,7 @@ class PatchReview(abc.ABC):
                 if show_timer:
                     sys.stdout.write(f"\r{desc}... {elapsed}s elapsed")
                     sys.stdout.flush()
-
-            except Exception:
+            except (Exception, KeyboardInterrupt) as e:
                 process.kill()
                 raise
 

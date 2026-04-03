@@ -2,11 +2,13 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import argparse
+import atexit
 
 # Automatically import all patch review modules so all @register_patch_review classes are registered
 import importlib
 import logging
 import pkgutil
+import signal
 from typing import Any, Iterable
 
 from git.objects.commit import Commit
@@ -32,6 +34,7 @@ from patchwise.patch_review.decorators import (
 )
 
 from .patch_review import PatchReview
+from patchwise.docker import CONTAINERS_BUILT
 
 logger = logging.getLogger(__name__)
 
@@ -63,8 +66,10 @@ def prepare_containers_and_build_volume(
     base_image_tag = "patchwise-base:latest"
     base_container_name = f"patchwise-base-latest-{commit.hexsha}"
 
-    base_manager = DockerManager(base_image_tag, base_container_name)
-    base_manager.build_image(base_dockerfile, Path(repo_path), commit.hexsha)
+    base_manager = DockerManager(
+        base_image_tag, base_container_name, Path(repo_path), commit.hexsha
+    )
+    base_manager.build_image(base_dockerfile)
 
     # Build all other required containers
     built_images = {base_image_tag}
@@ -80,15 +85,40 @@ def prepare_containers_and_build_volume(
 
         if image_tag not in built_images:
             container_name = f"{image_tag.replace(':', '-')}-{commit.hexsha}"
-            manager = DockerManager(image_tag, container_name)
-            manager.build_image(dockerfile_path, Path(repo_path), commit.hexsha)
+            manager = DockerManager(
+                image_tag, container_name, Path(repo_path), commit.hexsha
+            )
+            manager.build_image(dockerfile_path)
             built_images.add(image_tag)
 
     # Initialize shared build volume using base container
-    logger.info("Initializing shared build volume...")
     DockerManager.initialize_shared_build_volume(Path(repo_path), commit.hexsha)
 
     logger.info("Container preparation complete.")
+
+
+def _cleanup_all_containers() -> None:
+    """Stop all tracked containers and clean up their overlays."""
+    for container_name, manager in list(CONTAINERS_BUILT.items()):
+        logger.debug(f"Cleaning up container: {container_name}")
+        try:
+            manager.stop_container()
+            del CONTAINERS_BUILT[container_name]
+        except Exception as e:
+            logger.warning(f"Failed to clean up docker container {container_name}.")
+
+
+def register_containers_cleanup() -> None:
+    atexit.register(_cleanup_all_containers)
+
+    def signal_handler(*args):
+        """Give a chance for atexit handler to run with a normal program termination"""
+        import sys
+
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
 
 
 def review_commit(
@@ -96,6 +126,8 @@ def review_commit(
 ) -> PatchReviewResults:
     all_reviews = {cls.__name__: cls for cls in AVAILABLE_PATCH_REVIEWS}
     selected_reviews = [all_reviews[name] for name in reviews if name in all_reviews]
+
+    register_containers_cleanup()
 
     # Prepare containers and build volume upfront
     prepare_containers_and_build_volume(reviews, commit, repo_path)
