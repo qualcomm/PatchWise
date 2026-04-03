@@ -1,5 +1,5 @@
 # Use a base image with common development tools
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 
 # Ensure all packages are updated to the latest security patches
 # RUN apt-get update && apt-get upgrade -y --no-install-recommends && rm -rf /var/lib/apt/lists/*
@@ -22,7 +22,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     wget \
     gnupg \
     lsb-release \
-    software-properties-common \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
