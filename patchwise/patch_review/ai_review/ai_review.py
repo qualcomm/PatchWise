@@ -14,6 +14,7 @@ import urllib3
 urllib3.disable_warnings()
 
 from patchwise.patch_review.patch_review import PatchReview
+from patchwise.utils.decorators import retry
 
 DEFAULT_MODEL = "Pro"
 DEFAULT_API_BASE = "https://api.openai.com/v1"
@@ -122,6 +123,15 @@ class AiReview(PatchReview):
 
         return "\n".join(wrapped_paragraphs)
 
+    @retry(
+        max_retries=10,
+        exceptions=(
+            litellm.Timeout,
+            litellm.RateLimitError,
+            litellm.InternalServerError,
+            litellm.OpenAIError,
+        ),
+    )
     def provider_api_call(
         self, user_prompt: str, system_prompt: t.Optional[str] = None
     ) -> str:
