@@ -12,16 +12,17 @@ USER root
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     swig \
+    meson \
     && rm -rf /var/lib/apt/lists/*
 
 RUN git clone git://git.kernel.org/pub/scm/utils/dtc/dtc.git /home/patchwise/dtc \
     && cd /home/patchwise/dtc \
-    && make \
-    && make install \
+    && meson setup builddir/ \
+    && meson compile -C builddir/ \
+    && meson install -C builddir/ \
     && cd /home/patchwise \
     && rm -rf /home/patchwise/dtc
 
-RUN pip3 install "pylibfdt<1.7.1"
 RUN pip3 install dtschema
 RUN pip3 install yamllint
 
