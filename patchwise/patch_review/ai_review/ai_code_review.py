@@ -1092,16 +1092,18 @@ regulator-name.
                     self.extract_identifiers_with_positions(line, lnum)
                 )
 
-        # Get document symbols for the file
-        doc_symbol_msg = self._create_lsp_message(
-            "textDocument/documentSymbol",
-            {"textDocument": {"uri": uri}},
-            self.DOC_SYMBOL_MSG_ID,
-        )
+        symbols = None
+        if uri.endswith(('.c', '.h')):
+            # Get document symbols for the file
+            doc_symbol_msg = self._create_lsp_message(
+                "textDocument/documentSymbol",
+                {"textDocument": {"uri": uri}},
+                self.DOC_SYMBOL_MSG_ID,
+            )
 
-        self._send_lsp_message(proc, doc_symbol_msg)
-        symbol_resp = self._read_lsp_response(proc, expected_id=self.DOC_SYMBOL_MSG_ID)
-        symbols = symbol_resp.get("result", [])
+            self._send_lsp_message(proc, doc_symbol_msg)
+            symbol_resp = self._read_lsp_response(proc, expected_id=self.DOC_SYMBOL_MSG_ID)
+            symbols = symbol_resp.get("result", [])
 
         # Check if we have the specific identifier we're looking for
         target_identifiers = [
@@ -1230,9 +1232,11 @@ regulator-name.
                         )
                     continue
 
-                def_symbol = self._get_document_symbols(
-                    proc, loc["uri"], header_contents, ident
-                )
+                def_symbol = None
+                if loc["uri"].endswith(('.c', '.h')):
+                    def_symbol = self._get_document_symbols(
+                        proc, loc["uri"], header_contents, ident
+                    )
 
                 if def_symbol:
                     start = def_symbol["location"]["range"]["start"]["line"]
