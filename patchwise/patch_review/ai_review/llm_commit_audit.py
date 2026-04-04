@@ -52,7 +52,6 @@ The output should use only ASCII characters.
 
         result = self.provider_api_call(
             formatted_prompt,
-            self.model,
         )
 
         return self.format_chat_response(result)
