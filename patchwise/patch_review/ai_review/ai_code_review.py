@@ -3,15 +3,15 @@
 
 import json
 import os
-from pathlib import Path
 import re
 import subprocess
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 from urllib.parse import urlparse, unquote
 
-from patchwise import KERNEL_PATH, SANDBOX_PATH
+from patchwise import SANDBOX_PATH
 from patchwise.patch_review.decorators import register_llm_review, register_long_review
 
 from .ai_review import AiReview
@@ -83,8 +83,7 @@ Review the following patch diff and provide inline feedback on the code changes.
 
 """
 
-    @staticmethod
-    def get_kernel_coding_style() -> str:
+    def get_kernel_coding_style(self) -> str:
         """Load kernel coding style guidelines from documentation."""
         coding_style_docs = [
             {
@@ -102,7 +101,7 @@ Review the following patch diff and provide inline feedback on the code changes.
         ]
         guidelines_doc = ""
         for doc in coding_style_docs:
-            doc_path = os.path.join(KERNEL_PATH, doc["path"])
+            doc_path = os.path.join(self.kernel_path, doc["path"])
             guidelines_doc += f"## {doc['name']}:\n\n"
             try:
                 with open(doc_path, "r") as f:
@@ -113,8 +112,7 @@ Review the following patch diff and provide inline feedback on the code changes.
 
         return guidelines_doc
 
-    @classmethod
-    def get_system_prompt(cls) -> str:
+    def get_system_prompt(self) -> str:
         """Generate the system prompt including kernel coding style guidelines."""
         return """
 # System Prompt
@@ -182,7 +180,7 @@ regulator-name.
 >  			regulator-min-microvolt = <2800000>;
 ```
 
-""" + cls.get_kernel_coding_style()
+""" + self.get_kernel_coding_style()
 
     def _read_file_safely(self, file_path: str) -> Optional[str]:
         """Safely read a file and return its contents, or None on error."""
@@ -778,7 +776,7 @@ regulator-name.
 
         # Add diff lines
         diff_lines = diff_line_numbers.get(
-            os.path.relpath(def_file, KERNEL_PATH), set()
+            os.path.relpath(def_file, self.kernel_path), set()
         )
         essential_lines.update(diff_lines)
 
@@ -859,7 +857,7 @@ regulator-name.
             file_context = self._format_file_context(def_file, print_lines)
 
             if file_context:
-                rel_path = os.path.relpath(def_file, KERNEL_PATH).lstrip("/\\")
+                rel_path = os.path.relpath(def_file, self.kernel_path).lstrip("/\\")
                 context_parts.append(
                     f"{rel_path} (definition/diff context):\n\n```c\n"
                     + "".join(file_context)
@@ -879,7 +877,7 @@ regulator-name.
             f"Building context from {len(collected_defs)} files with definitions:"
         )
         for def_file, defs in collected_defs.items():
-            rel_path = os.path.relpath(def_file, KERNEL_PATH)
+            rel_path = os.path.relpath(def_file, self.kernel_path)
             self.logger.info(f"  {rel_path}: {len(defs)} definitions")
             for start, end, identifier in defs[:3]:  # Show first 3 definitions per file
                 self.logger.info(f"    - {identifier} (lines {start}-{end})")
@@ -1046,7 +1044,7 @@ regulator-name.
         proc = self.docker_manager.start_clangd_lsp(clangd_args, cwd=str(kernel_dir))
 
         # Initialize LSP connection
-        self._initialize_lsp(proc, KERNEL_PATH)
+        self._initialize_lsp(proc, self.kernel_path)
         return proc
 
     def _process_file_identifiers(
@@ -1059,7 +1057,7 @@ regulator-name.
         printed_locations: Set[Tuple[str, int, int]],
     ) -> None:
         """Process identifiers in a specific file."""
-        abs_path = os.path.join(KERNEL_PATH, filename)
+        abs_path = os.path.join(self.kernel_path, filename)
         uri = path_to_uri(abs_path)
 
         if not os.path.exists(abs_path):
@@ -1207,10 +1205,10 @@ regulator-name.
                         possible_paths = [
                             def_file,
                             def_file.replace(
-                                "/home/patchwise/kernel/", str(KERNEL_PATH) + "/"
+                                "/home/patchwise/kernel/", str(self.kernel_path) + "/"
                             ),
                             def_file.replace(
-                                "/home/patchwise/", str(KERNEL_PATH.parent) + "/"
+                                "/home/patchwise/", str(self.kernel_path.parent) + "/"
                             ),
                         ]
                         for alt_path in possible_paths:
@@ -1409,7 +1407,7 @@ regulator-name.
         # Dummy query: open the first file if any
         first_file = next(iter(file_adds), None)
         if first_file:
-            abs_path = os.path.join(KERNEL_PATH, first_file)
+            abs_path = os.path.join(self.kernel_path, first_file)
             if os.path.exists(abs_path):
                 file_lines = self._get_file_lines(abs_path)
                 if file_lines:
@@ -1479,10 +1477,10 @@ regulator-name.
         self.context = self._merge_and_build_context(collected_defs, file_adds)
 
     def delete_cache(self) -> None:
-        """Remove the .cache directory under KERNEL_PATH"""
+        """Remove the .cache directory under kernel_path"""
         import os
 
-        cache_dir = os.path.join(KERNEL_PATH, ".cache")
+        cache_dir = os.path.join(self.kernel_path, ".cache")
         try:
             import shutil
 
@@ -1505,6 +1503,7 @@ regulator-name.
 
     def setup(self) -> None:
         super().setup()
+        self.kernel_path = Path(self.repo.working_dir)
 
     def run(self) -> str:
         """Execute the AI code review."""
