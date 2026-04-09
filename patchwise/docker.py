@@ -27,7 +27,7 @@ class DockerManager:
         )
         self.image_tag = image_tag
         self.container_name = container_name
-        self.repo_path = repo_path
+        self.repo_path = repo_path.resolve()
         self.commit_sha = commit_sha
         self.sandbox_path = Path("/home") / PACKAGE_NAME
         self.build_dir = self.sandbox_path / "build"
