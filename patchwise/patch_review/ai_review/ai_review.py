@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import argparse
+import json
 import os
 import re
 import textwrap
@@ -18,6 +19,7 @@ from patchwise.utils.decorators import retry
 
 DEFAULT_MODEL = "Pro"
 DEFAULT_API_BASE = "https://api.openai.com/v1"
+AGENT_MAX_ITERATIONS = 25
 
 
 class AiReview(PatchReview):
@@ -132,25 +134,76 @@ class AiReview(PatchReview):
             litellm.OpenAIError,
         ),
     )
-    def provider_api_call(
-        self, user_prompt: str, system_prompt: t.Optional[str] = None
-    ) -> str:
-        messages = [{"content": user_prompt, "role": "user"}]
-        if system_prompt:
-            messages.append({"content": system_prompt, "role": "system"})
-
+    def _completion_with_retry(self, **kwargs) -> t.Any:
         self.logger.debug(
             f"Making API call with model: {self.model}, api_base: {AiReview.api_base}"
         )
+        return litellm.completion(**kwargs)
 
-        response = litellm.completion(
-            model=self.model,
-            api_base=AiReview.api_base,
-            messages=messages,
-            stream=False,
+    def dispatch_tool(self, name: str, args: dict) -> dict:
+        """Dispatch a tool call by name. Subclasses override to register tools."""
+        return {"error": f"unknown tool: {name}"}
+
+    def run_agent_loop(
+        self, messages: list[dict], tools: t.Optional[list[dict]] = None
+    ) -> str:
+        """Run the agent loop, calling the LLM iteratively until it stops requesting tools.
+
+        Args:
+            messages: Initial message list (system + user turns).
+            tools: Optional list of tool definitions (LiteLLM/OpenAI format).
+                   When empty, tool_choice is omitted so the model just responds.
+
+        Returns:
+            The final assistant text response.
+        """
+        completion_kwargs: dict = {
+            "model": self.model,
+            "api_base": AiReview.api_base,
+            "messages": messages,
+            "stream": False,
+        }
+        if tools:
+            completion_kwargs["tools"] = tools
+            completion_kwargs["tool_choice"] = "auto"
+
+        for iteration in range(1, AGENT_MAX_ITERATIONS + 1):
+            self.logger.debug(f"Agent iteration {iteration}/{AGENT_MAX_ITERATIONS}")
+
+            response = self._completion_with_retry(**completion_kwargs)
+            msg = response.choices[0].message
+            messages.append(msg.model_dump(exclude_none=True))
+
+            if not msg.tool_calls:
+                return msg.content or ""
+
+            # Dispatch each tool call and append results
+            for tool_call in msg.tool_calls:
+                name = tool_call.function.name
+                try:
+                    args = json.loads(tool_call.function.arguments)
+                except json.JSONDecodeError:
+                    args = {}
+                self.logger.debug(f"Tool call: {name}({args})")
+                result = self.dispatch_tool(name, args)
+                self.logger.debug(f"Tool result: {name} -> {result}")
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "name": name,
+                    "content": json.dumps(result),
+                })
+
+            completion_kwargs["messages"] = messages
+
+        # Max iterations reached — return the last assistant message content
+        self.logger.warning(
+            f"Agent reached max iterations ({AGENT_MAX_ITERATIONS}), returning last assistant message"
         )
-
-        return response.choices[0].message.content
+        for m in reversed(messages):
+            if m.get("role") == "assistant" and m.get("content"):
+                return m["content"]
+        return ""
 
     def setup(self):
         self.model = AiReview.model

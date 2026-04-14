@@ -1525,9 +1525,10 @@ regulator-name.
         with open(system_prompt_path, "w") as f:
             f.write(self.get_system_prompt())
 
-        result = self.provider_api_call(
-            user_prompt=formatted_prompt,
-            system_prompt=self.get_system_prompt(),
-        )
+        messages = [
+            {"role": "system", "content": self.get_system_prompt()},
+            {"role": "user", "content": formatted_prompt},
+        ]
+        result = self.run_agent_loop(messages)
 
         return self.format_chat_response(result)

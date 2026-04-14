@@ -50,8 +50,7 @@ The output should use only ASCII characters.
             commit_text=str(self.commit_message),
         )
 
-        result = self.provider_api_call(
-            formatted_prompt,
-        )
+        messages = [{"role": "user", "content": formatted_prompt}]
+        result = self.run_agent_loop(messages)
 
         return self.format_chat_response(result)
