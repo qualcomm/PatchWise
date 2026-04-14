@@ -142,30 +142,39 @@ class AiReview(PatchReview):
 
     def dispatch_tool(self, name: str, args: dict) -> dict:
         """Dispatch a tool call by name. Subclasses override to register tools."""
-        return {"error": f"unknown tool: {name}"}
+        return {"ok": False, "error": f"unknown tool: {name}"}
 
-    def run_agent_loop(
-        self, messages: list[dict], tools: t.Optional[list[dict]] = None
-    ) -> str:
+    def get_tools(self) -> t.Optional[list[dict]]:
+        """Return a list of tool definitions (LiteLLM/OpenAI format). Subclasses override."""
+        return None
+
+    def run_agent_loop(self, messages: list[dict]) -> str:
         """Run the agent loop, calling the LLM iteratively until it stops requesting tools.
 
         Args:
             messages: Initial message list (system + user turns).
-            tools: Optional list of tool definitions (LiteLLM/OpenAI format).
-                   When empty, tool_choice is omitted so the model just responds.
 
         Returns:
             The final assistant text response.
         """
+        tools = self.get_tools()
+
         completion_kwargs: dict = {
             "model": self.model,
             "api_base": AiReview.api_base,
             "messages": messages,
             "stream": False,
         }
+
         if tools:
-            completion_kwargs["tools"] = tools
-            completion_kwargs["tool_choice"] = "auto"
+            if not litellm.supports_function_calling(model=self.model):
+                self.logger.warning(
+                    f"Model '{self.model}' does not support function calling according to litellm. "
+                    "Running without tools."
+                )
+            else:
+                completion_kwargs["tools"] = tools
+                completion_kwargs["tool_choice"] = "auto"
 
         for iteration in range(1, AGENT_MAX_ITERATIONS + 1):
             self.logger.debug(f"Agent iteration {iteration}/{AGENT_MAX_ITERATIONS}")
@@ -182,11 +191,16 @@ class AiReview(PatchReview):
                 name = tool_call.function.name
                 try:
                     args = json.loads(tool_call.function.arguments)
-                except json.JSONDecodeError:
-                    args = {}
-                self.logger.debug(f"Tool call: {name}({args})")
-                result = self.dispatch_tool(name, args)
-                self.logger.debug(f"Tool result: {name} -> {result}")
+                    self.logger.debug(f"Tool call: {name}({args})")
+                    result = self.dispatch_tool(name, args)
+                    self.logger.debug(f"Tool result: {name} -> {result}")
+                except json.JSONDecodeError as e:
+                    self.logger.error(f"Error parsing tool args for '{name}': {e}")
+                    result = {"ok": False, "error": f"Invalid JSON arguments `{args}` for tool '{name}'"}
+                except Exception as e:
+                    self.logger.error(f"Error executing tool '{name}': {e}")
+                    result = {"ok": False, "error": f"Internal error executing tool '{name}({args})'"}
+
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tool_call.id,
@@ -196,14 +210,22 @@ class AiReview(PatchReview):
 
             completion_kwargs["messages"] = messages
 
-        # Max iterations reached — return the last assistant message content
+        # Max iterations reached — force a final response without tools
         self.logger.warning(
-            f"Agent reached max iterations ({AGENT_MAX_ITERATIONS}), returning last assistant message"
+            f"Agent reached max iterations ({AGENT_MAX_ITERATIONS}). Forcing final response without tools."
         )
-        for m in reversed(messages):
-            if m.get("role") == "assistant" and m.get("content"):
-                return m["content"]
-        return ""
+
+        completion_kwargs.pop("tools", None)
+        completion_kwargs.pop("tool_choice", None)
+
+        messages.append({
+            "role": "system",
+            "content": "Maximum tool iterations reached. Please provide your final response based on the available information."
+        })
+        completion_kwargs["messages"] = messages
+
+        response = self._completion_with_retry(**completion_kwargs)
+        return response.choices[0].message.content or ""
 
     def setup(self):
         self.model = AiReview.model
