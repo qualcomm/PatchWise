@@ -167,24 +167,23 @@ class AiReview(PatchReview):
         }
 
         if tools:
-            if not litellm.supports_function_calling(model=self.model):
-                self.logger.warning(
-                    f"Model '{self.model}' does not support function calling according to litellm. "
-                    "Running without tools."
-                )
-            else:
-                completion_kwargs["tools"] = tools
-                completion_kwargs["tool_choice"] = "auto"
+            completion_kwargs["tools"] = tools
+            # Force tool usage to get additional context on the first iteration
+            completion_kwargs["tool_choice"] = "required"
+            completion_kwargs["allowed_openai_params"] = ["tools", "tool_choice"]
 
         for iteration in range(1, AGENT_MAX_ITERATIONS + 1):
             self.logger.debug(f"Agent iteration {iteration}/{AGENT_MAX_ITERATIONS}")
 
             response = self._completion_with_retry(**completion_kwargs)
             msg = response.choices[0].message
-            messages.append(msg.model_dump(exclude_none=True))
+            messages.append(msg.model_dump())
 
             if not msg.tool_calls:
                 return msg.content or ""
+
+            if iteration == 1:
+                completion_kwargs["tool_choice"] = "auto"
 
             # Dispatch each tool call and append results
             for tool_call in msg.tool_calls:
@@ -196,33 +195,39 @@ class AiReview(PatchReview):
                     self.logger.debug(f"Tool result: {name} -> {result}")
                 except json.JSONDecodeError as e:
                     self.logger.error(f"Error parsing tool args for '{name}': {e}")
-                    result = {"ok": False, "error": f"Invalid JSON arguments `{args}` for tool '{name}'"}
+                    result = {
+                        "ok": False,
+                        "error": f"Invalid JSON arguments `{args}` for tool '{name}'",
+                    }
                 except Exception as e:
                     self.logger.error(f"Error executing tool '{name}': {e}")
-                    result = {"ok": False, "error": f"Internal error executing tool '{name}({args})'"}
+                    result = {
+                        "ok": False,
+                        "error": f"Internal error executing tool '{name}({args})'",
+                    }
 
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tool_call.id,
-                    "name": name,
-                    "content": json.dumps(result),
-                })
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
+                        "name": name,
+                        "content": json.dumps(result),
+                    }
+                )
 
-            completion_kwargs["messages"] = messages
-
-        # Max iterations reached — force a final response without tools
+        # Max iterations reached, force a final response by disallowing tool calls
         self.logger.warning(
             f"Agent reached max iterations ({AGENT_MAX_ITERATIONS}). Forcing final response without tools."
         )
 
-        completion_kwargs.pop("tools", None)
-        completion_kwargs.pop("tool_choice", None)
+        completion_kwargs["tool_choice"] = "none"
 
-        messages.append({
-            "role": "system",
-            "content": "Maximum tool iterations reached. Please provide your final response based on the available information."
-        })
-        completion_kwargs["messages"] = messages
+        messages.append(
+            {
+                "role": "user",
+                "content": "Maximum tool iterations reached. Please provide your final response based on the available information.",
+            }
+        )
 
         response = self._completion_with_retry(**completion_kwargs)
         return response.choices[0].message.content or ""
