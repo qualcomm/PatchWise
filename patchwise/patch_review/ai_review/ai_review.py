@@ -19,7 +19,7 @@ from patchwise.utils.decorators import retry
 
 DEFAULT_MODEL = "Pro"
 DEFAULT_API_BASE = "https://api.openai.com/v1"
-AGENT_MAX_ITERATIONS = 25
+AGENT_MAX_ITERATIONS = 50
 
 
 class AiReview(PatchReview):
