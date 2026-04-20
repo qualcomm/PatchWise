@@ -121,7 +121,7 @@ class PatchReview(abc.ABC):
                     output += _stderr
 
                 if show_timer:
-                    sys.stdout.write("\r" + " " * 40 + "\r")  # Clear the line
+                    sys.stdout.write("\r\033[K")  # Clear to end of line
                     sys.stdout.flush()
                 elapsed = int(time.time() - start)
                 self.logger.debug(f"{desc}... {elapsed}s elapsed")
@@ -130,7 +130,7 @@ class PatchReview(abc.ABC):
             except subprocess.TimeoutExpired:
                 elapsed = int(time.time() - start)
                 if show_timer:
-                    sys.stdout.write(f"\r{desc}... {elapsed}s elapsed")
+                    sys.stdout.write(f"\r\033[K{desc}... {elapsed}s elapsed")
                     sys.stdout.flush()
             except (Exception, KeyboardInterrupt) as e:
                 process.kill()
