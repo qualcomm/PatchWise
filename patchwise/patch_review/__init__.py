@@ -3,27 +3,15 @@
 
 import argparse
 import atexit
-
-# Automatically import all patch review modules so all @register_patch_review classes are registered
-import importlib
 import logging
-import pkgutil
 import signal
 from typing import Any, Iterable
 
 from git.objects.commit import Commit
 
-from . import ai_review, static_analysis
-
-# Import all modules in static_analysis subpackage
-for _, modname, ispkg in pkgutil.iter_modules(static_analysis.__path__):
-    if not ispkg:
-        importlib.import_module(f"{__name__}.static_analysis.{modname}")
-
-# Import all modules in ai_review subpackage
-for _, modname, ispkg in pkgutil.iter_modules(ai_review.__path__):
-    if not ispkg:
-        importlib.import_module(f"{__name__}.ai_review.{modname}")
+# Import each review module so its @register_* decorators fire.
+from .static_analysis import checkpatch, coccicheck, dt_check, dtbs_check, sparse
+from .ai_review import ai_code_review, llm_commit_audit
 
 from patchwise.patch_review.decorators import (
     AVAILABLE_PATCH_REVIEWS,
