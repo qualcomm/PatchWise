@@ -307,6 +307,15 @@ class DockerManager:
         )
         return process
 
+    def read_file(self, path: str) -> Optional[str]:
+        """Read a file from inside the container. Returns None on failure."""
+        proc = self.run_command(["cat", path], cwd=None)
+        stdout, stderr = proc.communicate()
+        if proc.returncode != 0:
+            self.logger.debug(f"read_file({path}) failed: {stderr.strip()}")
+            return None
+        return stdout
+
     def ensure_clangd_index_dir(self) -> None:
         """Ensure clangd index directory exists in build volume with proper permissions."""
         index_dir = self.build_dir / ".clangd"
