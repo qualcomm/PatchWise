@@ -21,7 +21,7 @@ from .tool_definitions import TOOLS
 TS_INDEXER_PATH = "/home/patchwise/bin/ts_indexer.py"
 
 # Max open documents in clangd before LRU eviction
-_CLANGD_OPEN_FILE_CAPACITY = 16
+_CLANGD_OPEN_FILE_CAPACITY = 32
 
 
 def path_to_uri(path: str) -> str:
