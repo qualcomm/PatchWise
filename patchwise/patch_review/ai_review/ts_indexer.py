@@ -48,13 +48,19 @@ _TS_QUERY_SRC = """
         declarator: (identifier) @func.name)))) @func.body
 ; char **foo(int x) { ... }
 
-(struct_specifier  name: (type_identifier) @other.name) @other.body
+(struct_specifier
+  name: (type_identifier) @other.name
+  body: (field_declaration_list)) @other.body
 ; struct sk_buff { ... };
 
-(union_specifier   name: (type_identifier) @other.name) @other.body
+(union_specifier
+  name: (type_identifier) @other.name
+  body: (field_declaration_list)) @other.body
 ; union ktime { ... };
 
-(enum_specifier    name: (type_identifier) @other.name) @other.body
+(enum_specifier
+  name: (type_identifier) @other.name
+  body: (enumerator_list)) @other.body
 ; enum pci_state { ... };
 
 (type_definition   declarator: (type_identifier) @other.name) @other.body
