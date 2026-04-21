@@ -30,4 +30,5 @@ MANIFEST
 .github/copilot-instructions.md
 
 sandbox/
+tests/linux/
 
