@@ -836,6 +836,31 @@ regulator-name.
         except Exception as e:
             self.logger.debug(f"close failed for {uri}: {e}")
 
+    def _clangd_definition_once(
+        self, uri: str, line: int, col: int
+    ) -> Optional[Tuple[str, int, int]]:
+        """Single textDocument/definition call.
+
+        Returns (uri, line_0based, col_0based) or None.
+        """
+        try:
+            resp = self._find_definition(self.agent_lsp_proc, uri, line, col)
+        except Exception as e:
+            self.logger.debug(f"clangd definition call failed: {e}")
+            return None
+        result = resp.get("result") or []
+        if isinstance(result, dict):
+            result = [result]
+        if not result:
+            return None
+        loc = result[0]
+        loc_uri = loc.get("uri") or loc.get("targetUri") or ""
+        rng = loc.get("range") or loc.get("targetRange") or {}
+        start = rng.get("start") or {}
+        if not loc_uri or "line" not in start:
+            return None
+        return loc_uri, start["line"], start.get("character", 0)
+
     def _rank_candidates(
         self, candidates: List[Dict[str, Any]], file_hint: Optional[str]
     ) -> List[Dict[str, Any]]:
@@ -845,8 +870,8 @@ regulator-name.
 
         # TO-DO: add a tier for "#include files of a seen file
 
-        # "Same subsystem" (drivers/mtd, net/ipv4, drivers/gpio)
         def _prefixes(p: str) -> Set[str]:
+            """Same subsystem (drivers/mtd, net/ipv4, drivers/gpio)"""
             parts = p.split("/")
             return {"/".join(parts[:k]) for k in range(2, len(parts) + 1)}
 
@@ -870,89 +895,67 @@ regulator-name.
 
         return sorted(
             candidates,
-            key=lambda c: (tier(c), c["file"]),
+            key=lambda c: (tier(c), c["file"], c["start_line"]),
         )
 
     _TS_LOOKUP_LIMIT = 100
+    _RANKED_CANDIDATE_LIMIT = 10
 
-    def _resolve_name_to_location(
+    def _resolve_name_to_locations(
         self, name: str, file_hint: Optional[str]
-    ) -> Optional[Dict[str, Any]]:
-        """Resolve a bare name to (best_candidate, alternatives)."""
+    ) -> Optional[List[Dict[str, Any]]]:
+        """Return up to _RANKED_CANDIDATE_LIMIT ranked ts candidates."""
         candidates = self._ts_lookup(name, limit=self._TS_LOOKUP_LIMIT)
         if not candidates:
             return None
         ranked = self._rank_candidates(candidates, file_hint)
-        best = ranked[0]
-        alternatives: List[Dict[str, Any]] = []
-        if best["file"] not in self.seen_files and len(ranked) > 1:
-            seen_alt_files: Set[str] = {best["file"]}
-            for c in ranked[1:]:
-                if c["file"] in seen_alt_files:
-                    continue
-                alternatives.append(c)
-                seen_alt_files.add(c["file"])
-                if len(alternatives) == 5:
-                    break
-        return {"best": best, "alternatives": alternatives}
+        return ranked[: self._RANKED_CANDIDATE_LIMIT]
 
-    def _name_to_clangd_position(
-        self, name: str, file_hint: Optional[str]
-    ) -> Optional[Tuple[str, int, int, Dict[str, Any]]]:
-        """Resolve name to (docker_uri, line_0based, character_0based, best_candidate)."""
-        resolved = self._resolve_name_to_location(name, file_hint)
-        if resolved is None:
-            return None
-        best = resolved["best"]
-        uri = path_to_uri(str(self.docker_manager.kernel_dir / best["file"]))
-        line = best["name_line"] - 1
-        character = best["name_col"]
-        return uri, line, character, best
+    def _is_active_definition(self, ts_def: Dict[str, Any]) -> bool:
+        """Two-hop textDocument/definition check.
 
-    def _resolve_definition_via_clangd(
-        self, ts_candidate: Dict[str, Any], name: str
-    ) -> Optional[Dict[str, Any]]:
-        """Ask clangd for the active definition at a tree-sitter-picked position.
-
-        Tree-sitter sees every textual definition, including every #ifdef
-        branch. For symbols defined under mutually-exclusive CONFIG_* macros,
-        only clangd knows which branch the current build selects.
+        clangd toggles between declaration and definition: on an active
+        definition it returns the declaration, and on a declaration it
+        returns the definition. Two hops from a candidate therefore reach
+        the active definition. If either hop lands back on our starting
+        position, this candidate IS the active definition.
         """
-        uri = path_to_uri(str(self.docker_manager.kernel_dir / ts_candidate["file"]))
-        try:
-            resp = self._find_definition(
-                self.agent_lsp_proc,
-                uri,
-                ts_candidate["name_line"] - 1,
-                ts_candidate["name_col"],
+        uri = path_to_uri(str(self.docker_manager.kernel_dir / ts_def["file"]))
+        line = ts_def["name_line"] - 1
+        col = ts_def["name_col"]
+        self._open_document(uri)
+        hop1 = self._clangd_definition_once(uri, line, col)
+        if hop1 is None:
+            return False
+        if hop1[0] == uri and hop1[1] == line and hop1[2] == col:
+            return True
+        hop2 = self._clangd_definition_once(hop1[0], hop1[1], hop1[2])
+        if hop2 is None:
+            return False
+        if hop2[0] == uri and hop2[1] == line and hop2[2] == col:
+            return True
+        return False
+
+    def _find_active_definition(
+        self, name: str, file_hint: Optional[str]
+    ) -> Optional[Dict[str, Any]]:
+        """Return the ts candidate clangd confirms as the active definition, or None."""
+        if file_hint:
+            hint_uri = path_to_uri(
+                str(self.docker_manager.kernel_dir / self._kernel_rel(file_hint))
             )
-        except Exception as e:
-            self.logger.debug(f"clangd definition probe failed for {name}: {e}")
+            self._open_document(hint_uri)
+        candidates = self._resolve_name_to_locations(name, file_hint)
+        if candidates is None:
+            self.logger.debug(f"No candidates found in ts lookup for {name}")
             return None
-        result = resp.get("result") or []
-        if isinstance(result, dict):
-            result = [result]
-        if not result:
-            return None
-        loc = result[0]
-        loc_uri = loc.get("uri") or loc.get("targetUri") or ""
-        rng = loc.get("range") or loc.get("targetRange") or {}
-        start = rng.get("start") or {}
-        if not loc_uri or "line" not in start:
-            return None
-        active_rel = self._kernel_rel(loc_uri)
-        active_line = start["line"] + 1
-        # Use tree-sitter entry to get the body range.
-        for entry in self._ts_lookup(name, limit=self._TS_LOOKUP_LIMIT):
-            if entry["file"] == active_rel and (
-                entry["start_line"] == active_line
-                or entry["start_line"] <= active_line <= entry["end_line"]
-            ):
-                return entry
-        raise ValueError(
-            f"clangd definition for '{name}' at {active_rel}:{active_line} "
-            f"has no matching tree-sitter entry."
-        )
+        if len(candidates) == 1:
+            return candidates[0]
+        for cand in candidates:
+            if self._is_active_definition(cand):
+                return cand
+        self.logger.error(f"No active definition found for {name}")
+        return None
 
     def get_tools(self) -> Optional[List[Dict[str, Any]]]:
         return TOOLS
@@ -982,40 +985,33 @@ regulator-name.
     def _tool_find_definition(
         self, name: str, file: Optional[str] = None
     ) -> Dict[str, Any]:
-        resolved = self._resolve_name_to_location(name, file)
-        if resolved is None:
+        active_def = self._find_active_definition(name, file)
+        if active_def is None:
             return {"ok": False, "error": f"symbol '{name}' not found in index"}
-        best = resolved["best"]
-        alternatives = resolved["alternatives"]
 
-        # Prefer clangd over tree-sitter: for symbols with multiple textual
-        # definitions (e.g. #ifdef CONFIG_* variants), only clangd knows
-        # which branch compile_commands.json selects.
-        active = self._resolve_definition_via_clangd(best, name)
-        if active is not None:
-            best = active
-            alternatives = []
-
-        self.seen_files.add(best["file"])
+        self.seen_files.add(active_def["file"])
 
         definition = {
-            "path": best["file"],
-            "line": best["start_line"],
+            "path": active_def["file"],
+            "line": active_def["start_line"],
             "snippet": self._snippet_for_range(
-                best["file"], best["start_line"], best["end_line"], ctx=0
+                active_def["file"],
+                active_def["start_line"],
+                active_def["end_line"],
+                ctx=0,
             ),
         }
 
         declaration: Optional[Dict[str, Any]] = None
         try:
-            if not best["file"].endswith((".c", ".h")):
-                raise RuntimeError(f"skip non-C declaration lookup: {best['file']}")
-            docker_uri = path_to_uri(str(self.docker_manager.kernel_dir / best["file"]))
+            docker_uri = path_to_uri(
+                str(self.docker_manager.kernel_dir / active_def["file"])
+            )
             decl_response = self._find_declaration(
                 self.agent_lsp_proc,
                 docker_uri,
-                best["name_line"] - 1,
-                best["name_col"],
+                active_def["name_line"] - 1,
+                active_def["name_col"],
             )
             decl_result = decl_response.get("result") or []
             if isinstance(decl_result, dict):
@@ -1028,7 +1024,10 @@ regulator-name.
                 if loc_uri and "line" in start:
                     decl_rel = self._kernel_rel(loc_uri)
                     decl_line = start["line"] + 1
-                    if decl_rel != best["file"] or decl_line != best["start_line"]:
+                    if (
+                        decl_rel != active_def["file"]
+                        or decl_line != active_def["start_line"]
+                    ):
                         declaration = {
                             "path": decl_rel,
                             "line": decl_line,
@@ -1044,22 +1043,21 @@ regulator-name.
             "declaration": declaration,
             "definition": definition,
         }
-        if alternatives:
-            result["alternatives"] = [
-                {"path": c["file"], "line": c["start_line"]} for c in alternatives
-            ]
+
         return {"ok": True, **result}
 
     def _tool_find_references(
         self, name: str, file: Optional[str] = None
     ) -> Dict[str, Any]:
-        pos = self._name_to_clangd_position(name, file)
-        if pos is None:
+        active_def = self._find_active_definition(name, file)
+        if active_def is None:
             return {"ok": False, "error": f"symbol '{name}' not found in index"}
-        uri, line, character, best = pos
-        self.seen_files.add(best["file"])
+        uri = path_to_uri(str(self.docker_manager.kernel_dir / active_def["file"]))
+        line = active_def["name_line"] - 1
+        col = active_def["name_col"]
+        self.seen_files.add(active_def["file"])
 
-        response = self._find_references(self.agent_lsp_proc, uri, line, character)
+        response = self._find_references(self.agent_lsp_proc, uri, line, col)
         refs = response.get("result") or []
         if isinstance(refs, dict):
             refs = [refs]
@@ -1094,11 +1092,13 @@ regulator-name.
     def _tool_find_callers(
         self, name: str, file: Optional[str] = None
     ) -> Dict[str, Any]:
-        pos = self._name_to_clangd_position(name, file)
-        if pos is None:
+        active_def = self._find_active_definition(name, file)
+        if active_def is None:
             return {"ok": False, "error": f"symbol '{name}' not found in index"}
-        uri, line, character, best = pos
-        if best["kind"] != "function":
+        uri = path_to_uri(str(self.docker_manager.kernel_dir / active_def["file"]))
+        line = active_def["name_line"] - 1
+        col = active_def["name_col"]
+        if active_def["kind"] != "function":
             return {
                 "ok": False,
                 "error": (
@@ -1107,9 +1107,9 @@ regulator-name.
                     f"non-function symbols."
                 ),
             }
-        self.seen_files.add(best["file"])
+        self.seen_files.add(active_def["file"])
 
-        response = self._get_callers(self.agent_lsp_proc, uri, line, character)
+        response = self._get_callers(self.agent_lsp_proc, uri, line, col)
         calls = response.get("result") or []
         if isinstance(calls, dict):
             calls = [calls]
@@ -1323,8 +1323,6 @@ regulator-name.
             return {"ok": False, "error": f"unknown tool: {name}"}
 
         try:
-            if not hasattr(self, "agent_lsp_proc") or self.agent_lsp_proc is None:
-                self.agent_lsp_proc = self._setup_lsp_client()
             return tool_fn(**args)
         except TypeError as e:
             return {"ok": False, "error": f"bad arguments for '{name}': {e}"}
@@ -1497,11 +1495,13 @@ regulator-name.
 
         # Per-review agent state.
         self.ts_daemon: Optional[subprocess.Popen[Any]] = None
+        self.agent_lsp_proc: Optional[subprocess.Popen[Any]] = None
         self.seen_files: Set[str] = set()
 
         self.seen_files |= self._files_in_diff()
 
         self.generate_compile_commands()
+        self.agent_lsp_proc = self._setup_lsp_client()
         self._start_ts_daemon()
 
     def run(self) -> str:
