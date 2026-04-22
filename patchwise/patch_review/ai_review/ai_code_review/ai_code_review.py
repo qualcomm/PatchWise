@@ -248,8 +248,8 @@ regulator-name.
         self.logger.debug("Running make defconfig")
         self._run_make_command(["defconfig"])
 
-        self.logger.debug("Running make prepare")
-        self._run_make_command(["prepare"])
+        self.logger.debug("Running make archprepare")
+        self._run_make_command(["archprepare"])
 
         self.logger.debug("Generating compile commands using compiledb")
         make_dryrun_cmd = [
