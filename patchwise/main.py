@@ -9,6 +9,7 @@ from git import Repo
 from git.objects.commit import Commit
 from rich_argparse import RichHelpFormatter
 
+from patchwise import OUTPUT_PATH
 from .logger_setup import add_logging_arguments, setup_logger
 from .patch_review import (
     add_review_arguments,
@@ -46,6 +47,13 @@ def parse_args(config: dict) -> argparse.Namespace:
 
     logging_group = parser.add_argument_group("Logging Options")
     add_logging_arguments(logging_group, config)
+
+    output_group = parser.add_argument_group("Output Options")
+    output_group.add_argument(
+        "--output-dir",
+        default=str(OUTPUT_PATH),
+        help="Directory to save the review results. (default: %(default)s)",
+    )
 
     return parser.parse_args()
 
@@ -101,7 +109,17 @@ def main():
 
     for commit in commits:
         logger.info(f"Reviewing commit {commit.hexsha}...")
-        review_commit(reviews, commit, args.repo_path)
+        results = review_commit(reviews, commit, args.repo_path)
+        
+        # Save results to output directory
+        output_dir = Path(args.output_dir) / commit.hexsha
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        for review_name, result_text in results.results.items():
+            output_file = output_dir / f"{review_name.lower()}.txt"
+            with open(output_file, "w", encoding="utf-8") as f:
+                f.write(result_text if result_text else "No issues found\n")
+            logger.debug(f"Saved {review_name} results to {output_file}")
 
 
 if __name__ == "__main__":
