@@ -32,3 +32,4 @@ MANIFEST
 sandbox/
 tests/linux/
 
+venv/
