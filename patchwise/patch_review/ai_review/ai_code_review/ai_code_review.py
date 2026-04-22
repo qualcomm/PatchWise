@@ -634,9 +634,22 @@ regulator-name.
         self.logger.debug(f"Received LSP declaration response: {json.dumps(response)}")
         return response
 
+    @staticmethod
+    def _lsp_error_message(response: Dict[str, Any]) -> Optional[str]:
+        err = response.get("error")
+        if not err:
+            return None
+        if isinstance(err, dict):
+            msg = err.get("message") or json.dumps(err)
+            code = err.get("code")
+            return (
+                f"LSP error {code}: {msg}" if code is not None else f"LSP error: {msg}"
+            )
+        return f"LSP error: {err}"
+
     def _prepare_call_hierarchy(
         self, proc: subprocess.Popen[Any], uri: str, line: int, character: int
-    ) -> List[Dict[str, Any]]:
+    ) -> Tuple[List[Dict[str, Any]], Optional[str]]:
         """Resolve a CallHierarchyItem for the symbol at the position (file must be open)."""
         prepare_msg = self._create_lsp_message(
             "textDocument/prepareCallHierarchy",
@@ -651,17 +664,22 @@ regulator-name.
         response = self._read_lsp_response(
             proc, expected_id=self.PREPARE_CALL_HIERARCHY_MSG_ID
         )
+        error = self._lsp_error_message(response)
+        if error:
+            return [], error
         result = response.get("result") or []
         if isinstance(result, dict):
             result = [result]
-        return result
+        return result, None
 
     def _get_callers(
         self, proc: subprocess.Popen[Any], uri: str, line: int, character: int
     ) -> Dict[str, Any]:
         """Incoming call hierarchy."""
         self._open_document(uri)
-        items = self._prepare_call_hierarchy(proc, uri, line, character)
+        items, prep_error = self._prepare_call_hierarchy(proc, uri, line, character)
+        if prep_error:
+            return {"result": [], "error": prep_error}
         if not items:
             return {
                 "result": [],
@@ -676,6 +694,9 @@ regulator-name.
         self.logger.debug(f"Sending incomingCalls: {json.dumps(incoming_msg)}")
         self._send_lsp_message(proc, incoming_msg)
         response = self._read_lsp_response(proc, expected_id=self.INCOMING_CALLS_MSG_ID)
+        error = self._lsp_error_message(response)
+        if error:
+            return {"result": [], "error": error}
         calls = response.get("result") or []
         if isinstance(calls, dict):
             calls = [calls]
@@ -686,7 +707,9 @@ regulator-name.
     ) -> Dict[str, Any]:
         """Outgoing call hierarchy. Document lifetime is LRU-cached."""
         self._open_document(uri)
-        items = self._prepare_call_hierarchy(proc, uri, line, character)
+        items, prep_error = self._prepare_call_hierarchy(proc, uri, line, character)
+        if prep_error:
+            return {"result": [], "error": prep_error}
         if not items:
             return {
                 "result": [],
@@ -701,6 +724,9 @@ regulator-name.
         self.logger.debug(f"Sending outgoingCalls: {json.dumps(outgoing_msg)}")
         self._send_lsp_message(proc, outgoing_msg)
         response = self._read_lsp_response(proc, expected_id=self.OUTGOING_CALLS_MSG_ID)
+        error = self._lsp_error_message(response)
+        if error:
+            return {"result": [], "error": error}
         calls = response.get("result") or []
         if isinstance(calls, dict):
             calls = [calls]
@@ -711,8 +737,9 @@ regulator-name.
         s = path_or_uri
         if s.startswith("file://"):
             s = uri_to_path(s)
-        if s.startswith("/home/patchwise/kernel/"):
-            s = s[len("/home/patchwise/kernel/") :]
+        kernel_dir = str(self.docker_manager.kernel_dir)
+        if s.startswith(kernel_dir + "/"):
+            s = s[len(kernel_dir) + 1 :]
         kp = str(self.kernel_path).rstrip("/")
         if s.startswith(kp + "/"):
             s = s[len(kp) + 1 :]
@@ -1110,6 +1137,8 @@ regulator-name.
         self.seen_files.add(active_def["file"])
 
         response = self._get_callers(self.agent_lsp_proc, uri, line, col)
+        if response.get("error"):
+            return {"ok": False, "error": response["error"]}
         calls = response.get("result") or []
         if isinstance(calls, dict):
             calls = [calls]
@@ -1131,14 +1160,33 @@ regulator-name.
         del name, file
         return {"ok": False, "error": "find_calls not implemented"}
 
-    def _tool_grep(self, pattern: str, file: Optional[str] = None) -> Dict[str, Any]:
+    def _tool_grep(
+        self,
+        pattern: str,
+        file: Optional[str] = None,
+        glob: Optional[str] = None,
+    ) -> Dict[str, Any]:
         try:
             re.compile(pattern)
         except re.error as e:
             return {"ok": False, "error": f"invalid regex: {e}"}
 
-        file_filter = self._kernel_rel(file) if file else None
-        kernel_dir = self.docker_manager.sandbox_path / "kernel"
+        file_filter: Optional[str] = None
+        if file:
+            try:
+                self._abs_in_kernel(file)
+            except ValueError as e:
+                return {"ok": False, "error": str(e)}
+            file_filter = self._kernel_rel(file)
+            container_path = str(self.docker_manager.kernel_dir / file_filter)
+            check = self.docker_manager.run_command(
+                ["test", "-f", container_path], cwd=None
+            )
+            check.communicate()
+            if check.returncode != 0:
+                return {"ok": False, "error": f"file not found: {file_filter}"}
+
+        kernel_dir = self.docker_manager.kernel_dir
 
         rg_cmd: List[str] = [
             "rg",
@@ -1149,17 +1197,12 @@ regulator-name.
             "500",
         ]
         if file_filter:
-            rg_cmd += ["-e", pattern, f"/home/patchwise/kernel/{file_filter}"]
+            rg_cmd += ["-e", pattern, str(kernel_dir / file_filter)]
         else:
-            rg_cmd += [
-                "--glob",
-                "*.c",
-                "--glob",
-                "*.h",
-                "-e",
-                pattern,
-                str(kernel_dir),
-            ]
+            globs = [g.strip() for g in glob.split(",")] if glob else ["*.c", "*.h"]
+            for g in globs:
+                rg_cmd += ["--glob", g]
+            rg_cmd += ["-e", pattern, str(kernel_dir)]
 
         try:
             output = self.run_cmd_with_timer(

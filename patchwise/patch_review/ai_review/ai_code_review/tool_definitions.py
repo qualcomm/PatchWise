@@ -91,12 +91,15 @@ TOOLS = [
         "function": {
             "name": "grep",
             "description": (
-                "Search for a regex pattern across the kernel's C and header "
-                "files. Each result is {path, line, snippet, enclosing_function}: "
+                "Search for a regex pattern across the kernel source tree. "
+                "Each result is {path, line, snippet, enclosing_function}: "
                 "enclosing_function names the function the hit sits inside, or "
                 "is null for hits at file scope (macro definitions, struct/enum "
                 "declarations, static initializers, EXPORT_SYMBOL_*, etc.). "
-                "Capped at 100; 'total' and 'truncated' indicate overflow."
+                "Capped at 100; 'total' and 'truncated' indicate overflow. "
+                "By default searches *.c and *.h only. Use `glob` to widen: "
+                "e.g. '*.dts,*.dtsi,*.yaml' for DT/binding reviews, "
+                "'Kconfig,Makefile' for build-system searches."
             ),
             "parameters": {
                 "type": "object",
@@ -108,6 +111,14 @@ TOOLS = [
                     "file": {
                         "type": "string",
                         "description": "Optional kernel-relative file to restrict the search to.",
+                    },
+                    "glob": {
+                        "type": "string",
+                        "description": (
+                            "Comma-separated ripgrep glob patterns to filter which files "
+                            "are searched (e.g. '*.dts,*.dtsi,*.yaml' or 'Kconfig,Makefile'). "
+                            "Ignored when `file` is set. Defaults to '*.c,*.h'."
+                        ),
                     },
                 },
                 "required": ["pattern"],
