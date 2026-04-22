@@ -267,10 +267,87 @@ def test_grep(
     ), f"no hit touching {must_contain!r}"
 
 
-def test_grep_invalid_regex(review: AiCodeReview) -> None:
-    result = review.dispatch_tool("grep", {"pattern": "(unclosed"})
+def test_grep_glob_dts(review: AiCodeReview) -> None:
+    """lpass_wsa2macro is a DT node name; default *.c/*.h must miss it."""
+    default = review.dispatch_tool("grep", {"pattern": "lpass_wsa2macro"})
+    assert default.get("ok"), f"default grep failed: {default}"
+    assert default.get("total", 0) == 0, "lpass_wsa2macro should not appear in *.c/*.h"
+
+    wide = review.dispatch_tool(
+        "grep", {"pattern": "lpass_wsa2macro", "glob": "*.dts,*.dtsi"}
+    )
+    assert wide.get("ok"), f"glob grep failed: {wide}"
+    assert (
+        wide.get("total", 0) >= 1
+    ), "expected lpass_wsa2macro hits in *.dts/*.dtsi files"
+    hits = wide.get("result", [])
+    assert all(
+        h["path"].endswith((".dts", ".dtsi")) for h in hits
+    ), "non-DT file slipped through glob filter"
+
+
+def test_grep_glob_kconfig(review: AiCodeReview) -> None:
+    """glob=Kconfig restricts results to Kconfig files."""
+    result = review.dispatch_tool("grep", {"pattern": "REMOTEPROC", "glob": "Kconfig"})
+    assert result.get("ok"), f"glob grep failed: {result}"
+    assert result.get("total", 0) >= 1, "expected REMOTEPROC hits in Kconfig files"
+    hits = result.get("result", [])
+    assert all(
+        "Kconfig" in h["path"] for h in hits
+    ), "non-Kconfig file slipped through glob filter"
+
+
+def test_grep_glob_star_no_hits(review: AiCodeReview) -> None:
+    """glob=* with a garbage pattern returns ok with zero hits."""
+    result = review.dispatch_tool(
+        "grep", {"pattern": "dsajkdjsaiojwoqjo", "glob": "*"}
+    )
+    assert result.get("ok"), f"tool returned not-ok: {result}"
+    assert result.get("total", 0) == 0, f"expected 0 hits, got {result.get('total')}"
+
+
+def test_grep_glob_star_qcom_msm8226_adsp_pil(review: AiCodeReview) -> None:
+    """glob=* finds qcom,msm8226-adsp-pil across C, DT, and YAML files."""
+    result = review.dispatch_tool(
+        "grep", {"pattern": "qcom,msm8226-adsp-pil", "glob": "*"}
+    )
+    assert result.get("ok"), f"tool returned not-ok: {result}"
+    hits = result.get("result", [])
+
+    def count_in(suffix: str) -> int:
+        return sum(1 for h in hits if h["path"].endswith(suffix))
+
+    assert count_in("arch/arm/boot/dts/qcom/qcom-msm8226.dtsi") == 1
+    assert count_in("Documentation/devicetree/bindings/remoteproc/qcom,adsp.yaml") == 5
+    assert count_in("drivers/remoteproc/qcom_q6v5_pas.c") == 1
+
+
+# Bad inputs must surface an error, never a silent ok/total=0.
+@pytest.mark.parametrize(
+    "args,expected_error",
+    [
+        ({"pattern": "(unclosed"}, "invalid regex"),
+        (
+            {"pattern": "anything", "file": "does/not/exist/nowhere.yaml"},
+            "file not found",
+        ),
+        (
+            {"pattern": "anything", "file": "../../../etc/passwd"},
+            "escapes kernel tree",
+        ),
+        (
+            {"pattern": "anything", "file": "drivers/remoteproc"},
+            "file not found",
+        ),
+    ],
+    ids=["invalid_regex", "missing_file", "path_escape", "file_is_directory"],
+)
+def test_grep_errors(
+    review: AiCodeReview, args: Dict[str, Any], expected_error: str
+) -> None:
+    result = review.dispatch_tool("grep", args)
     assert not result.get("ok"), f"unexpectedly ok: {result}"
-    assert "invalid regex" in (result.get("error") or "")
+    assert expected_error in (result.get("error") or "")
 
 
 # ---------------------------------------------------------------------------
@@ -308,8 +385,9 @@ def test_read_file(
     [
         ("../../../etc/passwd", "escapes kernel tree"),
         ("does/not/exist.c", "not a file"),
+        ("drivers/remoteproc", "not a file"),
     ],
-    ids=["path_escape", "missing"],
+    ids=["path_escape", "missing", "path_is_directory"],
 )
 def test_read_file_errors(review: AiCodeReview, path: str, expected_error: str) -> None:
     result = review.dispatch_tool("read_file", {"path": path})
@@ -352,8 +430,9 @@ def test_list_files(
     [
         ("../../etc", "escapes kernel tree"),
         ("does/not/exist", "not a directory"),
+        ("fs/open.c", "not a directory"),
     ],
-    ids=["path_escape", "missing"],
+    ids=["path_escape", "missing", "path_is_file"],
 )
 def test_list_files_errors(
     review: AiCodeReview, path: str, expected_error: str
