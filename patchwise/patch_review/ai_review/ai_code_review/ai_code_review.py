@@ -129,7 +129,6 @@ Tools (all paths are kernel-relative, e.g. `drivers/mtd/nand/raw/qcom_nandc.c`):
 - `find_definition(name, file?)`
 - `find_callers(name, file?)`
 - `find_calls(name, file?)`
-- `find_references(name, file?)`
 - `grep(pattern, file?)`
 - `read_file(path, start?, end?)`
 - `list_files(path, recursive?)`
@@ -597,23 +596,6 @@ regulator-name.
         )
         return response
 
-    def _find_references(
-        self, proc: subprocess.Popen[Any], uri: str, line: int, character: int
-    ) -> Dict[str, Any]:
-        """Find references using LSP."""
-        self._open_document(uri)
-        ref_msg = self._create_lsp_message(
-            "textDocument/references",
-            {
-                "textDocument": {"uri": uri},
-                "position": {"line": line, "character": character},
-                "context": {"includeDeclaration": False},
-            },
-            self.REFERENCE_MSG_ID,
-        )
-        self.logger.debug(f"Sending LSP references request: {json.dumps(ref_msg)}")
-        self._send_lsp_message(proc, ref_msg)
-        return self._read_lsp_response(proc, expected_id=self.REFERENCE_MSG_ID)
 
     def _find_declaration(
         self, proc: subprocess.Popen[Any], uri: str, line: int, character: int
@@ -1073,48 +1055,6 @@ regulator-name.
 
         return {"ok": True, **result}
 
-    def _tool_find_references(
-        self, name: str, file: Optional[str] = None
-    ) -> Dict[str, Any]:
-        active_def = self._find_active_definition(name, file)
-        if active_def is None:
-            return {"ok": False, "error": f"symbol '{name}' not found in index"}
-        uri = path_to_uri(str(self.docker_manager.kernel_dir / active_def["file"]))
-        line = active_def["name_line"] - 1
-        col = active_def["name_col"]
-        self.seen_files.add(active_def["file"])
-
-        response = self._find_references(self.agent_lsp_proc, uri, line, col)
-        refs = response.get("result") or []
-        if isinstance(refs, dict):
-            refs = [refs]
-
-        total = len(refs)
-        truncated = total > 100
-        refs = refs[:100]
-
-        formatted: List[Dict[str, Any]] = []
-        for r in refs:
-            u = r.get("uri") or r.get("targetUri") or ""
-            rng = r.get("range") or r.get("targetRange") or {}
-            start = rng.get("start") or {}
-            line_num = start.get("line", -1) + 1
-            rel = self._kernel_rel(u)
-            self.seen_files.add(rel)
-            formatted.append(
-                {
-                    "path": rel,
-                    "line": line_num,
-                    "container": r.get("containerName"),
-                    "snippet": self._snippet_for_range(rel, line_num, line_num, ctx=2),
-                }
-            )
-        return {
-            "ok": True,
-            "result": formatted,
-            "total": total,
-            "truncated": truncated,
-        }
 
     def _tool_find_callers(
         self, name: str, file: Optional[str] = None
@@ -1130,8 +1070,7 @@ regulator-name.
                 "ok": False,
                 "error": (
                     f"'{name}' is not a function; clangd's call hierarchy "
-                    f"only covers callables. Use find_references for "
-                    f"non-function symbols."
+                    f"only covers callables. Use grep for non-function symbols."
                 ),
             }
         self.seen_files.add(active_def["file"])
@@ -1354,7 +1293,6 @@ regulator-name.
         """Dispatch an agent tool by name. Returns {ok, ...}."""
         tool_map = {
             "find_definition": self._tool_find_definition,
-            "find_references": self._tool_find_references,
             "find_callers": self._tool_find_callers,
             "find_calls": self._tool_find_calls,
             "grep": self._tool_grep,

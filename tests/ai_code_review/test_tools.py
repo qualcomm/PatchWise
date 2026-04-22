@@ -7,8 +7,7 @@ Boots the full AiCodeReview pipeline (docker + clangd + ts_indexer) against
 a pinned linux-next checkout cloned into tests/linux/, then exercises each
 tool exposed via AiCodeReview.dispatch_tool:
 
-  find_definition / find_references / find_callers / find_calls /
-  grep / read_file / list_files
+  find_definition / find_callers / find_calls / grep / read_file / list_files
 
 Run with the patchwise venv active.
 
@@ -135,55 +134,6 @@ def test_find_definition_errors(
     assert expected_error in (result.get("error") or "")
 
 
-# ---------------------------------------------------------------------------
-# find_references
-# ---------------------------------------------------------------------------
-
-
-# textDocument/references depends on clangd's background index. Providing
-# a file hint pre-opens that TU so clangd has somewhere to look. Thresholds
-# are intentionally low — a cold-start query may still see a partial index.
-@pytest.mark.parametrize(
-    "name,file_hint,min_count,must_contain",
-    [
-        ("rproc_boot", None, 1, "drivers/remoteproc/"),
-        ("do_sys_openat2", None, 1, "fs/"),
-        (
-            "rproc_get_by_phandle",
-            "drivers/remoteproc/remoteproc_core.c",
-            1,
-            "drivers/remoteproc/",
-        ),
-    ],
-    ids=lambda v: str(v),
-)
-def test_find_references(
-    review: AiCodeReview,
-    name: str,
-    file_hint: Optional[str],
-    min_count: int,
-    must_contain: str,
-) -> None:
-    args: Dict[str, Any] = {"name": name}
-    if file_hint is not None:
-        args["file"] = file_hint
-    result = review.dispatch_tool("find_references", args)
-    assert result.get("ok"), f"tool returned not-ok: {result}"
-    refs = result.get("result", [])
-    total = result.get("total", 0)
-    assert total >= min_count, f"only {total} refs (wanted >= {min_count})"
-    assert any(
-        must_contain in r["path"] for r in refs
-    ), f"no ref touching {must_contain!r}"
-
-
-def test_find_references_nonexistent(review: AiCodeReview) -> None:
-    result = review.dispatch_tool(
-        "find_references", {"name": "djskaldx_no_such_symbol"}
-    )
-    assert not result.get("ok"), f"unexpectedly ok: {result}"
-    assert "not found in index" in (result.get("error") or "")
-
 
 # ---------------------------------------------------------------------------
 # find_callers
@@ -226,12 +176,6 @@ def test_find_callers_errors(
 # ---------------------------------------------------------------------------
 
 
-def test_find_calls_not_implemented(review: AiCodeReview) -> None:
-    result = review.dispatch_tool("find_calls", {"name": "do_sys_openat2"})
-    assert not result.get("ok"), "tool returned ok (expected not-implemented)"
-    assert "not implemented" in (
-        result.get("error") or ""
-    ), f"unexpected error: {result.get('error')}"
 
 
 # ---------------------------------------------------------------------------

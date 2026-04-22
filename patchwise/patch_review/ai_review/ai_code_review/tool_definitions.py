@@ -47,28 +47,13 @@ TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "find_references",
-            "description": (
-                "Find all references to a symbol across the kernel tree. Each "
-                "result includes the containing function or struct (container). "
-                "Use find_callers instead for function call sites specifically. "
-                "Result capped at 100; 'total' and 'truncated' fields indicate "
-                "overflow."
-            ),
-            "parameters": _NAME_PARAM,
-        },
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "find_callers",
             "description": (
                 "One level of incoming call hierarchy for a function: who "
                 "calls this function. Returns an error for non-function "
-                "symbols (use find_references for structs, macros, "
-                "variables, etc.). Each result is {name, path, line, "
-                "snippet}. Capped at 100; 'total' and 'truncated' indicate "
-                "overflow."
+                "symbols (use grep for structs, macros, variables, etc.). "
+                "Each result is {name, path, line, snippet}. Capped at 100; "
+                "'total' and 'truncated' indicate overflow."
             ),
             "parameters": _NAME_PARAM,
         },
