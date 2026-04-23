@@ -173,6 +173,7 @@ class AiReview(PatchReview):
             completion_kwargs["allowed_openai_params"] = ["tools", "tool_choice"]
 
         for iteration in range(1, AGENT_MAX_ITERATIONS + 1):
+            self._agent_iteration = iteration
             self.logger.debug(f"Agent iteration {iteration}/{AGENT_MAX_ITERATIONS}")
 
             response = self._completion_with_retry(**completion_kwargs)
