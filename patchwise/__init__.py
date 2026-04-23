@@ -18,5 +18,10 @@ SANDBOX_BIN = SANDBOX_PATH / "bin"
 # Define the kernel workspace path
 KERNEL_PATH = SANDBOX_PATH / "kernel"
 
+# Define the output directory path
+_default_output = Path("/tmp") / PACKAGE_NAME / "output"
+OUTPUT_PATH = Path(os.environ.get("PATCHWISE_OUTPUT_PATH", str(_default_output)))
+
 # Ensure the sandbox directory exists
 SANDBOX_PATH.mkdir(parents=True, exist_ok=True)
+OUTPUT_PATH.mkdir(parents=True, exist_ok=True)
