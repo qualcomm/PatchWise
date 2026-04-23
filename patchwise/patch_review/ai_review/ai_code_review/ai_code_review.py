@@ -66,6 +66,64 @@ Review the following patch diff and provide inline feedback on the code changes.
 
 """
 
+    REVIEW_CLEANUP_PROMPT_TEMPLATE = """
+You are given a linux kernel patch diff and an AI review of it.
+Your task is to make sure it is a plaintext in-line review.
+Your output should only contain the in-line review and nothing else.
+
+- Remove any thinking and internal reasoning.
+- Do NOT rephrase.
+- If the review has no actionable issue, your response must be, "No issues found."
+
+Example in-line review by linux kernel maintainer:
+```
+> diff --git a/arch/arm64/Kconfig.platforms b/arch/arm64/Kconfig.platforms
+> index a541bb029..0ffd65e36 100644
+> --- a/arch/arm64/Kconfig.platforms
+> +++ b/arch/arm64/Kconfig.platforms
+> @@ -270,6 +270,7 @@ config ARCH_QCOM
+>  	select GPIOLIB
+>  	select PINCTRL
+>  	select HAVE_PWRCTRL if PCI
+> +	select PCI_PWRCTRL_SLOT if PCI
+
+PWRCTL isn't a fundamental feature of ARCH_QCOM, so why do we select it
+here?
+
+> diff --git a/arch/arm64/boot/dts/qcom/sm8550-hdk.dts b/arch/arm64/boot/dts/qcom/sm8550-hdk.dts
+> index 29bc1ddfc7b25f203c9f3b530610e45c44ae4fb2..fe46699804b3a8fb792edc06b58b961778cd8d70 100644
+> --- a/arch/arm64/boot/dts/qcom/sm8550-hdk.dts
+> +++ b/arch/arm64/boot/dts/qcom/sm8550-hdk.dts
+> @@ -857,10 +857,10 @@ vreg_l5n_1p8: ldo5 {{
+>  			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+>  		}};
+>
+> -		vreg_l6n_3p3: ldo6 {{
+> -			regulator-name = "vreg_l6n_3p3";
+> +		vreg_l6n_3p2: ldo6 {{
+
+Please follow the naming from the board's schematics for the label and
+regulator-name.
+
+> +			regulator-name = "vreg_l6n_3p2";
+>  			regulator-min-microvolt = <2800000>;
+```
+
+Diff:
+```
+{diff}
+```
+
+Review:
+```
+{review}
+```
+
+Checklist:
+- [ ] Your response is nothing but the plaintext in-line review.
+
+"""
+
     def get_kernel_coding_style(self) -> str:
         """Load kernel coding style guidelines from documentation."""
         coding_style_docs = [
@@ -599,7 +657,6 @@ regulator-name.
         )
         return response
 
-
     def _find_declaration(
         self, proc: subprocess.Popen[Any], uri: str, line: int, character: int
     ) -> Dict[str, Any]:
@@ -751,7 +808,9 @@ regulator-name.
 
         rel = self._kernel_rel(path)
         container_path = self._container_kernel_path(rel)
-        check = self.docker_manager.run_command(["test", "-e", container_path], cwd=None)
+        check = self.docker_manager.run_command(
+            ["test", "-e", container_path], cwd=None
+        )
         check.communicate()
         if check.returncode != 0:
             raise ValueError(f"path not found: {rel}")
@@ -1144,7 +1203,6 @@ regulator-name.
         }
 
         return {"ok": True, **result}
-
 
     def _tool_find_callers(
         self, name: str, file: Optional[str] = None
@@ -1715,6 +1773,23 @@ regulator-name.
         # Initialize LSP connection
         self._initialize_lsp(proc, self.docker_manager.kernel_dir)
         return proc
+
+    def format_chat_response(self, text: str):
+        formatted_prompt = self.REVIEW_CLEANUP_PROMPT_TEMPLATE.format(
+            diff=self.diff,
+            review=text,
+        )
+        messages = [{"role": "user", "content": formatted_prompt}]
+
+        completion_kwargs: dict = {
+            "model": self.model,
+            "api_base": AiReview.api_base,
+            "messages": messages,
+            "stream": False,
+        }
+        response = self._completion_with_retry(**completion_kwargs)
+        review = response.choices[0].message.content or ""
+        return super().format_chat_response(review)
 
     def setup(self) -> None:
         super().setup()
