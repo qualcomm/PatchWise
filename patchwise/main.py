@@ -119,7 +119,7 @@ def main():
             output_file = output_dir / f"{review_name.lower()}.txt"
             with open(output_file, "w", encoding="utf-8") as f:
                 f.write(result_text if result_text else "No issues found\n")
-            logger.debug(f"Saved {review_name} results to {output_file}")
+            logger.info(f"Saved {review_name} results to {output_file}")
 
 
 if __name__ == "__main__":
