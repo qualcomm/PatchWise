@@ -8,6 +8,7 @@ a pinned linux-next checkout cloned into tests/linux/, then exercises each
 tool exposed via AiCodeReview.dispatch_tool:
 
   find_definition / find_callers / find_calls / grep / read_file / list_files
+  / git_log / git_show
 
 Run with the patchwise venv active.
 
@@ -382,5 +383,78 @@ def test_list_files_errors(
     review: AiCodeReview, path: str, expected_error: str
 ) -> None:
     result = review.dispatch_tool("list_files", {"path": path})
+    assert not result.get("ok"), f"unexpectedly ok: {result}"
+    assert expected_error in (result.get("error") or "")
+
+
+# ---------------------------------------------------------------------------
+# git_log
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "path,min_count",
+    [
+        ("fs/open.c", 1),
+        ("include/linux/list.h", 1),
+    ],
+    ids=lambda v: str(v),
+)
+def test_git_log(review: AiCodeReview, path: str, min_count: int) -> None:
+    result = review.dispatch_tool("git_log", {"path": path})
+    assert result.get("ok"), f"tool returned not-ok: {result}"
+    commits = result.get("result", [])
+    total = result.get("total", 0)
+    assert total >= min_count, f"only {total} commits (wanted >= {min_count})"
+    assert commits, "expected at least one commit entry"
+    first = commits[0]
+    assert first.get("rev"), f"missing rev in {first}"
+    assert first.get("author"), f"missing author in {first}"
+    assert first.get("date"), f"missing date in {first}"
+    assert first.get("subject"), f"missing subject in {first}"
+
+
+@pytest.mark.parametrize(
+    "path,expected_error",
+    [
+        ("../../../etc/passwd", "escapes kernel tree"),
+        ("does/not/exist", "path not found"),
+    ],
+    ids=["path_escape", "missing_path"],
+)
+def test_git_log_errors(
+    review: AiCodeReview, path: str, expected_error: str
+) -> None:
+    result = review.dispatch_tool("git_log", {"path": path})
+    assert not result.get("ok"), f"unexpectedly ok: {result}"
+    assert expected_error in (result.get("error") or "")
+
+
+# ---------------------------------------------------------------------------
+# git_show
+# ---------------------------------------------------------------------------
+
+
+def test_git_show(review: AiCodeReview) -> None:
+    result = review.dispatch_tool("git_show", {"rev": PINNED_COMMIT})
+    assert result.get("ok"), f"tool returned not-ok: {result}"
+    payload = result.get("result", {})
+    assert payload.get("rev") == PINNED_COMMIT
+    content = payload.get("content", "")
+    assert f"commit {PINNED_COMMIT}" in content
+
+
+@pytest.mark.parametrize(
+    "rev,expected_error",
+    [
+        ("not_a_real_rev", "invalid rev"),
+        ("-n1", "invalid rev"),
+    ],
+    ids=["missing_rev", "option_like_rev"],
+)
+def test_git_show_errors(
+    review: AiCodeReview, rev: str, expected_error: str
+) -> None:
+    result = review.dispatch_tool("git_show", {"rev": rev})
     assert not result.get("ok"), f"unexpectedly ok: {result}"
     assert expected_error in (result.get("error") or "")

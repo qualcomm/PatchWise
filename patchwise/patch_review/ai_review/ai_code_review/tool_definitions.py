@@ -5,7 +5,7 @@
 All tools accept and return kernel-relative paths (e.g. 'drivers/usb/foo.c').
 The `file` arg on name-taking tools is a hint for where you saw the symbol
 used, not where its definition lives. The tool resolves the definition
-itself. List tools cap results at 100; read_file caps at 200 lines.
+itself. List tools cap results at 100; read_file/git_show cap at 200 lines.
 """
 
 _NAME_PARAM = {
@@ -163,6 +163,52 @@ TOOLS = [
                     },
                 },
                 "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "git_log",
+            "description": (
+                "Show recent commit history touching a kernel-relative file or "
+                "directory path. Returns {result: [{rev, author, date, subject}], "
+                "total, truncated}. Capped at 100 commits."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": (
+                            "Kernel-relative file or directory path whose history "
+                            "you want to inspect."
+                        ),
+                    },
+                },
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "git_show",
+            "description": (
+                "Show a commit object by revision. Returns {rev, content, "
+                "truncated}. Capped at 200 lines per call."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "rev": {
+                        "type": "string",
+                        "description": (
+                            "A commit revision such as HEAD, HEAD~1, or a commit SHA."
+                        ),
+                    },
+                },
+                "required": ["rev"],
             },
         },
     },

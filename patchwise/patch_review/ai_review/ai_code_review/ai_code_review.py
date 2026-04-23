@@ -132,6 +132,8 @@ Tools (all paths are kernel-relative, e.g. `drivers/mtd/nand/raw/qcom_nandc.c`):
 - `grep(pattern, file?)`
 - `read_file(path, start?, end?)`
 - `list_files(path, recursive?)`
+- `git_log(path)`
+- `git_show(rev)`
 
 Only write your review once you have verified your findings against the code. Do not speculate — if you cannot confirm a bug by reading the relevant definitions, do not comment on it.
 Tool results include file paths and snippets; use the paths as `file=` hints on follow-up calls to disambiguate symbols that exist in multiple subsystems. Prefer several targeted tool calls over guessing.
@@ -738,6 +740,47 @@ regulator-name.
             raise ValueError(f"Path escapes kernel tree: {rel}")
         return target
 
+    def _validate_existing_kernel_path(self, path: str) -> str:
+        """Validate and normalize a kernel-relative path that must exist."""
+        try:
+            self._abs_in_kernel(path)
+        except ValueError as e:
+            raise ValueError(str(e))
+
+        rel = self._kernel_rel(path)
+        container_path = str(self.docker_manager.kernel_dir / rel)
+        check = self.docker_manager.run_command(["test", "-e", container_path], cwd=None)
+        check.communicate()
+        if check.returncode != 0:
+            raise ValueError(f"path not found: {rel}")
+        return rel
+
+    def _resolve_git_commit(self, rev: str) -> str:
+        """Resolve a revision to a commit SHA, rejecting invalid or option-like refs."""
+        if not isinstance(rev, str) or not rev.strip():
+            raise ValueError("rev must be a non-empty string")
+        if rev.startswith("-"):
+            raise ValueError(f"invalid rev: {rev}")
+        if any(c in rev for c in ("\x00", "\n", "\r")):
+            raise ValueError(f"invalid rev: {rev}")
+
+        kernel_dir = str(self.docker_manager.kernel_dir)
+        proc = self.docker_manager.run_command(
+            [
+                "git",
+                "rev-parse",
+                "--verify",
+                "--end-of-options",
+                f"{rev}^{{commit}}",
+            ],
+            cwd=kernel_dir,
+        )
+        stdout, stderr = proc.communicate()
+        if proc.returncode != 0:
+            detail = stderr.strip() or stdout.strip() or rev
+            raise ValueError(f"invalid rev: {detail}")
+        return stdout.strip()
+
     def _snippet_for_range(
         self, rel_path: str, start_line: int, end_line: int, ctx: int = 2
     ) -> str:
@@ -1289,6 +1332,103 @@ regulator-name.
             },
         }
 
+    def _tool_git_log(self, path: str) -> Dict[str, Any]:
+        try:
+            rel = self._validate_existing_kernel_path(path)
+        except ValueError as e:
+            return {"ok": False, "error": str(e)}
+
+        kernel_dir = str(self.docker_manager.kernel_dir)
+        log_cmd = [
+            "git",
+            "log",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-color",
+            "--max-count",
+            "101",
+            "--format=%H%x1f%an%x1f%ad%x1f%s",
+            "--date=short",
+            "--",
+            rel,
+        ]
+        proc = self.docker_manager.run_command(log_cmd, cwd=kernel_dir)
+        stdout, stderr = proc.communicate()
+        if proc.returncode != 0:
+            detail = stderr.strip() or "git log failed"
+            return {"ok": False, "error": detail}
+
+        commits: List[Dict[str, str]] = []
+        for line in stdout.splitlines():
+            parts = line.split("\x1f")
+            if len(parts) != 4:
+                continue
+            commits.append(
+                {
+                    "rev": parts[0],
+                    "author": parts[1],
+                    "date": parts[2],
+                    "subject": parts[3],
+                }
+            )
+
+        count_proc = self.docker_manager.run_command(
+            ["git", "rev-list", "--count", "HEAD", "--", rel],
+            cwd=kernel_dir,
+        )
+        count_stdout, count_stderr = count_proc.communicate()
+        if count_proc.returncode != 0:
+            detail = count_stderr.strip() or "git rev-list failed"
+            return {"ok": False, "error": detail}
+
+        try:
+            total = int(count_stdout.strip())
+        except ValueError:
+            total = len(commits)
+        truncated = total > 100
+        return {
+            "ok": True,
+            "result": commits[:100],
+            "total": total,
+            "truncated": truncated,
+        }
+
+    def _tool_git_show(self, rev: str) -> Dict[str, Any]:
+        try:
+            resolved_rev = self._resolve_git_commit(rev)
+        except ValueError as e:
+            return {"ok": False, "error": str(e)}
+
+        kernel_dir = str(self.docker_manager.kernel_dir)
+        show_cmd = [
+            "git",
+            "show",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-color",
+            "--stat=80,20",
+            "--format=medium",
+            "--unified=3",
+            resolved_rev,
+        ]
+        proc = self.docker_manager.run_command(show_cmd, cwd=kernel_dir)
+        stdout, stderr = proc.communicate()
+        if proc.returncode != 0:
+            detail = stderr.strip() or "git show failed"
+            return {"ok": False, "error": detail}
+
+        lines = stdout.splitlines(keepends=True)
+        total_lines = len(lines)
+        end = min(total_lines, 200)
+        return {
+            "ok": True,
+            "result": {
+                "rev": resolved_rev,
+                "content": "".join(lines[:end]),
+                "truncated": total_lines > 200,
+            },
+        }
+
     def dispatch_tool(self, name: str, args: dict) -> dict:
         """Dispatch an agent tool by name. Returns {ok, ...}."""
         tool_map = {
@@ -1298,6 +1438,8 @@ regulator-name.
             "grep": self._tool_grep,
             "read_file": self._tool_read_file,
             "list_files": self._tool_list_files,
+            "git_log": self._tool_git_log,
+            "git_show": self._tool_git_show,
         }
         tool_fn = tool_map.get(name)
         if tool_fn is None:
