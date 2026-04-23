@@ -1,7 +1,9 @@
 # Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 
+import datetime
 import json
+import logging
 import os
 import re
 import subprocess
@@ -1590,6 +1592,29 @@ regulator-name.
             },
         }
 
+    def _log_tool_call(self, name: str, args: dict, result: dict) -> None:
+        """Append a tool-call record to SANDBOX_PATH/tool_calls.log."""
+        if not self.logger.isEnabledFor(logging.DEBUG):
+            return
+        log_path = SANDBOX_PATH / "tool_calls.log"
+        ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        subject = self.commit_message.splitlines()[0] if self.commit_message else ""
+        iteration = getattr(self, "_agent_iteration", 0)
+        try:
+            args_json = json.dumps(args, ensure_ascii=False)
+        except Exception:
+            args_json = str(args)
+        ok = bool(result.get("ok"))
+        line = (
+            f"{ts} | subject={subject!r} | iter={iteration} | "
+            f"call={name}({args_json}) | ok={ok}\n"
+        )
+        try:
+            with open(log_path, "a") as f:
+                f.write(line)
+        except Exception as e:
+            self.logger.debug(f"Failed to write tool_calls.log: {e}")
+
     def dispatch_tool(self, name: str, args: dict) -> dict:
         """Dispatch an agent tool by name. Returns {ok, ...}."""
         tool_map = {
@@ -1605,15 +1630,17 @@ regulator-name.
         }
         tool_fn = tool_map.get(name)
         if tool_fn is None:
-            return {"ok": False, "error": f"unknown tool: {name}"}
-
-        try:
-            return tool_fn(**args)
-        except TypeError as e:
-            return {"ok": False, "error": f"bad arguments for '{name}': {e}"}
-        except Exception as e:
-            self.logger.error(f"tool '{name}' raised: {e}")
-            return {"ok": False, "error": str(e)}
+            result = {"ok": False, "error": f"unknown tool: {name}"}
+        else:
+            try:
+                result = tool_fn(**args)
+            except TypeError as e:
+                result = {"ok": False, "error": f"bad arguments for '{name}': {e}"}
+            except Exception as e:
+                self.logger.error(f"tool '{name}' raised: {e}")
+                result = {"ok": False, "error": str(e)}
+        self._log_tool_call(name, args, result)
+        return result
 
     def _files_in_diff(self) -> Set[str]:
         """Return the set of kernel-relative file paths touched by the commit."""
