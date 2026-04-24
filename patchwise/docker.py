@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import logging
+import os
 import subprocess
 import time
 from pathlib import Path
@@ -32,6 +33,20 @@ class DockerManager:
         self.sandbox_path = Path("/home") / PACKAGE_NAME
         self.build_dir = self.sandbox_path / "build"
         self.kernel_dir = self.sandbox_path / "kernel"
+        self._kernel_overlay_volume: Optional[str] = None
+
+    @staticmethod
+    def _container_path(path: Path | str) -> str:
+        """Normalize a container path to POSIX form for Docker CLI calls."""
+        return str(path).replace("\\", "/")
+
+    def _use_kernel_overlay(self) -> bool:
+        """Overlay-backed kernel mounts are unreliable under Windows Docker."""
+        return os.name != "nt"
+
+    def _using_bind_mounted_kernel(self) -> bool:
+        """True when the container sees the host repo directly instead of an overlay."""
+        return not self._use_kernel_overlay()
 
     @property
     def _kernel_volume_name(self) -> str:
@@ -204,13 +219,16 @@ class DockerManager:
 
     def start_container(self, build_path: Path) -> None:
         """Legacy method for backward compatibility. Use start_container_with_shared_volume instead."""
-        try:
-            self._kernel_overlay_volume = self._setup_kernel_overlay()
-        except subprocess.CalledProcessError as e:
-            self.logger.error(
-                f"Failed to create kernel overlay volume: {e}\nstderr:{e.stderr}"
-            )
-            raise
+        kernel_mount_source = str(self.repo_path)
+        if self._use_kernel_overlay():
+            try:
+                self._kernel_overlay_volume = self._setup_kernel_overlay()
+                kernel_mount_source = self._kernel_overlay_volume
+            except subprocess.CalledProcessError as e:
+                self.logger.error(
+                    f"Failed to create kernel overlay volume: {e}\nstderr:{e.stderr}"
+                )
+                raise
 
         try:
             subprocess.run(
@@ -227,9 +245,9 @@ class DockerManager:
                 "--name",
                 self.container_name,
                 "-v",
-                f"{build_path}:{self.build_dir}",
+                f"{build_path}:{self._container_path(self.build_dir)}",
                 "-v",
-                f"{self._kernel_overlay_volume}:{self.kernel_dir}",
+                f"{kernel_mount_source}:{self._container_path(self.kernel_dir)}",
                 self.image_tag,
                 "tail",
                 "-f",
@@ -248,7 +266,8 @@ class DockerManager:
                 self.logger.info(
                     f"Failed to start container {self.container_name}: {e}\nstderr: {e.stderr}"
                 )
-                self._cleanup_kernel_overlay()
+                if self._kernel_overlay_volume:
+                    self._cleanup_kernel_overlay()
                 raise
             self.logger.info(f"Container {self.container_name} started successfully.")
 
@@ -258,14 +277,17 @@ class DockerManager:
                 self.logger.error(
                     f"Failed to prepare kernel tree at {self.commit_sha}: {e}\nstderr: {e.stderr}"
                 )
-                self._cleanup_kernel_overlay()
+                if self._kernel_overlay_volume:
+                    self._cleanup_kernel_overlay()
                 raise
 
     def run_command(
         self, command: list[str], cwd: Optional[str], **kwargs: Any
     ) -> subprocess.Popen[str]:
         if not cwd:
-            cwd = str(self.sandbox_path)
+            cwd = self._container_path(self.sandbox_path)
+        else:
+            cwd = self._container_path(cwd)
 
         docker_command = ["docker", "exec"]
         docker_command.extend(["--workdir", cwd])
@@ -287,7 +309,9 @@ class DockerManager:
     ) -> subprocess.Popen[str]:
         """Run an interactive command that needs stdin/stdout communication."""
         if not cwd:
-            cwd = str(self.sandbox_path)
+            cwd = self._container_path(self.sandbox_path)
+        else:
+            cwd = self._container_path(cwd)
 
         docker_command = ["docker", "exec", "-i"]
         docker_command.extend(["--workdir", cwd])
@@ -324,7 +348,8 @@ class DockerManager:
 
         # Create index directory in container
         create_proc = self.run_command(
-            ["mkdir", "-p", str(index_dir)], cwd=str(self.build_dir)
+            ["mkdir", "-p", self._container_path(index_dir)],
+            cwd=self._container_path(self.build_dir),
         )
         create_proc.wait()
 
@@ -344,7 +369,7 @@ class DockerManager:
                     "chown",
                     "-R",
                     "patchwise:patchwise",
-                    str(index_dir),
+                    self._container_path(index_dir),
                 ],
                 check=True,
                 capture_output=True,
@@ -360,7 +385,7 @@ class DockerManager:
                     "chmod",
                     "-R",
                     "755",
-                    str(index_dir),
+                    self._container_path(index_dir),
                 ],
                 check=True,
                 capture_output=True,
@@ -379,7 +404,9 @@ class DockerManager:
     ) -> subprocess.Popen[str]:
         """Start clangd via docker exec with direct stdin/stdout communication."""
         if not cwd:
-            cwd = str(self.kernel_dir)
+            cwd = self._container_path(self.kernel_dir)
+        else:
+            cwd = self._container_path(cwd)
 
         # Ensure index directory exists
         self.ensure_clangd_index_dir()
@@ -461,7 +488,8 @@ class DockerManager:
             )
             raise
         finally:
-            self._cleanup_kernel_overlay()
+            if self._kernel_overlay_volume:
+                self._cleanup_kernel_overlay()
 
     @classmethod
     def create_shared_build_volume(cls) -> None:
@@ -527,7 +555,8 @@ class DockerManager:
                 capture_output=True,
             )
 
-            # Run the initialization script as root
+            # Initialize the shared volume inline instead of depending on a
+            # helper script being present in the image.
             subprocess.run(
                 [
                     "docker",
@@ -535,7 +564,16 @@ class DockerManager:
                     "--user",
                     "root",
                     init_container_name,
-                    "/home/patchwise/init-build-dir.sh",
+                    "sh",
+                    "-lc",
+                    (
+                        "set -e; "
+                        "echo 'Initializing shared build directory...'; "
+                        "mkdir -p /shared/build; "
+                        "chown -R patchwise:patchwise /shared/build; "
+                        "chmod -R 755 /shared/build; "
+                        "echo 'Build directory initialized successfully'"
+                    ),
                 ],
                 check=True,
                 capture_output=True,
@@ -564,13 +602,16 @@ class DockerManager:
 
     def start_container_with_shared_volume(self) -> None:
         """Start container with the shared build volume instead of bind mount."""
-        try:
-            self._kernel_overlay_volume = self._setup_kernel_overlay()
-        except subprocess.CalledProcessError as e:
-            self.logger.error(
-                f"Failed to create kernel overlay volume: {e}\nstderr:{e.stderr}"
-            )
-            raise
+        kernel_mount_source = str(self.repo_path)
+        if self._use_kernel_overlay():
+            try:
+                self._kernel_overlay_volume = self._setup_kernel_overlay()
+                kernel_mount_source = self._kernel_overlay_volume
+            except subprocess.CalledProcessError as e:
+                self.logger.error(
+                    f"Failed to create kernel overlay volume: {e}\nstderr:{e.stderr}"
+                )
+                raise
 
         try:
             subprocess.run(
@@ -589,9 +630,9 @@ class DockerManager:
                 "-v",
                 f"{self._build_volume_name}:/shared/build",
                 "-v",
-                f"{self._build_volume_name}:{self.build_dir}",
+                f"{self._build_volume_name}:{self._container_path(self.build_dir)}",
                 "-v",
-                f"{self._kernel_overlay_volume}:{self.kernel_dir}",
+                f"{kernel_mount_source}:{self._container_path(self.kernel_dir)}",
                 self.image_tag,
                 "tail",
                 "-f",
@@ -610,7 +651,8 @@ class DockerManager:
                 self.logger.info(
                     f"Failed to start container {self.container_name}: {e}\nstderr: {e.stderr}"
                 )
-                self._cleanup_kernel_overlay()
+                if self._kernel_overlay_volume:
+                    self._cleanup_kernel_overlay()
                 raise
             self.logger.info(f"Container {self.container_name} started successfully.")
 
@@ -621,7 +663,8 @@ class DockerManager:
                 self.logger.error(
                     f"Failed to fix build directory permissions: {e}\nstderr: {e.stderr}"
                 )
-                self._cleanup_kernel_overlay()
+                if self._kernel_overlay_volume:
+                    self._cleanup_kernel_overlay()
                 raise
 
             try:
@@ -630,7 +673,8 @@ class DockerManager:
                 self.logger.error(
                     f"Failed to prepare kernel tree at {self.commit_sha}: {e}\nstderr: {e.stderr}"
                 )
-                self._cleanup_kernel_overlay()
+                if self._kernel_overlay_volume:
+                    self._cleanup_kernel_overlay()
                 raise
 
     def _prepare_kernel_tree(self) -> None:
@@ -645,18 +689,29 @@ class DockerManager:
                 "--user",
                 "root",
                 "--workdir",
-                str(self.kernel_dir),
+                self._container_path(self.kernel_dir),
                 self.container_name,
                 "git",
                 "config",
                 "--global",
                 "--add",
                 "safe.directory",
-                str(self.kernel_dir),
+                self._container_path(self.kernel_dir),
             ],
             check=True,
             capture_output=True,
         )
+
+        # On Windows we bind-mount the host kernel tree directly because the
+        # overlay-volume approach is not reliable under Docker Desktop. Large
+        # git reset/clean sweeps over that bind mount are extremely slow and
+        # can stall fixture setup for a long time, so leave the tree as-is.
+        if self._using_bind_mounted_kernel():
+            self.logger.debug(
+                "Using bind-mounted kernel tree; skipping reset/clean/chown preparation."
+            )
+            return
+
         subprocess.run(
             [
                 "docker",
@@ -664,7 +719,7 @@ class DockerManager:
                 "--user",
                 "root",
                 "--workdir",
-                str(self.kernel_dir),
+                self._container_path(self.kernel_dir),
                 self.container_name,
                 "git",
                 "reset",
@@ -681,7 +736,7 @@ class DockerManager:
                 "--user",
                 "root",
                 "--workdir",
-                str(self.kernel_dir),
+                self._container_path(self.kernel_dir),
                 self.container_name,
                 "git",
                 "clean",
@@ -700,7 +755,7 @@ class DockerManager:
                 "chown",
                 "-R",
                 "patchwise:patchwise",
-                str(self.kernel_dir),
+                self._container_path(self.kernel_dir),
             ],
             check=True,
             capture_output=True,

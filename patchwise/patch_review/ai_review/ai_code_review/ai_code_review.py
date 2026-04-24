@@ -133,7 +133,8 @@ Tools (all paths are kernel-relative, e.g. `drivers/mtd/nand/raw/qcom_nandc.c`):
 - `read_file(path, start?, end?)`
 - `list_files(path, recursive?)`
 - `git_log(path)`
-- `git_show(rev)`
+- `git_show(rev, name_only?)`
+- `git_cat_file(rev, path, start?, end?)`
 
 Only write your review once you have verified your findings against the code. Do not speculate — if you cannot confirm a bug by reading the relevant definitions, do not comment on it.
 Tool results include file paths and snippets; use the paths as `file=` hints on follow-up calls to disambiguate symbols that exist in multiple subsystems. Prefer several targeted tool calls over guessing.
@@ -740,6 +741,10 @@ regulator-name.
             raise ValueError(f"Path escapes kernel tree: {rel}")
         return target
 
+    def _container_kernel_path(self, rel: str) -> str:
+        """Return a kernel-relative path anchored at the container kernel root."""
+        return self.docker_manager._container_path(self.docker_manager.kernel_dir / rel)
+
     def _validate_existing_kernel_path(self, path: str) -> str:
         """Validate and normalize a kernel-relative path that must exist."""
         try:
@@ -748,7 +753,7 @@ regulator-name.
             raise ValueError(str(e))
 
         rel = self._kernel_rel(path)
-        container_path = str(self.docker_manager.kernel_dir / rel)
+        container_path = self._container_kernel_path(rel)
         check = self.docker_manager.run_command(["test", "-e", container_path], cwd=None)
         check.communicate()
         if check.returncode != 0:
@@ -780,6 +785,43 @@ regulator-name.
             detail = stderr.strip() or stdout.strip() or rev
             raise ValueError(f"invalid rev: {detail}")
         return stdout.strip()
+
+    def _validate_git_path(self, path: str) -> str:
+        """Validate a kernel-relative path for git object access."""
+        try:
+            self._abs_in_kernel(path)
+        except ValueError as e:
+            raise ValueError(str(e))
+        return self._kernel_rel(path)
+
+    def _split_git_object_spec(self, rev: str) -> Tuple[str, Optional[str]]:
+        """Split `rev[:path]` syntax into commit rev and optional kernel-relative path."""
+        if not isinstance(rev, str) or not rev.strip():
+            raise ValueError("rev must be a non-empty string")
+        if rev.startswith("-"):
+            raise ValueError(f"invalid rev: {rev}")
+        if any(c in rev for c in ("\x00", "\n", "\r")):
+            raise ValueError(f"invalid rev: {rev}")
+
+        if ":" not in rev:
+            return rev, None
+
+        commit_rev, rel_path = rev.split(":", 1)
+        if not commit_rev or not rel_path:
+            raise ValueError(f"invalid rev: {rev}")
+        return commit_rev, self._validate_git_path(rel_path)
+
+    def _resolve_git_object_spec(self, rev: str) -> Tuple[str, Optional[str], str]:
+        """Resolve a git commit or commit:path object spec."""
+        commit_rev, rel_path = self._split_git_object_spec(rev)
+        resolved_rev = self._resolve_git_commit(commit_rev)
+        if rel_path is None:
+            return resolved_rev, None, resolved_rev
+        return resolved_rev, rel_path, f"{resolved_rev}:{rel_path}"
+
+    def _git_command(self, *args: str) -> List[str]:
+        """Run git with paging disabled so tool output is deterministic."""
+        return ["git", "--no-pager", *args]
 
     def _snippet_for_range(
         self, rel_path: str, start_line: int, end_line: int, ctx: int = 2
@@ -848,6 +890,16 @@ regulator-name.
         if not line:
             raise RuntimeError("ts_indexer daemon closed stdout")
         return json.loads(line)
+
+    def _ensure_navigation_stack(
+        self, need_lsp: bool = False, need_ts: bool = False
+    ) -> None:
+        """Lazily start expensive code-navigation services on first use."""
+        if need_lsp and getattr(self, "agent_lsp_proc", None) is None:
+            self.generate_compile_commands()
+            self.agent_lsp_proc = self._setup_lsp_client()
+        if need_ts and getattr(self, "ts_daemon", None) is None:
+            self._start_ts_daemon()
 
     def _ts_lookup(self, name: str, limit: int = 100) -> List[Dict[str, Any]]:
         """Return up to `limit` index entries matching `name`."""
@@ -1037,6 +1089,7 @@ regulator-name.
     def _tool_find_definition(
         self, name: str, file: Optional[str] = None
     ) -> Dict[str, Any]:
+        self._ensure_navigation_stack(need_lsp=True, need_ts=True)
         active_def = self._find_active_definition(name, file)
         if active_def is None:
             return {"ok": False, "error": f"symbol '{name}' not found in index"}
@@ -1102,6 +1155,7 @@ regulator-name.
     def _tool_find_callers(
         self, name: str, file: Optional[str] = None
     ) -> Dict[str, Any]:
+        self._ensure_navigation_stack(need_lsp=True, need_ts=True)
         active_def = self._find_active_definition(name, file)
         if active_def is None:
             return {"ok": False, "error": f"symbol '{name}' not found in index"}
@@ -1148,6 +1202,7 @@ regulator-name.
         file: Optional[str] = None,
         glob: Optional[str] = None,
     ) -> Dict[str, Any]:
+        self._ensure_navigation_stack(need_ts=True)
         try:
             re.compile(pattern)
         except re.error as e:
@@ -1340,8 +1395,7 @@ regulator-name.
 
         kernel_dir = str(self.docker_manager.kernel_dir)
         log_cmd = [
-            "git",
-            "log",
+            *self._git_command("log"),
             "--no-ext-diff",
             "--no-textconv",
             "--no-color",
@@ -1373,7 +1427,7 @@ regulator-name.
             )
 
         count_proc = self.docker_manager.run_command(
-            ["git", "rev-list", "--count", "HEAD", "--", rel],
+            self._git_command("rev-list", "--count", "HEAD", "--", rel),
             cwd=kernel_dir,
         )
         count_stdout, count_stderr = count_proc.communicate()
@@ -1393,29 +1447,57 @@ regulator-name.
             "truncated": truncated,
         }
 
-    def _tool_git_show(self, rev: str) -> Dict[str, Any]:
+    def _tool_git_show(self, rev: str, name_only: bool = False) -> Dict[str, Any]:
         try:
-            resolved_rev = self._resolve_git_commit(rev)
+            resolved_rev, rel_path, object_spec = self._resolve_git_object_spec(rev)
         except ValueError as e:
             return {"ok": False, "error": str(e)}
 
+        if name_only and rel_path is not None:
+            return {
+                "ok": False,
+                "error": "name_only is only supported for commit revisions, not rev:path",
+            }
+
         kernel_dir = str(self.docker_manager.kernel_dir)
-        show_cmd = [
-            "git",
-            "show",
-            "--no-ext-diff",
-            "--no-textconv",
-            "--no-color",
-            "--stat=80,20",
-            "--format=medium",
-            "--unified=3",
-            resolved_rev,
-        ]
+        if name_only:
+            show_cmd = [
+                *self._git_command("show"),
+                "--format=",
+                "--name-only",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--no-color",
+                resolved_rev,
+            ]
+        else:
+            show_cmd = [
+                *self._git_command("show"),
+                "--no-ext-diff",
+                "--no-textconv",
+                "--no-color",
+                "--stat=80,20",
+                "--format=medium",
+                "--unified=3",
+                object_spec,
+            ]
         proc = self.docker_manager.run_command(show_cmd, cwd=kernel_dir)
         stdout, stderr = proc.communicate()
         if proc.returncode != 0:
             detail = stderr.strip() or "git show failed"
             return {"ok": False, "error": detail}
+
+        if name_only:
+            paths = [line.strip() for line in stdout.splitlines() if line.strip()]
+            total = len(paths)
+            return {
+                "ok": True,
+                "result": {
+                    "rev": resolved_rev,
+                    "paths": paths[:200],
+                    "truncated": total > 200,
+                },
+            }
 
         lines = stdout.splitlines(keepends=True)
         total_lines = len(lines)
@@ -1423,9 +1505,48 @@ regulator-name.
         return {
             "ok": True,
             "result": {
-                "rev": resolved_rev,
+                "rev": object_spec,
                 "content": "".join(lines[:end]),
                 "truncated": total_lines > 200,
+            },
+        }
+
+    def _tool_git_cat_file(
+        self, rev: str, path: str, start: int = 1, end: Optional[int] = None
+    ) -> Dict[str, Any]:
+        try:
+            resolved_rev = self._resolve_git_commit(rev)
+            rel = self._validate_git_path(path)
+        except ValueError as e:
+            return {"ok": False, "error": str(e)}
+
+        kernel_dir = str(self.docker_manager.kernel_dir)
+        object_spec = f"{resolved_rev}:{rel}"
+        proc = self.docker_manager.run_command(
+            self._git_command("cat-file", "-p", object_spec),
+            cwd=kernel_dir,
+        )
+        stdout, stderr = proc.communicate()
+        if proc.returncode != 0:
+            detail = stderr.strip() or "git cat-file failed"
+            if not detail.startswith("git cat-file failed"):
+                detail = f"git cat-file failed: {detail}"
+            return {"ok": False, "error": detail}
+
+        lines = stdout.splitlines(keepends=True)
+        total_lines = len(lines)
+        start_1 = max(1, start)
+        request_end = end if end is not None else start_1 + 199
+        effective_end = min(request_end, start_1 + 199, total_lines)
+        return {
+            "ok": True,
+            "result": {
+                "rev": resolved_rev,
+                "path": rel,
+                "start": start_1,
+                "end": effective_end,
+                "content": "".join(lines[start_1 - 1 : effective_end]),
+                "truncated": effective_end < total_lines,
             },
         }
 
@@ -1440,6 +1561,7 @@ regulator-name.
             "list_files": self._tool_list_files,
             "git_log": self._tool_git_log,
             "git_show": self._tool_git_show,
+            "git_cat_file": self._tool_git_cat_file,
         }
         tool_fn = tool_map.get(name)
         if tool_fn is None:
@@ -1622,10 +1744,6 @@ regulator-name.
         self.seen_files: Set[str] = set()
 
         self.seen_files |= self._files_in_diff()
-
-        self.generate_compile_commands()
-        self.agent_lsp_proc = self._setup_lsp_client()
-        self._start_ts_daemon()
 
     def run(self) -> str:
         """Execute the AI code review."""

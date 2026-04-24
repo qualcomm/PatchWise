@@ -8,7 +8,7 @@ a pinned linux-next checkout cloned into tests/linux/, then exercises each
 tool exposed via AiCodeReview.dispatch_tool:
 
   find_definition / find_callers / find_calls / grep / read_file / list_files
-  / git_log / git_show
+  / git_log / git_show / git_cat_file
 
 Run with the patchwise venv active.
 
@@ -20,6 +20,7 @@ The first run is slow: init_kernel_tree() fetches linux-next.
 
 import logging
 import os
+import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -29,6 +30,7 @@ KERNEL_DIR = TESTS_DIR / "linux"
 os.environ["PATCHWISE_SANDBOX_PATH"] = str(TESTS_DIR)
 
 import pytest
+from git import InvalidGitRepositoryError, NoSuchPathError, Repo
 
 from patchwise.patch_review.ai_review.ai_code_review.ai_code_review import AiCodeReview
 from patchwise.patch_review.kernel_tree import init_kernel_tree
@@ -38,6 +40,39 @@ from patchwise.patch_review.kernel_tree import init_kernel_tree
 PINNED_COMMIT = "43cfbdda5af60ffc6272a7b8c5c37d1d0a181ca9"
 
 
+def _clear_stale_index_lock(repo_path: Path) -> None:
+    """Remove a leftover git index lock from a previously interrupted run."""
+    lock_path = repo_path / ".git" / "index.lock"
+    if lock_path.exists():
+        lock_path.unlink()
+
+
+def _checkout_pinned_commit(repo: Any) -> None:
+    """Checkout the pinned commit with light recovery for stale lock files."""
+    if repo.head.is_valid() and repo.head.commit.hexsha == PINNED_COMMIT:
+        return
+
+    for attempt in range(2):
+        try:
+            repo.git.checkout(PINNED_COMMIT)
+            return
+        except Exception as exc:
+            if attempt == 1 or "index.lock" not in str(exc):
+                raise
+            _clear_stale_index_lock(Path(repo.working_tree_dir))
+            time.sleep(1)
+
+    raise RuntimeError(f"failed to checkout pinned commit {PINNED_COMMIT}")
+
+
+def _open_or_init_kernel_repo(repo_path: Path) -> Repo:
+    """Reuse an existing local kernel repo when present; fetch only on first setup."""
+    try:
+        return Repo(repo_path)
+    except (InvalidGitRepositoryError, NoSuchPathError):
+        return init_kernel_tree(repo_path)
+
+
 @pytest.fixture(scope="session")
 def review() -> AiCodeReview:
     logging.basicConfig(
@@ -45,8 +80,9 @@ def review() -> AiCodeReview:
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
     )
     print("\n=== Setting up AiCodeReview... ===", flush=True)
-    repo = init_kernel_tree(KERNEL_DIR)
-    repo.git.checkout(PINNED_COMMIT)
+    repo = _open_or_init_kernel_repo(KERNEL_DIR)
+    _clear_stale_index_lock(KERNEL_DIR)
+    _checkout_pinned_commit(repo)
     head = repo.head.commit
     print(
         f"Using kernel={KERNEL_DIR} head={head.hexsha[:12]} ({head.summary!r})",
@@ -444,17 +480,70 @@ def test_git_show(review: AiCodeReview) -> None:
     assert f"commit {PINNED_COMMIT}" in content
 
 
+def test_git_show_name_only(review: AiCodeReview) -> None:
+    result = review.dispatch_tool("git_show", {"rev": PINNED_COMMIT, "name_only": True})
+    assert result.get("ok"), f"tool returned not-ok: {result}"
+    payload = result.get("result", {})
+    assert payload.get("rev") == PINNED_COMMIT
+    paths = payload.get("paths", [])
+    assert paths, "expected changed file paths"
+
+
+def test_git_show_object_path(review: AiCodeReview) -> None:
+    rev = f"{PINNED_COMMIT}:fs/open.c"
+    result = review.dispatch_tool("git_show", {"rev": rev})
+    assert result.get("ok"), f"tool returned not-ok: {result}"
+    payload = result.get("result", {})
+    assert payload.get("rev") == rev
+    content = payload.get("content", "")
+    assert "diff --git" not in content
+
+
 @pytest.mark.parametrize(
-    "rev,expected_error",
+    "args,expected_error",
     [
-        ("not_a_real_rev", "invalid rev"),
-        ("-n1", "invalid rev"),
+        ({"rev": "not_a_real_rev"}, "invalid rev"),
+        ({"rev": "-n1"}, "invalid rev"),
+        ({"rev": f"{PINNED_COMMIT}:fs/open.c", "name_only": True}, "name_only"),
     ],
-    ids=["missing_rev", "option_like_rev"],
+    ids=["missing_rev", "option_like_rev", "name_only_with_object_spec"],
 )
 def test_git_show_errors(
-    review: AiCodeReview, rev: str, expected_error: str
+    review: AiCodeReview, args: Dict[str, Any], expected_error: str
 ) -> None:
-    result = review.dispatch_tool("git_show", {"rev": rev})
+    result = review.dispatch_tool("git_show", args)
+    assert not result.get("ok"), f"unexpectedly ok: {result}"
+    assert expected_error in (result.get("error") or "")
+
+
+# ---------------------------------------------------------------------------
+# git_cat_file
+# ---------------------------------------------------------------------------
+
+
+def test_git_cat_file(review: AiCodeReview) -> None:
+    result = review.dispatch_tool(
+        "git_cat_file", {"rev": PINNED_COMMIT, "path": "fs/open.c", "start": 1, "end": 20}
+    )
+    assert result.get("ok"), f"tool returned not-ok: {result}"
+    payload = result.get("result", {})
+    assert payload.get("rev") == PINNED_COMMIT
+    assert payload.get("path") == "fs/open.c"
+    assert "Copyright" in payload.get("content", "")
+
+
+@pytest.mark.parametrize(
+    "args,expected_error",
+    [
+        ({"rev": "not_a_real_rev", "path": "fs/open.c"}, "invalid rev"),
+        ({"rev": PINNED_COMMIT, "path": "../../../etc/passwd"}, "escapes kernel tree"),
+        ({"rev": PINNED_COMMIT, "path": "does/not/exist.c"}, "git cat-file failed"),
+    ],
+    ids=["missing_rev", "path_escape", "missing_path_in_commit"],
+)
+def test_git_cat_file_errors(
+    review: AiCodeReview, args: Dict[str, Any], expected_error: str
+) -> None:
+    result = review.dispatch_tool("git_cat_file", args)
     assert not result.get("ok"), f"unexpectedly ok: {result}"
     assert expected_error in (result.get("error") or "")
