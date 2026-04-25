@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import logging
-import os
 import subprocess
 import time
 from pathlib import Path
@@ -39,14 +38,6 @@ class DockerManager:
     def _container_path(path: Path | str) -> str:
         """Normalize a container path to POSIX form for Docker CLI calls."""
         return str(path).replace("\\", "/")
-
-    def _use_kernel_overlay(self) -> bool:
-        """Overlay-backed kernel mounts are unreliable under Windows Docker."""
-        return os.name != "nt"
-
-    def _using_bind_mounted_kernel(self) -> bool:
-        """True when the container sees the host repo directly instead of an overlay."""
-        return not self._use_kernel_overlay()
 
     @property
     def _kernel_volume_name(self) -> str:
@@ -219,16 +210,13 @@ class DockerManager:
 
     def start_container(self, build_path: Path) -> None:
         """Legacy method for backward compatibility. Use start_container_with_shared_volume instead."""
-        kernel_mount_source = str(self.repo_path)
-        if self._use_kernel_overlay():
-            try:
-                self._kernel_overlay_volume = self._setup_kernel_overlay()
-                kernel_mount_source = self._kernel_overlay_volume
-            except subprocess.CalledProcessError as e:
-                self.logger.error(
-                    f"Failed to create kernel overlay volume: {e}\nstderr:{e.stderr}"
-                )
-                raise
+        try:
+            self._kernel_overlay_volume = self._setup_kernel_overlay()
+        except subprocess.CalledProcessError as e:
+            self.logger.error(
+                f"Failed to create kernel overlay volume: {e}\nstderr:{e.stderr}"
+            )
+            raise
 
         try:
             subprocess.run(
@@ -247,7 +235,7 @@ class DockerManager:
                 "-v",
                 f"{build_path}:{self._container_path(self.build_dir)}",
                 "-v",
-                f"{kernel_mount_source}:{self._container_path(self.kernel_dir)}",
+                f"{self._kernel_overlay_volume}:{self._container_path(self.kernel_dir)}",
                 self.image_tag,
                 "tail",
                 "-f",
@@ -266,8 +254,7 @@ class DockerManager:
                 self.logger.info(
                     f"Failed to start container {self.container_name}: {e}\nstderr: {e.stderr}"
                 )
-                if self._kernel_overlay_volume:
-                    self._cleanup_kernel_overlay()
+                self._cleanup_kernel_overlay()
                 raise
             self.logger.info(f"Container {self.container_name} started successfully.")
 
@@ -277,8 +264,7 @@ class DockerManager:
                 self.logger.error(
                     f"Failed to prepare kernel tree at {self.commit_sha}: {e}\nstderr: {e.stderr}"
                 )
-                if self._kernel_overlay_volume:
-                    self._cleanup_kernel_overlay()
+                self._cleanup_kernel_overlay()
                 raise
 
     def run_command(
@@ -488,8 +474,7 @@ class DockerManager:
             )
             raise
         finally:
-            if self._kernel_overlay_volume:
-                self._cleanup_kernel_overlay()
+            self._cleanup_kernel_overlay()
 
     @classmethod
     def create_shared_build_volume(cls) -> None:
@@ -602,16 +587,13 @@ class DockerManager:
 
     def start_container_with_shared_volume(self) -> None:
         """Start container with the shared build volume instead of bind mount."""
-        kernel_mount_source = str(self.repo_path)
-        if self._use_kernel_overlay():
-            try:
-                self._kernel_overlay_volume = self._setup_kernel_overlay()
-                kernel_mount_source = self._kernel_overlay_volume
-            except subprocess.CalledProcessError as e:
-                self.logger.error(
-                    f"Failed to create kernel overlay volume: {e}\nstderr:{e.stderr}"
-                )
-                raise
+        try:
+            self._kernel_overlay_volume = self._setup_kernel_overlay()
+        except subprocess.CalledProcessError as e:
+            self.logger.error(
+                f"Failed to create kernel overlay volume: {e}\nstderr:{e.stderr}"
+            )
+            raise
 
         try:
             subprocess.run(
@@ -632,7 +614,7 @@ class DockerManager:
                 "-v",
                 f"{self._build_volume_name}:{self._container_path(self.build_dir)}",
                 "-v",
-                f"{kernel_mount_source}:{self._container_path(self.kernel_dir)}",
+                f"{self._kernel_overlay_volume}:{self._container_path(self.kernel_dir)}",
                 self.image_tag,
                 "tail",
                 "-f",
@@ -651,8 +633,7 @@ class DockerManager:
                 self.logger.info(
                     f"Failed to start container {self.container_name}: {e}\nstderr: {e.stderr}"
                 )
-                if self._kernel_overlay_volume:
-                    self._cleanup_kernel_overlay()
+                self._cleanup_kernel_overlay()
                 raise
             self.logger.info(f"Container {self.container_name} started successfully.")
 
@@ -663,8 +644,7 @@ class DockerManager:
                 self.logger.error(
                     f"Failed to fix build directory permissions: {e}\nstderr: {e.stderr}"
                 )
-                if self._kernel_overlay_volume:
-                    self._cleanup_kernel_overlay()
+                self._cleanup_kernel_overlay()
                 raise
 
             try:
@@ -673,8 +653,7 @@ class DockerManager:
                 self.logger.error(
                     f"Failed to prepare kernel tree at {self.commit_sha}: {e}\nstderr: {e.stderr}"
                 )
-                if self._kernel_overlay_volume:
-                    self._cleanup_kernel_overlay()
+                self._cleanup_kernel_overlay()
                 raise
 
     def _prepare_kernel_tree(self) -> None:
@@ -701,16 +680,6 @@ class DockerManager:
             check=True,
             capture_output=True,
         )
-
-        # On Windows we bind-mount the host kernel tree directly because the
-        # overlay-volume approach is not reliable under Docker Desktop. Large
-        # git reset/clean sweeps over that bind mount are extremely slow and
-        # can stall fixture setup for a long time, so leave the tree as-is.
-        if self._using_bind_mounted_kernel():
-            self.logger.debug(
-                "Using bind-mounted kernel tree; skipping reset/clean/chown preparation."
-            )
-            return
 
         subprocess.run(
             [
