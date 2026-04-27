@@ -34,11 +34,6 @@ class DockerManager:
         self.kernel_dir = self.sandbox_path / "kernel"
         self._kernel_overlay_volume: Optional[str] = None
 
-    @staticmethod
-    def _container_path(path: Path | str) -> str:
-        """Normalize a container path to POSIX form for Docker CLI calls."""
-        return str(path).replace("\\", "/")
-
     @property
     def _kernel_volume_name(self) -> str:
         """Docker volume name for this container's kernel overlay."""
@@ -233,9 +228,9 @@ class DockerManager:
                 "--name",
                 self.container_name,
                 "-v",
-                f"{build_path}:{self._container_path(self.build_dir)}",
+                f"{build_path}:{self.build_dir}",
                 "-v",
-                f"{self._kernel_overlay_volume}:{self._container_path(self.kernel_dir)}",
+                f"{self._kernel_overlay_volume}:{self.kernel_dir}",
                 self.image_tag,
                 "tail",
                 "-f",
@@ -271,9 +266,9 @@ class DockerManager:
         self, command: list[str], cwd: Optional[str], **kwargs: Any
     ) -> subprocess.Popen[str]:
         if not cwd:
-            cwd = self._container_path(self.sandbox_path)
+            cwd = str(self.sandbox_path)
         else:
-            cwd = self._container_path(cwd)
+            cwd = str(cwd)
 
         docker_command = ["docker", "exec"]
         docker_command.extend(["--workdir", cwd])
@@ -295,9 +290,9 @@ class DockerManager:
     ) -> subprocess.Popen[str]:
         """Run an interactive command that needs stdin/stdout communication."""
         if not cwd:
-            cwd = self._container_path(self.sandbox_path)
+            cwd = str(self.sandbox_path)
         else:
-            cwd = self._container_path(cwd)
+            cwd = str(cwd)
 
         docker_command = ["docker", "exec", "-i"]
         docker_command.extend(["--workdir", cwd])
@@ -334,8 +329,8 @@ class DockerManager:
 
         # Create index directory in container
         create_proc = self.run_command(
-            ["mkdir", "-p", self._container_path(index_dir)],
-            cwd=self._container_path(self.build_dir),
+            ["mkdir", "-p", str(index_dir)],
+            cwd=str(self.build_dir),
         )
         create_proc.wait()
 
@@ -355,7 +350,7 @@ class DockerManager:
                     "chown",
                     "-R",
                     "patchwise:patchwise",
-                    self._container_path(index_dir),
+                    str(index_dir),
                 ],
                 check=True,
                 capture_output=True,
@@ -371,7 +366,7 @@ class DockerManager:
                     "chmod",
                     "-R",
                     "755",
-                    self._container_path(index_dir),
+                    str(index_dir),
                 ],
                 check=True,
                 capture_output=True,
@@ -390,9 +385,9 @@ class DockerManager:
     ) -> subprocess.Popen[str]:
         """Start clangd via docker exec with direct stdin/stdout communication."""
         if not cwd:
-            cwd = self._container_path(self.kernel_dir)
+            cwd = str(self.kernel_dir)
         else:
-            cwd = self._container_path(cwd)
+            cwd = str(cwd)
 
         # Ensure index directory exists
         self.ensure_clangd_index_dir()
@@ -612,9 +607,9 @@ class DockerManager:
                 "-v",
                 f"{self._build_volume_name}:/shared/build",
                 "-v",
-                f"{self._build_volume_name}:{self._container_path(self.build_dir)}",
+                f"{self._build_volume_name}:{self.build_dir}",
                 "-v",
-                f"{self._kernel_overlay_volume}:{self._container_path(self.kernel_dir)}",
+                f"{self._kernel_overlay_volume}:{self.kernel_dir}",
                 self.image_tag,
                 "tail",
                 "-f",
@@ -668,14 +663,14 @@ class DockerManager:
                 "--user",
                 "root",
                 "--workdir",
-                self._container_path(self.kernel_dir),
+                str(self.kernel_dir),
                 self.container_name,
                 "git",
                 "config",
                 "--global",
                 "--add",
                 "safe.directory",
-                self._container_path(self.kernel_dir),
+                str(self.kernel_dir),
             ],
             check=True,
             capture_output=True,
@@ -688,7 +683,7 @@ class DockerManager:
                 "--user",
                 "root",
                 "--workdir",
-                self._container_path(self.kernel_dir),
+                str(self.kernel_dir),
                 self.container_name,
                 "git",
                 "reset",
@@ -705,7 +700,7 @@ class DockerManager:
                 "--user",
                 "root",
                 "--workdir",
-                self._container_path(self.kernel_dir),
+                str(self.kernel_dir),
                 self.container_name,
                 "git",
                 "clean",
@@ -724,7 +719,7 @@ class DockerManager:
                 "chown",
                 "-R",
                 "patchwise:patchwise",
-                self._container_path(self.kernel_dir),
+                str(self.kernel_dir),
             ],
             check=True,
             capture_output=True,

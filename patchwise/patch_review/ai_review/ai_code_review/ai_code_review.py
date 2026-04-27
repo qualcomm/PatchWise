@@ -743,14 +743,11 @@ regulator-name.
 
     def _container_kernel_path(self, rel: str) -> str:
         """Return a kernel-relative path anchored at the container kernel root."""
-        return self.docker_manager._container_path(self.docker_manager.kernel_dir / rel)
+        return str(self.docker_manager.kernel_dir / rel)
 
     def _validate_existing_kernel_path(self, path: str) -> str:
         """Validate and normalize a kernel-relative path that must exist."""
-        try:
-            self._abs_in_kernel(path)
-        except ValueError as e:
-            raise ValueError(str(e))
+        self._abs_in_kernel(path)
 
         rel = self._kernel_rel(path)
         container_path = self._container_kernel_path(rel)
@@ -788,10 +785,7 @@ regulator-name.
 
     def _validate_git_path(self, path: str) -> str:
         """Validate a kernel-relative path for git object access."""
-        try:
-            self._abs_in_kernel(path)
-        except ValueError as e:
-            raise ValueError(str(e))
+        self._abs_in_kernel(path)
         return self._kernel_rel(path)
 
     def _split_git_object_spec(self, rev: str) -> Tuple[str, Optional[str]]:
@@ -1426,19 +1420,7 @@ regulator-name.
                 }
             )
 
-        count_proc = self.docker_manager.run_command(
-            self._git_command("rev-list", "--count", "HEAD", "--", rel),
-            cwd=kernel_dir,
-        )
-        count_stdout, count_stderr = count_proc.communicate()
-        if count_proc.returncode != 0:
-            detail = count_stderr.strip() or "git rev-list failed"
-            return {"ok": False, "error": detail}
-
-        try:
-            total = int(count_stdout.strip())
-        except ValueError:
-            total = len(commits)
+        total = len(commits)
         truncated = total > 100
         return {
             "ok": True,
