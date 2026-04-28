@@ -109,7 +109,10 @@ def main():
 
     for commit in commits:
         logger.info(f"Reviewing commit {commit.hexsha}...")
-        results = review_commit(reviews, commit, args.repo_path)
+        results = review_commit(
+            reviews, commit, args.repo_path,
+            additional_context=args.additional_context,
+        )
         
         # Save results to output directory
         output_dir = Path(args.output_dir) / commit.hexsha

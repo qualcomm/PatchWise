@@ -262,6 +262,11 @@ def add_ai_arguments(
         default=DEFAULT_API_BASE,
         help="The base URL for the AI model API. (default: %(default)s)",
     )
+    parser_or_group.add_argument(
+        "--additional-context",
+        default="",
+        help="Extra text injected into the AI Code Review prompt.",
+    )
     # parser_or_group.add_argument(
     #     "--review-threshold",
     #     type=float,
