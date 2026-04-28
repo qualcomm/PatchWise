@@ -5,7 +5,8 @@
 All tools accept and return kernel-relative paths (e.g. 'drivers/usb/foo.c').
 The `file` arg on name-taking tools is a hint for where you saw the symbol
 used, not where its definition lives. The tool resolves the definition
-itself. List tools cap results at 100; read_file caps at 200 lines.
+itself. List tools cap results at 100; read_file/git_show/git_cat_file cap at
+200 lines.
 """
 
 _NAME_PARAM = {
@@ -163,6 +164,98 @@ TOOLS = [
                     },
                 },
                 "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "git_log",
+            "description": (
+                "Show recent commit history touching a kernel-relative file or "
+                "directory path. Returns {result: [{rev, author, date, subject}], "
+                "total, truncated}. Capped at 100 commits."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": (
+                            "Kernel-relative file or directory path whose history "
+                            "you want to inspect."
+                        ),
+                    },
+                },
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "git_show",
+            "description": (
+                "Show a commit or historical file object by revision. `rev` may "
+                "be a commit id/revision (e.g. HEAD~1) or `<commit-id>:<relative/path>` "
+                "(e.g. `43cfbdda5af6:drivers/remoteproc/qcom_q6v5.c`). Set "
+                "`name_only=true` to return only changed file paths for a commit. "
+                "Returns {rev, content, truncated} or {rev, paths, truncated}. "
+                "Capped at 200 lines or 200 paths per call."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "rev": {
+                        "type": "string",
+                        "description": (
+                            "A commit revision such as HEAD, HEAD~1, or a commit SHA, "
+                            "or a historical file object like "
+                            "'43cfbdda5af6:drivers/remoteproc/qcom_q6v5.c'."
+                        ),
+                    },
+                    "name_only": {
+                        "type": "boolean",
+                        "description": (
+                            "If true, return only the changed file paths for the commit."
+                        ),
+                    },
+                },
+                "required": ["rev"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "git_cat_file",
+            "description": (
+                "Read a historical file from git by commit revision and kernel-relative "
+                "path. Returns {rev, path, start, end, content, truncated}. "
+                "Capped at 200 lines per call. Use this when `git_show` output is "
+                "truncated or when you want file contents without a patch."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "rev": {
+                        "type": "string",
+                        "description": "A commit revision such as HEAD, HEAD~1, or a commit SHA.",
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "Kernel-relative path inside that revision.",
+                    },
+                    "start": {
+                        "type": "integer",
+                        "description": "1-based starting line (default 1).",
+                    },
+                    "end": {
+                        "type": "integer",
+                        "description": "1-based ending line, inclusive (default start+199).",
+                    },
+                },
+                "required": ["rev", "path"],
             },
         },
     },

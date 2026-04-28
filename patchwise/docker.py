@@ -32,6 +32,7 @@ class DockerManager:
         self.sandbox_path = Path("/home") / PACKAGE_NAME
         self.build_dir = self.sandbox_path / "build"
         self.kernel_dir = self.sandbox_path / "kernel"
+        self._kernel_overlay_volume: Optional[str] = None
 
     @property
     def _kernel_volume_name(self) -> str:
@@ -266,6 +267,8 @@ class DockerManager:
     ) -> subprocess.Popen[str]:
         if not cwd:
             cwd = str(self.sandbox_path)
+        else:
+            cwd = str(cwd)
 
         docker_command = ["docker", "exec"]
         docker_command.extend(["--workdir", cwd])
@@ -288,6 +291,8 @@ class DockerManager:
         """Run an interactive command that needs stdin/stdout communication."""
         if not cwd:
             cwd = str(self.sandbox_path)
+        else:
+            cwd = str(cwd)
 
         docker_command = ["docker", "exec", "-i"]
         docker_command.extend(["--workdir", cwd])
@@ -324,7 +329,8 @@ class DockerManager:
 
         # Create index directory in container
         create_proc = self.run_command(
-            ["mkdir", "-p", str(index_dir)], cwd=str(self.build_dir)
+            ["mkdir", "-p", str(index_dir)],
+            cwd=str(self.build_dir),
         )
         create_proc.wait()
 
@@ -380,6 +386,8 @@ class DockerManager:
         """Start clangd via docker exec with direct stdin/stdout communication."""
         if not cwd:
             cwd = str(self.kernel_dir)
+        else:
+            cwd = str(cwd)
 
         # Ensure index directory exists
         self.ensure_clangd_index_dir()
@@ -527,7 +535,8 @@ class DockerManager:
                 capture_output=True,
             )
 
-            # Run the initialization script as root
+            # Initialize the shared volume inline instead of depending on a
+            # helper script being present in the image.
             subprocess.run(
                 [
                     "docker",
@@ -535,7 +544,16 @@ class DockerManager:
                     "--user",
                     "root",
                     init_container_name,
-                    "/home/patchwise/init-build-dir.sh",
+                    "sh",
+                    "-lc",
+                    (
+                        "set -e; "
+                        "echo 'Initializing shared build directory...'; "
+                        "mkdir -p /shared/build; "
+                        "chown -R patchwise:patchwise /shared/build; "
+                        "chmod -R 755 /shared/build; "
+                        "echo 'Build directory initialized successfully'"
+                    ),
                 ],
                 check=True,
                 capture_output=True,
@@ -657,6 +675,7 @@ class DockerManager:
             check=True,
             capture_output=True,
         )
+
         subprocess.run(
             [
                 "docker",
