@@ -123,7 +123,10 @@ def register_containers_cleanup() -> None:
 
 
 def review_commit(
-    reviews: set[str], commit: Commit, repo_path: str
+    reviews: set[str],
+    commit: Commit,
+    repo_path: str,
+    additional_context: str = "",
 ) -> PatchReviewResults:
     all_reviews = {cls.__name__: cls for cls in AVAILABLE_PATCH_REVIEWS}
     selected_reviews = [all_reviews[name] for name in reviews if name in all_reviews]
@@ -137,7 +140,7 @@ def review_commit(
 
     for selected_review in selected_reviews:
         logger.debug(f"Initializing review: {selected_review.__name__}")
-        cur_review = selected_review(repo_path, commit)
+        cur_review = selected_review(repo_path, commit, additional_context)
 
         logger.debug(f"Running review: {selected_review.__name__}")
         result = cur_review.run()

@@ -28,10 +28,12 @@ class PatchReview(abc.ABC):
         self,
         repo_path: str,
         commit: Commit,
+        additional_context: str = "",
     ):
         self.logger = self.get_logger()
         self.repo = Repo(repo_path)
         self.commit = commit
+        self.additional_context = additional_context
         self.build_dir = BUILD_DIR / str(self.commit.hexsha)
         self.build_dir.mkdir(parents=True, exist_ok=True)
 
