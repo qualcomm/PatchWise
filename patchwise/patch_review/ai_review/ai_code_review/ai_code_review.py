@@ -157,7 +157,8 @@ Checklist:
 
     def get_system_prompt(self) -> str:
         """Generate the system prompt including kernel coding style guidelines."""
-        return """
+        today = datetime.date.today().isoformat()
+        return f"\nDate: {today}\n" + """
 # System Prompt
 
 ## Instructions
