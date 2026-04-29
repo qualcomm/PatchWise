@@ -328,36 +328,27 @@ regulator-name.
         self._run_make_command(["archprepare"])
 
         self.logger.debug("Generating compile commands using compiledb")
-        make_dryrun_cmd = [
-            "make",
-            "-nwk",
-            f"-j{os.cpu_count() or 4}",
-            "-C",
-            str(kernel_dir),
-            f"O={build_dir}",
-            "ARCH=arm64",
-            "LLVM=1",
-        ]
-        build_log = self.run_cmd_with_timer(
-            make_dryrun_cmd, "make dry-run for compile commands", cwd=str(build_dir)
+        compile_commands_path = build_dir / "compile_commands.json"
+        pipeline = (
+            f"make -nwk -j{os.cpu_count() or 4} "
+            f"-C {kernel_dir} O={build_dir} ARCH=arm64 LLVM=1 "
+            f"| compiledb -o {compile_commands_path}"
         )
-
-        compiledb_cmd = [
-            "compiledb",
-            "-o",
-            str(build_dir / "compile_commands.json"),
-        ]
-        compiledb_proc = self.docker_manager.run_interactive_command(
-            compiledb_cmd, cwd=str(build_dir)
+        self.run_cmd_with_timer(
+            ["sh", "-c", pipeline],
+            "genrating compile_commands.json...",
+            cwd=str(build_dir),
         )
-        stdout, stderr = compiledb_proc.communicate(input=build_log)
-        if compiledb_proc.returncode != 0:
-            raise RuntimeError(
-                f"compiledb failed (rc={compiledb_proc.returncode}): {stderr}"
+        check = self.docker_manager.run_command(
+            ["test", "-s", str(compile_commands_path)], cwd=None
+        )
+        check.communicate()
+        if check.returncode != 0:
+            self.logger.warning(
+                f"compile_commands.json not produced at {compile_commands_path}"
             )
-        if stdout:
-            self.logger.debug(stdout)
-        self.logger.debug("compile_commands.json generated")
+        else:
+            self.logger.debug("compile_commands.json generated")
 
     def _create_lsp_message(
         self, method: str, params: Dict[str, Any], msg_id: Optional[int] = None
