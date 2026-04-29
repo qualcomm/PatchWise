@@ -178,6 +178,12 @@ class AiReview(PatchReview):
 
             response = self._completion_with_retry(**completion_kwargs)
             msg = response.choices[0].message
+
+            # Hallucinated name with invalid chars should not poison replayed history.
+            for tool_call in msg.tool_calls or []:
+                tool_call.function.name = re.sub(
+                    r"[^a-zA-Z0-9_-]", "_", tool_call.function.name
+                )
             messages.append(msg.model_dump())
 
             if not msg.tool_calls:
