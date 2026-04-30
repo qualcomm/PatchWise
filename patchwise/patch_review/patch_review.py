@@ -89,8 +89,11 @@ class PatchReview(abc.ABC):
         cmd: List[str],
         desc: str,
         cwd: Optional[str] = None,
+        stderr_only: bool = False,
         **kwargs: Any,
     ) -> str:
+
+    
         """
         Runs a make command and displays a timer while it runs,
         but only if logger level is INFO or lower.
@@ -115,7 +118,8 @@ class PatchReview(abc.ABC):
                 _stdout, _stderr = process.communicate(timeout=5)
                 if _stdout:
                     self.logger.debug(_stdout)
-                    output += _stdout
+                    if not stderr_only:
+                        output += _stdout
                 if _stderr:
                     self.logger.debug(_stderr)
                     output += _stderr

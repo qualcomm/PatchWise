@@ -62,10 +62,10 @@ class Coccicheck(StaticAnalysis):
                 "coccicheck",
                 f"M={directory}",
                 "MODE=report",
-                "DEBUG_FILE=/dev/null",
             ],
             cwd=str(self.docker_manager.build_dir),
             desc="coccicheck running",
+            stderr_only=True,
         )
         return coccicheck_output
 
