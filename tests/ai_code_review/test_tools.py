@@ -340,7 +340,7 @@ def test_grep_errors(
     "path,start,end,must_contain",
     [
         ("include/linux/list.h", 20, 40, "LIST_HEAD_INIT"),
-        ("fs/open.c", 1, 50, "Copyright"),
+        ("fs/open.c", 1, 50, "#include <linux/string.h>"),
     ],
     ids=lambda v: str(v),
 )
@@ -529,7 +529,7 @@ def test_git_cat_file(review: AiCodeReview) -> None:
     payload = result.get("result", {})
     assert payload.get("rev") == PINNED_COMMIT
     assert payload.get("path") == "fs/open.c"
-    assert "Copyright" in payload.get("content", "")
+    assert "#include <linux/string.h>" in payload.get("content", "")
 
 
 @pytest.mark.parametrize(
