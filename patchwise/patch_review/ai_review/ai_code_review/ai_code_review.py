@@ -14,7 +14,7 @@ from urllib.parse import urlparse, unquote
 
 from patchwise import SANDBOX_PATH
 from patchwise.patch_review.decorators import register_llm_review, register_long_review
-from patchwise.utils.decorators import lru_cache_cb
+from patchwise.utils.decorators import lru_cache_cb, retry
 
 from ..ai_review import AiReview
 from .tool_definitions import TOOLS
@@ -1799,10 +1799,20 @@ regulator-name.
             f"Starting clangd LSP server with args: {' '.join(clangd_args)}"
         )
 
-        # Start clangd via docker exec with direct stdin/stdout
-        proc = self.docker_manager.start_clangd_lsp(clangd_args, cwd=str(kernel_dir))
+        return self._start_and_init_lsp(clangd_args, kernel_dir)
 
-        # Initialize LSP connection
+    def _cleanup_clangd_on_retry(self, *_args: Any, **_kwargs: Any) -> None:
+        self.docker_manager.cleanup_clangd()
+
+    @retry(
+        max_retries=3,
+        exceptions=(RuntimeError,),
+        on_retry=_cleanup_clangd_on_retry,
+    )
+    def _start_and_init_lsp(
+        self, clangd_args: List[str], kernel_dir: Path
+    ) -> subprocess.Popen[Any]:
+        proc = self.docker_manager.start_clangd_lsp(clangd_args, cwd=str(kernel_dir))
         self._initialize_lsp(proc, self.docker_manager.kernel_dir)
         return proc
 
