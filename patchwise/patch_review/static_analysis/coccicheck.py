@@ -3,6 +3,7 @@
 
 import os
 import re
+import subprocess
 
 from patchwise.patch_review.decorators import (
     register_short_review,
@@ -65,7 +66,7 @@ class Coccicheck(StaticAnalysis):
             ],
             cwd=str(self.docker_manager.build_dir),
             desc="coccicheck running",
-            stderr_only=True,
+            stdout=subprocess.DEVNULL,
         )
         return coccicheck_output
 
