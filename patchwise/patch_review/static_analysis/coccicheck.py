@@ -3,6 +3,7 @@
 
 import os
 import re
+import subprocess
 
 from patchwise.patch_review.decorators import (
     register_short_review,
@@ -62,22 +63,15 @@ class Coccicheck(StaticAnalysis):
                 "coccicheck",
                 f"M={directory}",
                 "MODE=report",
-                f"DEBUG_FILE={self.symlink_path}",
             ],
             cwd=str(self.docker_manager.build_dir),
             desc="coccicheck running",
+            stdout=subprocess.DEVNULL,
         )
         return coccicheck_output
 
     def setup(self) -> None:
-        # Create symlink /tmp/{package_name}_null -> /dev/null
-        # Necessary to trick the coccicheck script into piping stdout to /dev/null otherwise it combines stdout and stderr for some reason
-        package_name = __package__ or "coccicheck"
-        self.symlink_path = f"/tmp/{package_name}_null"
-        target = "/dev/null"
-        if os.path.islink(self.symlink_path) or os.path.exists(self.symlink_path):
-            os.remove(self.symlink_path)
-        os.symlink(target, self.symlink_path)
+        pass
 
     def run(self) -> str:
         # TODO make sure that setup() runs in order for run() to run
