@@ -278,6 +278,28 @@ def test_grep_glob_kconfig(review: AiCodeReview) -> None:
     ), "non-Kconfig file slipped through glob filter"
 
 
+def test_grep_directory_filter_honors_glob(review: AiCodeReview) -> None:
+    """file=<dir> searches inside that subtree and still applies glob filters."""
+    result = review.dispatch_tool(
+        "grep",
+        {
+            "pattern": "qcom,msm8226-adsp-pil",
+            "file": "Documentation/devicetree/bindings/remoteproc",
+            "glob": "*.yaml",
+        },
+    )
+    assert result.get("ok"), f"directory-scoped grep failed: {result}"
+    hits = result.get("result", [])
+    assert result.get("total", 0) >= 1, "expected YAML hits under remoteproc bindings"
+    assert all(
+        h["path"].startswith("Documentation/devicetree/bindings/remoteproc/")
+        for h in hits
+    ), "hit outside requested directory slipped through file filter"
+    assert all(
+        h["path"].endswith(".yaml") for h in hits
+    ), "non-YAML file slipped through glob filter"
+
+
 def test_grep_glob_star_no_hits(review: AiCodeReview) -> None:
     """glob=* with a garbage pattern returns ok with zero hits."""
     result = review.dispatch_tool(
@@ -316,12 +338,8 @@ def test_grep_glob_star_qcom_msm8226_adsp_pil(review: AiCodeReview) -> None:
             {"pattern": "anything", "file": "../../../etc/passwd"},
             "escapes kernel tree",
         ),
-        (
-            {"pattern": "anything", "file": "drivers/remoteproc"},
-            "file not found",
-        ),
     ],
-    ids=["invalid_regex", "missing_file", "path_escape", "file_is_directory"],
+    ids=["invalid_regex", "missing_file", "path_escape"],
 )
 def test_grep_errors(
     review: AiCodeReview, args: Dict[str, Any], expected_error: str

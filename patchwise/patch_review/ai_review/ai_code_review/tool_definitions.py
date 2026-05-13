@@ -96,14 +96,15 @@ TOOLS = [
                     },
                     "file": {
                         "type": "string",
-                        "description": "Optional kernel-relative file to restrict the search to.",
+                        "description": (
+                            "Optional kernel-relative file or directory to scope the search. "
+                            "Glob is ignored when this names a single file."
+                        ),
                     },
                     "glob": {
                         "type": "string",
                         "description": (
-                            "Comma-separated ripgrep glob patterns to filter which files "
-                            "are searched (e.g. '*.dts,*.dtsi,*.yaml' or 'Kconfig,Makefile'). "
-                            "Ignored when `file` is set. Defaults to '*.c,*.h'."
+                            "Comma-separated ripgrep glob patterns. Defaults to '*.c,*.h'."
                         ),
                     },
                 },
