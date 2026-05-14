@@ -1268,6 +1268,7 @@ regulator-name.
             return {"ok": False, "error": f"invalid regex: {e}"}
 
         file_filter: Optional[str] = None
+        file_filter_is_dir = False
         if file:
             try:
                 self._abs_in_kernel(file)
@@ -1276,10 +1277,24 @@ regulator-name.
             file_filter = self._kernel_rel(file)
             container_path = str(self.docker_manager.kernel_dir / file_filter)
             check = self.docker_manager.run_command(
-                ["test", "-f", container_path], cwd=None
+                [
+                    "sh",
+                    "-c",
+                    (
+                        'if [ -f "$1" ]; then echo file; '
+                        'elif [ -d "$1" ]; then echo dir; '
+                        "else echo missing; fi"
+                    ),
+                    "sh",
+                    container_path,
+                ],
+                cwd=None,
             )
-            check.communicate()
-            if check.returncode != 0:
+            stdout, _ = check.communicate()
+            path_kind = stdout.strip()
+            if path_kind == "dir":
+                file_filter_is_dir = True
+            elif path_kind != "file":
                 return {"ok": False, "error": f"file not found: {file_filter}"}
 
         kernel_dir = self.docker_manager.kernel_dir
@@ -1292,13 +1307,14 @@ regulator-name.
             "--max-count",
             "500",
         ]
-        if file_filter:
+        if file_filter and not file_filter_is_dir:
             rg_cmd += ["-e", pattern, str(kernel_dir / file_filter)]
         else:
             globs = [g.strip() for g in glob.split(",")] if glob else ["*.c", "*.h"]
             for g in globs:
                 rg_cmd += ["--glob", g]
-            rg_cmd += ["-e", pattern, str(kernel_dir)]
+            search_root = kernel_dir / file_filter if file_filter else kernel_dir
+            rg_cmd += ["-e", pattern, str(search_root)]
 
         try:
             output = self.run_cmd_with_timer(
