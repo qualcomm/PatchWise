@@ -52,7 +52,7 @@ def prepare_containers_and_build_volume(
     # Always ensure base container is built first
     base_dockerfile = DOCKERFILES_PATH / "base.Dockerfile"
     base_image_tag = "patchwise-base:latest"
-    base_container_name = f"patchwise-base-latest-{commit.hexsha}"
+    base_container_name = f"patchwise-base-latest-{commit.hexsha}-{DockerManager._run_ts}"
 
     base_manager = DockerManager(
         base_image_tag, base_container_name, Path(repo_path), commit.hexsha
@@ -72,7 +72,7 @@ def prepare_containers_and_build_volume(
             image_tag = f"patchwise-{review_class.__name__.lower()}"
 
         if image_tag not in built_images:
-            container_name = f"{image_tag.replace(':', '-')}-{commit.hexsha}"
+            container_name = f"{image_tag.replace(':', '-')}-{commit.hexsha}-{DockerManager._run_ts}"
             manager = DockerManager(
                 image_tag, container_name, Path(repo_path), commit.hexsha
             )

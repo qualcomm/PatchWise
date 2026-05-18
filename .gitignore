@@ -31,4 +31,6 @@ MANIFEST
 
 sandbox/
 tests/linux/
+tests/eval/output/
+tests/eval/chroma/
 

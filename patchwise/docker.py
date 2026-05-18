@@ -14,6 +14,7 @@ class DockerManager:
     # Class-level tracking for initialization
     build_volume_initialized = False
     _build_volume_name = "patchwise-shared-build"
+    _run_ts = int(time.time())
 
     def __init__(
         self,
@@ -37,12 +38,12 @@ class DockerManager:
     @property
     def _kernel_volume_name(self) -> str:
         """Docker volume name for this container's kernel overlay."""
-        return f"patchwise-kernel-{self.container_name}"
+        return f"patchwise-kernel-{self.container_name}-{self._run_ts}"
 
     @property
     def _kernel_backing_volume_name(self) -> str:
         """Docker volume name for this container's overlay backing storage (upper/work)."""
-        return f"patchwise-kernel-backing-{self.container_name}"
+        return f"patchwise-kernel-backing-{self.container_name}-{self._run_ts}"
 
     def _setup_kernel_overlay(self) -> str:
         """Create a Docker volume with overlay driver options.
@@ -508,12 +509,23 @@ class DockerManager:
 
         logger.info("Initializing shared build volume...")
 
+        # If the volume already exists, it was initialized by a previous run — skip.
+        volume_exists = subprocess.run(
+            ["docker", "volume", "inspect", cls._build_volume_name],
+            capture_output=True,
+        ).returncode == 0
+
+        if volume_exists:
+            logger.debug("Shared build volume already exists, skipping initialization.")
+            cls.build_volume_initialized = True
+            return
+
         # Ensure the volume exists
         cls.create_shared_build_volume()
 
         # Create a temporary base container to initialize the volume
         base_image_tag = "patchwise-base:latest"
-        init_container_name = f"patchwise-init-{current_commit_sha[:8]}"
+        init_container_name = f"patchwise-init-{current_commit_sha[:8]}-{cls._run_ts}"
 
         try:
             # Start container with the shared volume mounted
@@ -537,7 +549,7 @@ class DockerManager:
 
             # Initialize the shared volume inline instead of depending on a
             # helper script being present in the image.
-            subprocess.run(
+            result = subprocess.run(
                 [
                     "docker",
                     "exec",
@@ -555,9 +567,20 @@ class DockerManager:
                         "echo 'Build directory initialized successfully'"
                     ),
                 ],
-                check=True,
                 capture_output=True,
+                text=True,
             )
+            if result.returncode != 0:
+                logger.error(
+                    "init container exec failed (rc=%d)\nstdout: %s\nstderr: %s",
+                    result.returncode, result.stdout, result.stderr,
+                )
+                raise subprocess.CalledProcessError(
+                    result.returncode,
+                    result.args,
+                    output=result.stdout,
+                    stderr=result.stderr,
+                )
 
             logger.info("Shared build volume initialized successfully.")
             cls.build_volume_initialized = True
