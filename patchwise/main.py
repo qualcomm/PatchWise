@@ -3,6 +3,7 @@
 
 import argparse
 import logging
+import sys
 from pathlib import Path
 
 from git import Repo
@@ -100,9 +101,22 @@ def main():
     setup_logger(log_file=args.log_file, log_level=args.log_level)
 
     apply_ai_args(args)
-    apply_llmlearn_args(args)
 
     reviews = get_selected_reviews_from_args(args)
+
+    if "LLMLearnReviewer" not in reviews and (
+        args.url is not None or args.cache_dir is not None
+    ):
+        passed = [
+            flag
+            for flag, val in (("--url", args.url), ("--cache_dir", args.cache_dir))
+            if val is not None
+        ]
+        sys.exit(
+            f"error: {' and '.join(passed)} only effective with --reviews llmlearnreviewer"
+        )
+
+    apply_llmlearn_args(args)
 
     repo = Repo(args.repo_path)
     commits = get_commits(repo, args.commits)

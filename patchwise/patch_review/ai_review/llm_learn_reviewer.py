@@ -375,20 +375,23 @@ def add_llmlearn_arguments(
 ):
     parser_or_group.add_argument(
         "--url",
-        default=DEFAULT_SOURCE_URL,
-        help="Lore archive base URL used by LLMLearnReviewer to fetch maintainer review history. (default: %(default)s)",
+        default=None,
+        help=f"Lore archive base URL used by LLMLearnReviewer to fetch maintainer review history. Only valid with --reviews llmlearnreviewer. (default: {DEFAULT_SOURCE_URL})",
     )
     parser_or_group.add_argument(
         "--cache_dir",
-        default=DEFAULT_CACHE_DIR,
-        help="Directory where LLMLearnReviewer caches crawled reviewer comments. (default: %(default)s)",
+        default=None,
+        help=f"Directory where LLMLearnReviewer caches crawled reviewer comments. Only valid with --reviews llmlearnreviewer. (default: {DEFAULT_CACHE_DIR})",
     )
 
 
 def apply_llmlearn_args(args: argparse.Namespace) -> None:
     """
     Applies LLMLearnReviewer-related arguments to the class.
-    Called after parsing command line arguments.
+    Called after parsing command line arguments. Values left as None
+    (i.e. the user did not pass the flag) keep the class defaults.
     """
-    LLMLearnReviewer.lore_url = args.url
-    LLMLearnReviewer.cache_dir = args.cache_dir
+    if args.url is not None:
+        LLMLearnReviewer.lore_url = args.url
+    if args.cache_dir is not None:
+        LLMLearnReviewer.cache_dir = args.cache_dir
