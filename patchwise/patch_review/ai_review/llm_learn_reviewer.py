@@ -12,7 +12,7 @@ from git.objects.commit import Commit
 from patchwise import SANDBOX_PATH
 from patchwise.patch_review.decorators import register_patch_review
 from .ai_review import AiReview
-from .fetch_reviewer_comment import LoreCrawler
+from .fetch_reviewer_comment import DEFAULT_SOURCE_URL, LoreCrawler
 
 @register_patch_review
 class LLMLearnReviewer(AiReview):
@@ -215,7 +215,7 @@ Use the commit message to:
 
             # Check for cached data
             maintainer_name = maintainer.replace(" ", "_").replace("@", "_at_")
-            cache_file = os.path.join(SANDBOX_PATH, f"crawled_{maintainer_name}.json")
+            cache_file = os.path.join(self.crawler_config["CACHE_DIR"], f"crawled_{maintainer_name}.json")
             raw_docs = []
 
             if os.path.exists(cache_file):
@@ -314,12 +314,17 @@ Use the commit message to:
     def setup(self) -> None:
         super().setup()
 
-        # Initialize crawler configuration
+        # Initialize crawler configuration. SOURCE_URL and CACHE_DIR can be
+        # overridden via PATCHWISE_LORE_URL / PATCHWISE_CACHE_DIR env vars so
+        # users can crawl an internal mirror or store the (potentially large)
+        # cache outside /tmp without code changes.
         self.crawler_config = {
             "MAINTAINER": "",  # Will be set per reviewer
             "MAX_COMMENT": 20,  # Total comments to fetch across all reviewers
             "PROXY": None,
             "LIMIT_PER_REVIEWER": "",  # 0 means no limitation per crawler run
+            "SOURCE_URL": os.environ.get("PATCHWISE_LORE_URL", DEFAULT_SOURCE_URL),
+            "CACHE_DIR": os.environ.get("PATCHWISE_CACHE_DIR", str(SANDBOX_PATH)),
             "NOISE_KEYWORDS": [
                 "applied", "applied, thanks", "applied, thanks.",
                 "queued", "queued for", "thanks", "thanks.",
