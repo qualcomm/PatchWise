@@ -60,14 +60,8 @@ class LoreCrawler:
         self.session = requests.Session()
         self.session.headers.update({"User-Agent": "FetchReviewerComment/1.0"})
         self.max_context_lines = config.get("MAX_CONTEXT_LINES", 40)
-        self.source_url = config.get(
-            "SOURCE_URL",
-            os.environ.get("PATCHWISE_LORE_URL", DEFAULT_SOURCE_URL),
-        )
-        self.cache_dir = config.get(
-            "CACHE_DIR",
-            os.environ.get("PATCHWISE_CACHE_DIR", str(SANDBOX_PATH)),
-        )
+        self.source_url = config.get("SOURCE_URL", DEFAULT_SOURCE_URL)
+        self.cache_dir = config.get("CACHE_DIR", str(SANDBOX_PATH))
         if config.get("PROXY"):
             self.session.proxies = {"http": config["PROXY"], "https": config["PROXY"]}
 

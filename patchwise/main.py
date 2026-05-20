@@ -16,6 +16,10 @@ from .patch_review import (
     review_commit,
 )
 from .patch_review.ai_review.ai_review import add_ai_arguments, apply_ai_args
+from .patch_review.ai_review.llm_learn_reviewer import (
+    add_llmlearn_arguments,
+    apply_llmlearn_args,
+)
 from .utils.config import parse_config, update_user_config
 from .utils.tui import display_prompt_with_options
 
@@ -43,6 +47,9 @@ def parse_args(config: dict) -> argparse.Namespace:
 
     ai_group = parser.add_argument_group("AI Review Options")
     add_ai_arguments(ai_group)
+
+    llmlearn_group = parser.add_argument_group("LLMLearnReviewer Options")
+    add_llmlearn_arguments(llmlearn_group)
 
     logging_group = parser.add_argument_group("Logging Options")
     add_logging_arguments(logging_group, config)
@@ -93,6 +100,7 @@ def main():
     setup_logger(log_file=args.log_file, log_level=args.log_level)
 
     apply_ai_args(args)
+    apply_llmlearn_args(args)
 
     reviews = get_selected_reviews_from_args(args)
 

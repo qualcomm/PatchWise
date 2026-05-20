@@ -1,6 +1,7 @@
 # Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 
+import argparse
 import json
 import os
 import subprocess
@@ -14,8 +15,13 @@ from patchwise.patch_review.decorators import register_patch_review
 from .ai_review import AiReview
 from .fetch_reviewer_comment import DEFAULT_SOURCE_URL, LoreCrawler
 
+DEFAULT_CACHE_DIR = str(SANDBOX_PATH)
+
+
 @register_patch_review
 class LLMLearnReviewer(AiReview):
+    lore_url: str = DEFAULT_SOURCE_URL
+    cache_dir: str = DEFAULT_CACHE_DIR
 
     PROMPT_TEMPLATE = """
 Act as a Linux kernel maintainer reviewing a patch submission.
@@ -314,17 +320,18 @@ Use the commit message to:
     def setup(self) -> None:
         super().setup()
 
-        # Initialize crawler configuration. SOURCE_URL and CACHE_DIR can be
-        # overridden via PATCHWISE_LORE_URL / PATCHWISE_CACHE_DIR env vars so
-        # users can crawl an internal mirror or store the (potentially large)
-        # cache outside /tmp without code changes.
+        # Initialize crawler configuration. SOURCE_URL and CACHE_DIR come from
+        # the --url and --cache_dir command-line flags (see
+        # add_llmlearn_arguments) so users can crawl an internal mirror or
+        # store the (potentially large) cache outside /tmp without code
+        # changes.
         self.crawler_config = {
             "MAINTAINER": "",  # Will be set per reviewer
             "MAX_COMMENT": 20,  # Total comments to fetch across all reviewers
             "PROXY": None,
             "LIMIT_PER_REVIEWER": "",  # 0 means no limitation per crawler run
-            "SOURCE_URL": os.environ.get("PATCHWISE_LORE_URL", DEFAULT_SOURCE_URL),
-            "CACHE_DIR": os.environ.get("PATCHWISE_CACHE_DIR", str(SANDBOX_PATH)),
+            "SOURCE_URL": LLMLearnReviewer.lore_url,
+            "CACHE_DIR": LLMLearnReviewer.cache_dir,
             "NOISE_KEYWORDS": [
                 "applied", "applied, thanks", "applied, thanks.",
                 "queued", "queued for", "thanks", "thanks.",
@@ -361,3 +368,27 @@ Use the commit message to:
         )
 
         return self.format_chat_response(result)
+
+
+def add_llmlearn_arguments(
+    parser_or_group: argparse.ArgumentParser | argparse._ArgumentGroup,
+):
+    parser_or_group.add_argument(
+        "--url",
+        default=DEFAULT_SOURCE_URL,
+        help="Lore archive base URL used by LLMLearnReviewer to fetch maintainer review history. (default: %(default)s)",
+    )
+    parser_or_group.add_argument(
+        "--cache_dir",
+        default=DEFAULT_CACHE_DIR,
+        help="Directory where LLMLearnReviewer caches crawled reviewer comments. (default: %(default)s)",
+    )
+
+
+def apply_llmlearn_args(args: argparse.Namespace) -> None:
+    """
+    Applies LLMLearnReviewer-related arguments to the class.
+    Called after parsing command line arguments.
+    """
+    LLMLearnReviewer.lore_url = args.url
+    LLMLearnReviewer.cache_dir = args.cache_dir
