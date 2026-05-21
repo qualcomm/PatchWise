@@ -30,6 +30,11 @@ class Sparse(StaticAnalysis):
         kernel_dir = self.docker_manager.sandbox_path / "kernel"
         build_dir = self.docker_manager.build_dir
 
+        modified_files = set(self.commit.stats.files.keys())
+        if not any(f.endswith((".c", ".h")) for f in modified_files):
+            logger.info("No .c/.h files changed, skipping sparse")
+            return ""
+
         logger.info("=== SPARSE DEBUG: Starting sparse analysis ===")
         logger.info(f"Docker kernel dir: {kernel_dir}")
         logger.info(f"Docker build dir: {build_dir}")
