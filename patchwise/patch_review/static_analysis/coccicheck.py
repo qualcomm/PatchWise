@@ -80,14 +80,17 @@ class Coccicheck(StaticAnalysis):
         os.symlink(target, self.symlink_path)
 
     def run(self) -> str:
-        # TODO make sure that setup() runs in order for run() to run
+        modified_files = set(self.commit.stats.files.keys())
+        if not any(f.endswith((".c", ".h")) for f in modified_files):
+            self.logger.info("No .c/.h files changed, skipping coccicheck")
+            return ""
+
         self.logger.debug(f"Running cocci_check")
 
         # First, prepare the kernel build system
         self._prepare_kernel_build()
 
         output = ""
-        modified_files = set(self.commit.stats.files.keys())
         line_re = re.compile(r"^([^:]+):\d+:\d+-\d+:.*")
 
         directories: set[str] = set()
