@@ -984,7 +984,7 @@ regulator-name.
         """
         docker_path = uri_to_path(uri)
         contents = self.docker_manager.read_file(docker_path)
-        if contents is None:
+        if contents is False:
             raise RuntimeError(f"Unable to read document for LSP: {uri}")
         # Callers must not route non-C sources through this path.
         self._open_file_in_lsp(self.agent_lsp_proc, uri, contents, language="c")
@@ -1388,7 +1388,7 @@ regulator-name.
         rel = self._kernel_rel(path)
         container_path = str(self.docker_manager.kernel_dir / rel)
         content = self.docker_manager.read_file(container_path)
-        if content is None:
+        if content is False:
             return {"ok": False, "error": f"not a file: {path}"}
 
         lines = content.splitlines(keepends=True)

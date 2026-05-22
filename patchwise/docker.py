@@ -5,9 +5,12 @@ import logging
 import subprocess
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Literal, Optional, Union
 
 from patchwise import PACKAGE_NAME, PACKAGE_PATH
+from patchwise.utils.config import parse_config
+
+_GIT_COMMITTER = parse_config()["git_committer"]
 
 
 class DockerManager:
@@ -246,12 +249,21 @@ class DockerManager:
                     capture_output=True,
                 )
             except subprocess.CalledProcessError as e:
-                self.logger.info(
+                self.logger.error(
                     f"Failed to start container {self.container_name}: {e}\nstderr: {e.stderr}"
                 )
                 self._cleanup_kernel_overlay()
                 raise
             self.logger.info(f"Container {self.container_name} started successfully.")
+
+            try:
+                self._configure_git_identity()
+            except subprocess.CalledProcessError as e:
+                self.logger.error(
+                    f"Failed to configure git identity: {e}\nstderr: {e.stderr}"
+                )
+                self._cleanup_kernel_overlay()
+                raise
 
             try:
                 self._prepare_kernel_tree()
@@ -312,14 +324,23 @@ class DockerManager:
         )
         return process
 
-    def read_file(self, path: str) -> Optional[str]:
-        """Read a file from inside the container. Returns None on failure."""
+    def read_file(self, path: str) -> Union[str, Literal[False]]:
+        """Read a file from inside the container. Returns False on failure."""
         proc = self.run_command(["cat", path], cwd=None)
         stdout, stderr = proc.communicate()
         if proc.returncode != 0:
             self.logger.debug(f"read_file({path}) failed: {stderr.strip()}")
-            return None
+            return False
         return stdout
+
+    def write_file(self, path: str, content: str) -> bool:
+        """Write content to a file inside the container. Returns True on success."""
+        proc = self.run_interactive_command(["tee", path], cwd=None)
+        _stdout, stderr = proc.communicate(input=content)
+        if proc.returncode != 0:
+            self.logger.debug(f"write_file({path}) failed: {stderr.strip()}")
+            return False
+        return True
 
     def ensure_clangd_index_dir(self) -> None:
         """Ensure clangd index directory exists in build volume with proper permissions."""
@@ -625,7 +646,7 @@ class DockerManager:
                     capture_output=True,
                 )
             except subprocess.CalledProcessError as e:
-                self.logger.info(
+                self.logger.error(
                     f"Failed to start container {self.container_name}: {e}\nstderr: {e.stderr}"
                 )
                 self._cleanup_kernel_overlay()
@@ -638,6 +659,15 @@ class DockerManager:
             except subprocess.CalledProcessError as e:
                 self.logger.error(
                     f"Failed to fix build directory permissions: {e}\nstderr: {e.stderr}"
+                )
+                self._cleanup_kernel_overlay()
+                raise
+
+            try:
+                self._configure_git_identity()
+            except subprocess.CalledProcessError as e:
+                self.logger.error(
+                    f"Failed to configure git identity: {e}\nstderr: {e.stderr}"
                 )
                 self._cleanup_kernel_overlay()
                 raise
@@ -725,6 +755,31 @@ class DockerManager:
             capture_output=True,
         )
         self.logger.debug(f"Kernel tree at {self.commit_sha} prepared.")
+
+    def _configure_git_identity(self) -> None:
+        """Set a system-wide git committer identity inside the container so
+        ``git commit --amend`` and similar operations don't fail with
+        'empty ident'."""
+        for key, value in (
+            ("user.name", _GIT_COMMITTER["name"]),
+            ("user.email", _GIT_COMMITTER["email"]),
+        ):
+            subprocess.run(
+                [
+                    "docker",
+                    "exec",
+                    "--user",
+                    "root",
+                    self.container_name,
+                    "git",
+                    "config",
+                    "--system",
+                    key,
+                    value,
+                ],
+                check=True,
+                capture_output=True,
+            )
 
     def _fix_build_directory_permissions(self) -> None:
         """Fix permissions for the specific build directory inside the container."""

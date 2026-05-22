@@ -11,7 +11,7 @@ from git.objects.commit import Commit
 
 # Import each review module so its @register_* decorators fire.
 from .static_analysis import checkpatch, coccicheck, dt_check, dtbs_check, sparse
-from .ai_review import ai_code_review, llm_commit_audit
+from .ai_review import ai_code_review, ai_patch_fix, llm_commit_audit
 
 from patchwise.patch_review.decorators import (
     AVAILABLE_PATCH_REVIEWS,
@@ -129,14 +129,27 @@ def review_commit(
     additional_context: str = "",
 ) -> PatchReviewResults:
     all_reviews = {cls.__name__: cls for cls in AVAILABLE_PATCH_REVIEWS}
-    selected_reviews = [all_reviews[name] for name in reviews if name in all_reviews]
+
+    # AiPatchFix extends AiCodeReview and runs the full code review
+    # internally via super().run(). Running both would duplicate the expensive
+    # steps, so drop AiCodeReview from the list when AiPatchFix is selected.
+    effective_reviews = (
+        [r for r in reviews if r != "AiCodeReview"]
+        if "AiPatchFix" in reviews
+        else reviews
+    )
+
+    selected_reviews = [
+        all_reviews[name] for name in effective_reviews if name in all_reviews
+    ]
 
     register_containers_cleanup()
 
     # Prepare containers and build volume upfront
-    prepare_containers_and_build_volume(reviews, commit, repo_path)
+    prepare_containers_and_build_volume(effective_reviews, commit, repo_path)
 
     output = PatchReviewResults(commit)
+    collected_results = {}
 
     for selected_review in selected_reviews:
         logger.debug(f"Initializing review: {selected_review.__name__}")
@@ -144,12 +157,18 @@ def review_commit(
 
         logger.debug(f"Running review: {selected_review.__name__}")
         result = cur_review.run()
-        if result:
-            logger.info(f"{selected_review.__name__} result:\n{result}")
-        else:
-            logger.info(f"{selected_review.__name__} found no issues")
 
-        output.results[selected_review.__name__] = result
+        if selected_review.__name__ == "AiPatchFix":
+            collected_results["AiCodeReview"], collected_results["AiPatchFix"] = result
+        else:
+            collected_results[selected_review.__name__] = result
+
+    for review, result in collected_results.items():
+        if result:
+            logger.info(f"{review} result:\n{result}")
+        else:
+            logger.info(f"{review} found no issues")
+        output.results[review] = result
 
     return output
 

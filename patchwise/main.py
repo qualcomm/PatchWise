@@ -119,7 +119,8 @@ def main():
         output_dir.mkdir(parents=True, exist_ok=True)
         
         for review_name, result_text in results.results.items():
-            output_file = output_dir / f"{review_name.lower()}.txt"
+            ext = "patch" if review_name == "AiPatchFix" else "txt"
+            output_file = output_dir / f"{review_name.lower()}.{ext}"
             with open(output_file, "w", encoding="utf-8") as f:
                 f.write(result_text if result_text else "No issues found\n")
             logger.info(f"Saved {review_name} results to {output_file}")
