@@ -22,7 +22,7 @@ class Checkpatch(StaticAnalysis):
         pass
 
     def run(self) -> str:
-        return self.run_cmd_with_timer(
+        return self.docker_manager.run_cmd_with_timer(
             [
                 os.path.join("scripts", "checkpatch.pl"),
                 "--quiet",

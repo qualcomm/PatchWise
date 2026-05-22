@@ -3,9 +3,10 @@
 
 import logging
 import subprocess
+import sys
 import time
 from pathlib import Path
-from typing import Any, Literal, Optional, Union
+from typing import Any, List, Literal, Optional, Union
 
 from patchwise import PACKAGE_NAME, PACKAGE_PATH
 from patchwise.utils.config import parse_config
@@ -296,6 +297,60 @@ class DockerManager:
             **kwargs,
         )
         return process
+
+    def run_cmd_with_timer(
+        self,
+        cmd: List[str],
+        desc: str,
+        cwd: Optional[str] = None,
+        **kwargs: Any,
+    ) -> str:
+        """
+        Runs a make command and displays a timer while it runs,
+        but only if logger level is INFO or lower.
+
+        Parameters:
+            cmd (str): The command to run using subprocess.Popen().
+            desc (str): The title for the timer
+            cwd (str, optional): The working directory for the command. Defaults to None.
+            **kwargs: Rest of the args for subprocess.Popen.
+
+        Returns:
+            str: Output of running the command (stdout + stderr).
+        """
+        show_timer = self.logger.isEnabledFor(logging.INFO)
+        start = time.time()
+
+        process = self.run_command(cmd, cwd=cwd, **kwargs)
+
+        output = ""
+        while True:
+            try:
+                _stdout, _stderr = process.communicate(timeout=5)
+                if _stdout:
+                    self.logger.debug(_stdout)
+                    output += _stdout
+                if _stderr:
+                    self.logger.debug(_stderr)
+                    output += _stderr
+
+                if show_timer:
+                    sys.stdout.write("\r\033[K")  # Clear to end of line
+                    sys.stdout.flush()
+                elapsed = int(time.time() - start)
+                self.logger.debug(f"{desc}... {elapsed}s elapsed")
+                break
+
+            except subprocess.TimeoutExpired:
+                elapsed = int(time.time() - start)
+                if show_timer:
+                    sys.stdout.write(f"\r\033[K{desc}... {elapsed}s elapsed")
+                    sys.stdout.flush()
+            except (Exception, KeyboardInterrupt) as e:
+                process.kill()
+                raise
+
+        return output
 
     def run_interactive_command(
         self, command: list[str], cwd: Optional[str], **kwargs: Any

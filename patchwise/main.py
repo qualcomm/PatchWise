@@ -13,10 +13,11 @@ from patchwise import OUTPUT_PATH
 from .logger_setup import add_logging_arguments, setup_logger
 from .patch_review import (
     add_review_arguments,
+    fix_reported_issues,
     get_selected_reviews_from_args,
     review_commit,
 )
-from .patch_review.ai_review.ai_review import add_ai_arguments, apply_ai_args
+from patchwise.patch_review.ai_agent import add_ai_arguments, apply_ai_args
 from .utils.config import parse_config, update_user_config
 from .utils.tui import display_prompt_with_options
 
@@ -109,21 +110,34 @@ def main():
 
     for commit in commits:
         logger.info(f"Reviewing commit {commit.hexsha}...")
+
         results = review_commit(
-            reviews, commit, args.repo_path,
+            reviews,
+            commit,
+            args.repo_path,
             additional_context=args.additional_context,
         )
-        
-        # Save results to output directory
+
+        fix_results = fix_reported_issues(results) if args.fix else {}
+
         output_dir = Path(args.output_dir) / commit.hexsha
         output_dir.mkdir(parents=True, exist_ok=True)
-        
-        for review_name, result_text in results.results.items():
-            ext = "patch" if review_name == "AiPatchFix" else "txt"
-            output_file = output_dir / f"{review_name.lower()}.{ext}"
+        for review, result_text in results.results.items():
+            if not result_text:
+                continue
+            review_name = type(review).__name__
+            output_file = output_dir / f"{review_name.lower()}.txt"
             with open(output_file, "w", encoding="utf-8") as f:
-                f.write(result_text if result_text else "No issues found\n")
+                f.write(result_text)
             logger.info(f"Saved {review_name} results to {output_file}")
+
+        for fix_name, fix_text in fix_results.items():
+            if not fix_text:
+                continue
+            output_file = output_dir / f"{fix_name.lower()}.patch"
+            with open(output_file, "w", encoding="utf-8") as f:
+                f.write(fix_text)
+            logger.info(f"Saved {fix_name} results to {output_file}")
 
 
 if __name__ == "__main__":

@@ -51,6 +51,6 @@ The output should use only ASCII characters.
         )
 
         messages = [{"role": "user", "content": formatted_prompt}]
-        result = self.run_agent_loop(messages)
+        result = self.agent.run_agent_loop(messages)
 
         return self.format_chat_response(result)

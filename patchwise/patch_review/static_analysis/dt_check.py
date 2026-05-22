@@ -27,7 +27,7 @@ class DtCheck(StaticAnalysis):
     def __make_refcheckdocs(self) -> str:
         self.logger.debug("Making refcheckdocs")
         kernel_dir = self.docker_manager.sandbox_path / "kernel"
-        output = super().run_cmd_with_timer(
+        output = self.docker_manager.run_cmd_with_timer(
             [
                 "make",
                 "-C",
@@ -47,7 +47,7 @@ class DtCheck(StaticAnalysis):
     def __make_dt_binding_check(self) -> str:
         self.logger.debug("Making dt_binding_check")
         kernel_dir = self.docker_manager.sandbox_path / "kernel"
-        output = super().run_cmd_with_timer(
+        output = self.docker_manager.run_cmd_with_timer(
             [
                 "make",
                 "-C",
@@ -75,7 +75,7 @@ class DtCheck(StaticAnalysis):
         are already cached for `commit`, the cached paths are returned without
         rebuilding. Otherwise the kernel tree is reset to `commit` and the
         checks are run.
-        
+
         Returns (refcheckdocs_log_path, dt_binding_check_log_path).
         """
         logs_dir = Path(SANDBOX_PATH) / "dt-checker-logs"

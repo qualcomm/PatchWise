@@ -1,30 +1,15 @@
 # Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 
-import argparse
-import json
-import os
+from pathlib import Path
 import re
 import textwrap
-import typing as t
 
-import httpx
-import litellm
-import urllib3
-
-urllib3.disable_warnings()
-
+from patchwise.patch_review.ai_agent.agent import Agent
 from patchwise.patch_review.patch_review import PatchReview
-from patchwise.utils.decorators import retry
-
-DEFAULT_MODEL = "Pro"
-DEFAULT_API_BASE = "https://api.openai.com/v1"
-AGENT_MAX_ITERATIONS = 50
 
 
 class AiReview(PatchReview):
-    model: str = DEFAULT_MODEL
-    api_base: str = DEFAULT_API_BASE
 
     def format_chat_response(self, text: str) -> str:
         """
@@ -125,126 +110,8 @@ class AiReview(PatchReview):
 
         return "\n".join(wrapped_paragraphs)
 
-    @retry(
-        max_retries=10,
-        exceptions=(
-            litellm.Timeout,
-            litellm.RateLimitError,
-            litellm.InternalServerError,
-            litellm.OpenAIError,
-        ),
-    )
-    def _completion_with_retry(self, **kwargs) -> t.Any:
-        self.logger.debug(
-            f"Making API call with model: {self.model}, api_base: {AiReview.api_base}"
-        )
-        return litellm.completion(**kwargs)
-
-    def dispatch_tool(self, name: str, args: dict) -> dict:
-        """Dispatch a tool call by name. Subclasses override to register tools."""
-        return {"ok": False, "error": f"unknown tool: {name}"}
-
-    def get_tools(self) -> t.Optional[list[dict]]:
-        """Return a list of tool definitions (LiteLLM/OpenAI format). Subclasses override."""
-        return None
-
-    def run_agent_loop(self, messages: list[dict]) -> str:
-        """Run the agent loop, calling the LLM iteratively until it stops requesting tools.
-
-        Args:
-            messages: Initial message list (system + user turns).
-
-        Returns:
-            The final assistant text response.
-        """
-        tools = self.get_tools()
-
-        completion_kwargs: dict = {
-            "model": self.model,
-            "api_base": AiReview.api_base,
-            "messages": messages,
-            "stream": False,
-        }
-
-        if tools:
-            completion_kwargs["tools"] = tools
-            # Force tool usage to get additional context on the first iteration
-            completion_kwargs["tool_choice"] = "required"
-            completion_kwargs["allowed_openai_params"] = ["tools", "tool_choice"]
-
-        for iteration in range(1, AGENT_MAX_ITERATIONS + 1):
-            self._agent_iteration = iteration
-            self.logger.debug(f"Agent iteration {iteration}/{AGENT_MAX_ITERATIONS}")
-
-            response = self._completion_with_retry(**completion_kwargs)
-            msg = response.choices[0].message
-
-            # Hallucinated name with invalid chars should not poison replayed history.
-            for tool_call in msg.tool_calls or []:
-                tool_call.function.name = re.sub(
-                    r"[^a-zA-Z0-9_-]", "_", tool_call.function.name
-                )
-            messages.append(msg.model_dump())
-
-            if not msg.tool_calls:
-                return msg.content or ""
-
-            if iteration == 1:
-                completion_kwargs["tool_choice"] = "auto"
-
-            # Dispatch each tool call and append results
-            for tool_call in msg.tool_calls:
-                name = tool_call.function.name
-                try:
-                    args = json.loads(tool_call.function.arguments)
-                    self.logger.debug(f"Tool call: {name}({args})")
-                    result = self.dispatch_tool(name, args)
-                    self.logger.debug(f"Tool result: {name} -> {result}")
-                except json.JSONDecodeError as e:
-                    self.logger.error(f"Error parsing tool args for '{name}': {e}")
-                    result = {
-                        "ok": False,
-                        "error": f"Invalid JSON arguments `{args}` for tool '{name}'",
-                    }
-                except Exception as e:
-                    self.logger.error(f"Error executing tool '{name}': {e}")
-                    result = {
-                        "ok": False,
-                        "error": f"Internal error executing tool '{name}({args})'",
-                    }
-
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": tool_call.id,
-                        "name": name,
-                        "content": json.dumps(result),
-                    }
-                )
-
-        # Max iterations reached, force a final response by disallowing tool calls
-        self.logger.warning(
-            f"Agent reached max iterations ({AGENT_MAX_ITERATIONS}). Forcing final response without tools."
-        )
-
-        completion_kwargs["tool_choice"] = "none"
-
-        messages.append(
-            {
-                "role": "user",
-                "content": "Maximum tool iterations reached. Please provide your final response based on the available information.",
-            }
-        )
-
-        response = self._completion_with_retry(**completion_kwargs)
-        return response.choices[0].message.content or ""
-
     def setup(self):
-        self.model = AiReview.model
-
-        os.environ["OTEL_SDK_DISABLED"] = "true"
-
-        litellm.client_session = httpx.Client(verify=False)
+        self.agent = Agent(Path(self.repo.working_dir), self.docker_manager)
 
         self.diff = self.repo.git.diff(self.commit.parents[0], self.commit).strip()
         if not self.diff:
@@ -253,38 +120,3 @@ class AiReview(PatchReview):
         self.commit_message = self.repo.commit(self.commit).message.rstrip()
         if not self.commit_message:
             self.logger.error("Failed to retrieve commit message.")
-
-
-def add_ai_arguments(
-    parser_or_group: argparse.ArgumentParser | argparse._ArgumentGroup,
-):
-    parser_or_group.add_argument(
-        "--model",
-        default=f"openai/{AiReview.model}",
-        help="The AI model to use for review. (default: %(default)s)",
-    )
-    parser_or_group.add_argument(
-        "--provider",
-        default=DEFAULT_API_BASE,
-        help="The base URL for the AI model API. (default: %(default)s)",
-    )
-    parser_or_group.add_argument(
-        "--additional-context",
-        default="",
-        help="Extra text injected into the AI Code Review prompt.",
-    )
-    # parser_or_group.add_argument(
-    #     "--review-threshold",
-    #     type=float,
-    #     default=0.5,
-    #     help="The threshold for review confidence. (default: %(default)s)"
-    # )
-
-
-def apply_ai_args(args: argparse.Namespace) -> None:
-    """
-    Applies AI-related arguments to the AiReview class.
-    This function is called after parsing command line arguments.
-    """
-    AiReview.model = args.model
-    AiReview.api_base = args.provider

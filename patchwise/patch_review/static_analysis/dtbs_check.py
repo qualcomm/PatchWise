@@ -54,7 +54,7 @@ class DtbsCheck(StaticAnalysis):
 
         self.logger.debug(f"Running dtbs_check on: {commit.hexsha}")
         try:
-            dtbs_check_output = super().run_cmd_with_timer(
+            dtbs_check_output = self.docker_manager.run_cmd_with_timer(
                 cmd=[
                     "make",
                     "-C",

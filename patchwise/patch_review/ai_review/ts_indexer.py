@@ -14,6 +14,7 @@ Protocol:
 A `{"ready": true, ...}` line is emitted once the index finishes building, so
 the host can block on first stdout readline() before issuing requests.
 """
+# TODO: Move this to a better place because Agent is the one using this now.
 import json
 import multiprocessing
 import os
