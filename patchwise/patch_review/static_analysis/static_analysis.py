@@ -9,7 +9,6 @@ from git.objects.commit import Commit
 
 from patchwise.patch_review.patch_review import PatchReview
 
-
 # Matches the first line of a dt-schema record: a non-indented path ending in
 # .yaml/.dtb/.dtbo followed by ':' (format_error's separator). Rejects Python
 # tracebacks, make errors, and other stderr chatter which don't have this shape.
@@ -84,16 +83,14 @@ class StaticAnalysis(PatchReview):
         """
         baseline = set(self.group_records(baseline_path.read_text()))
         new = [
-            r
-            for r in self.group_records(current_path.read_text())
-            if r not in baseline
+            r for r in self.group_records(current_path.read_text()) if r not in baseline
         ]
         return "\n".join(new)
 
     def clean_tree(self, arch: str = "arm"):
         self.logger.debug("Cleaning kernel tree")
         kernel_dir = self.docker_manager.sandbox_path / "kernel"
-        self.run_cmd_with_timer(
+        self.docker_manager.run_cmd_with_timer(
             [
                 "make",
                 "-C",
@@ -130,7 +127,7 @@ class StaticAnalysis(PatchReview):
         ]
         if extra_args:
             cmd.extend(extra_args)
-        self.run_cmd_with_timer(
+        self.docker_manager.run_cmd_with_timer(
             cmd,
             cwd=str(self.docker_manager.build_dir),
             desc=config_type,

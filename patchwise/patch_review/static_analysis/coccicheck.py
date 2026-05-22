@@ -29,7 +29,7 @@ class Coccicheck(StaticAnalysis):
 
         # Run make scripts to ensure coccicheck infrastructure is available
         try:
-            super().run_cmd_with_timer(
+            self.docker_manager.run_cmd_with_timer(
                 [
                     "make",
                     "-C",
@@ -49,7 +49,7 @@ class Coccicheck(StaticAnalysis):
 
     def _run_coccicheck(self, directory: str) -> str:
         kernel_dir = self.docker_manager.sandbox_path / "kernel"
-        coccicheck_output = super().run_cmd_with_timer(
+        coccicheck_output = self.docker_manager.run_cmd_with_timer(
             [
                 "make",
                 "-C",

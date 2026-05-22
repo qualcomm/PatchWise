@@ -58,7 +58,7 @@ class Sparse(StaticAnalysis):
             for f in files_changed:
                 touch_cmd = ["touch", str(kernel_dir / f)]
                 try:
-                    super().run_cmd_with_timer(
+                    self.docker_manager.run_cmd_with_timer(
                         touch_cmd,
                         desc=f"touch {f}",
                     )
@@ -84,7 +84,7 @@ class Sparse(StaticAnalysis):
         logger.info("This may take a while...")
 
         try:
-            sparse_warnings = super().run_cmd_with_timer(
+            sparse_warnings = self.docker_manager.run_cmd_with_timer(
                 sparse_cmd,
                 cwd=str(build_dir),
                 desc="sparse check",

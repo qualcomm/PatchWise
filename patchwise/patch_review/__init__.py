@@ -11,12 +11,16 @@ from git.objects.commit import Commit
 
 # Import each review module so its @register_* decorators fire.
 from .static_analysis import checkpatch, coccicheck, dt_check, dtbs_check, sparse
-from .ai_review import ai_code_review, ai_patch_fix, llm_commit_audit
+from .ai_review import ai_code_review, llm_commit_audit
+
+# Import each fix module so its @register_* decorators fire.
+from .ai_fix import ai_patch_fix
 
 from patchwise.patch_review.decorators import (
     AVAILABLE_PATCH_REVIEWS,
     LLM_REVIEWS,
     LONG_REVIEWS,
+    REGISTERED_FIXES,
     SHORT_REVIEWS,
     STATIC_ANALYSIS_REVIEWS,
 )
@@ -30,7 +34,7 @@ logger = logging.getLogger(__name__)
 class PatchReviewResults:
     def __init__(self, commit: Commit):
         self.commit = commit
-        self.results: dict[str, str] = {}
+        self.results: dict[PatchReview, str] = {}
 
     def __repr__(self):
         return f"PatchReviewResults(commit={self.commit}, results={self.results})"
@@ -130,23 +134,12 @@ def review_commit(
 ) -> PatchReviewResults:
     all_reviews = {cls.__name__: cls for cls in AVAILABLE_PATCH_REVIEWS}
 
-    # AiPatchFix extends AiCodeReview and runs the full code review
-    # internally via super().run(). Running both would duplicate the expensive
-    # steps, so drop AiCodeReview from the list when AiPatchFix is selected.
-    effective_reviews = (
-        [r for r in reviews if r != "AiCodeReview"]
-        if "AiPatchFix" in reviews
-        else reviews
-    )
-
-    selected_reviews = [
-        all_reviews[name] for name in effective_reviews if name in all_reviews
-    ]
+    selected_reviews = [all_reviews[name] for name in reviews if name in all_reviews]
 
     register_containers_cleanup()
 
     # Prepare containers and build volume upfront
-    prepare_containers_and_build_volume(effective_reviews, commit, repo_path)
+    prepare_containers_and_build_volume(reviews, commit, repo_path)
 
     output = PatchReviewResults(commit)
     collected_results = {}
@@ -158,19 +151,34 @@ def review_commit(
         logger.debug(f"Running review: {selected_review.__name__}")
         result = cur_review.run()
 
-        if selected_review.__name__ == "AiPatchFix":
-            collected_results["AiCodeReview"], collected_results["AiPatchFix"] = result
-        else:
-            collected_results[selected_review.__name__] = result
+        collected_results[cur_review] = result
 
     for review, result in collected_results.items():
+        if result:
+            logger.info(f"{type(review).__name__} result:\n{result}")
+        else:
+            logger.info(f"{type(review).__name__} found no issues")
+        output.results[review] = result
+
+    return output
+
+
+def fix_reported_issues(review_results: PatchReviewResults):
+    collected_fixes = {}
+    for review, result in review_results.results.items():
+        if type(review) in REGISTERED_FIXES:
+            selected_fix = REGISTERED_FIXES[type(review)]
+            logger.debug(f"Initializing fix: {selected_fix.__name__}")
+            cur_fix = selected_fix(review, result)
+            logger.debug(f"Running fix: {type(cur_fix).__name__}")
+            collected_fixes[type(cur_fix).__name__] = cur_fix.run()
+
+    for review, result in collected_fixes.items():
         if result:
             logger.info(f"{review} result:\n{result}")
         else:
             logger.info(f"{review} found no issues")
-        output.results[review] = result
-
-    return output
+    return collected_fixes
 
 
 def _review_list_str(reviews: Iterable[type[PatchReview]]):
@@ -217,6 +225,14 @@ def add_review_arguments(
         "--install",
         action="store_true",
         help="Install missing dependencies for the specified reviews. This will not run any reviews, only install dependencies.",
+    )
+
+    # TODO: Output a single diff that fixes all the issues
+    # This needs using a single docker container and fixing issue incrementally
+    parser_or_group.add_argument(
+        "--fix",
+        action="store_true",
+        help="For each review, output a version of the commit that fixes the reported issues",
     )
 
     return parser_or_group

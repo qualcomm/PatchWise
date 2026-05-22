@@ -32,7 +32,7 @@ os.environ["PATCHWISE_SANDBOX_PATH"] = str(TESTS_DIR)
 import pytest
 from git import InvalidGitRepositoryError, NoSuchPathError, Repo
 
-from patchwise.patch_review.ai_review.ai_code_review.ai_code_review import AiCodeReview
+from patchwise.patch_review.ai_review.ai_code_review import AiCodeReview
 from patchwise.patch_review.kernel_tree import init_kernel_tree
 
 # Pin the kernel HEAD so IFDEF_CASES line numbers and other expectations
@@ -99,7 +99,7 @@ def review() -> AiCodeReview:
 
 
 def test_dispatch_unknown_tool(review: AiCodeReview) -> None:
-    result = review.dispatch_tool("not_a_real_tool", {})
+    result = review.agent.dispatch_tool("not_a_real_tool", {})
     assert not result.get("ok"), f"unexpectedly ok: {result}"
     assert "unknown tool" in (result.get("error") or "")
 
@@ -123,7 +123,7 @@ def test_dispatch_unknown_tool(review: AiCodeReview) -> None:
 def test_find_definition(
     review: AiCodeReview, name: str, kind: str, expected_file: str
 ) -> None:
-    result = review.dispatch_tool("find_definition", {"name": name})
+    result = review.agent.dispatch_tool("find_definition", {"name": name})
     assert result.get("ok"), f"tool returned not-ok: {result}"
     definition = result.get("definition") or {}
     path = definition.get("path", "")
@@ -144,7 +144,7 @@ def test_find_definition(
 def test_find_definition_ifdef(
     review: AiCodeReview, name: str, file_: str, expected_line: int
 ) -> None:
-    result = review.dispatch_tool("find_definition", {"name": name})
+    result = review.agent.dispatch_tool("find_definition", {"name": name})
     assert result.get("ok"), f"tool returned not-ok: {result}"
     definition = result.get("definition") or {}
     path = definition.get("path", "")
@@ -166,10 +166,9 @@ def test_find_definition_ifdef(
 def test_find_definition_errors(
     review: AiCodeReview, args: Dict[str, Any], expected_error: str
 ) -> None:
-    result = review.dispatch_tool("find_definition", args)
+    result = review.agent.dispatch_tool("find_definition", args)
     assert not result.get("ok"), f"unexpectedly ok: {result}"
     assert expected_error in (result.get("error") or "")
-
 
 
 # ---------------------------------------------------------------------------
@@ -186,7 +185,7 @@ def test_find_definition_errors(
     ids=lambda v: str(v),
 )
 def test_find_callers(review: AiCodeReview, name: str, min_count: int) -> None:
-    result = review.dispatch_tool("find_callers", {"name": name})
+    result = review.agent.dispatch_tool("find_callers", {"name": name})
     assert result.get("ok"), f"tool returned not-ok: {result}"
     total = result.get("total", 0)
     assert total >= min_count, f"only {total} callers (wanted >= {min_count})"
@@ -203,7 +202,7 @@ def test_find_callers(review: AiCodeReview, name: str, min_count: int) -> None:
 def test_find_callers_errors(
     review: AiCodeReview, args: Dict[str, Any], expected_error: str
 ) -> None:
-    result = review.dispatch_tool("find_callers", args)
+    result = review.agent.dispatch_tool("find_callers", args)
     assert not result.get("ok"), f"unexpectedly ok: {result}"
     assert expected_error in (result.get("error") or "")
 
@@ -211,8 +210,6 @@ def test_find_callers_errors(
 # ---------------------------------------------------------------------------
 # find_calls (currently intentionally not-implemented)
 # ---------------------------------------------------------------------------
-
-
 
 
 # ---------------------------------------------------------------------------
@@ -238,7 +235,7 @@ def test_grep(
     args: Dict[str, Any] = {"pattern": pattern}
     if file_ is not None:
         args["file"] = file_
-    result = review.dispatch_tool("grep", args)
+    result = review.agent.dispatch_tool("grep", args)
     assert result.get("ok"), f"tool returned not-ok: {result}"
     hits = result.get("result", [])
     total = result.get("total", 0)
@@ -250,11 +247,11 @@ def test_grep(
 
 def test_grep_glob_dts(review: AiCodeReview) -> None:
     """lpass_wsa2macro is a DT node name; default *.c/*.h must miss it."""
-    default = review.dispatch_tool("grep", {"pattern": "lpass_wsa2macro"})
+    default = review.agent.dispatch_tool("grep", {"pattern": "lpass_wsa2macro"})
     assert default.get("ok"), f"default grep failed: {default}"
     assert default.get("total", 0) == 0, "lpass_wsa2macro should not appear in *.c/*.h"
 
-    wide = review.dispatch_tool(
+    wide = review.agent.dispatch_tool(
         "grep", {"pattern": "lpass_wsa2macro", "glob": "*.dts,*.dtsi"}
     )
     assert wide.get("ok"), f"glob grep failed: {wide}"
@@ -269,7 +266,9 @@ def test_grep_glob_dts(review: AiCodeReview) -> None:
 
 def test_grep_glob_kconfig(review: AiCodeReview) -> None:
     """glob=Kconfig restricts results to Kconfig files."""
-    result = review.dispatch_tool("grep", {"pattern": "REMOTEPROC", "glob": "Kconfig"})
+    result = review.agent.dispatch_tool(
+        "grep", {"pattern": "REMOTEPROC", "glob": "Kconfig"}
+    )
     assert result.get("ok"), f"glob grep failed: {result}"
     assert result.get("total", 0) >= 1, "expected REMOTEPROC hits in Kconfig files"
     hits = result.get("result", [])
@@ -280,7 +279,7 @@ def test_grep_glob_kconfig(review: AiCodeReview) -> None:
 
 def test_grep_directory_filter_honors_glob(review: AiCodeReview) -> None:
     """file=<dir> searches inside that subtree and still applies glob filters."""
-    result = review.dispatch_tool(
+    result = review.agent.dispatch_tool(
         "grep",
         {
             "pattern": "qcom,msm8226-adsp-pil",
@@ -302,7 +301,7 @@ def test_grep_directory_filter_honors_glob(review: AiCodeReview) -> None:
 
 def test_grep_glob_star_no_hits(review: AiCodeReview) -> None:
     """glob=* with a garbage pattern returns ok with zero hits."""
-    result = review.dispatch_tool(
+    result = review.agent.dispatch_tool(
         "grep", {"pattern": "dsajkdjsaiojwoqjo", "glob": "*"}
     )
     assert result.get("ok"), f"tool returned not-ok: {result}"
@@ -311,7 +310,7 @@ def test_grep_glob_star_no_hits(review: AiCodeReview) -> None:
 
 def test_grep_glob_star_qcom_msm8226_adsp_pil(review: AiCodeReview) -> None:
     """glob=* finds qcom,msm8226-adsp-pil across C, DT, and YAML files."""
-    result = review.dispatch_tool(
+    result = review.agent.dispatch_tool(
         "grep", {"pattern": "qcom,msm8226-adsp-pil", "glob": "*"}
     )
     assert result.get("ok"), f"tool returned not-ok: {result}"
@@ -344,7 +343,7 @@ def test_grep_glob_star_qcom_msm8226_adsp_pil(review: AiCodeReview) -> None:
 def test_grep_errors(
     review: AiCodeReview, args: Dict[str, Any], expected_error: str
 ) -> None:
-    result = review.dispatch_tool("grep", args)
+    result = review.agent.dispatch_tool("grep", args)
     assert not result.get("ok"), f"unexpectedly ok: {result}"
     assert expected_error in (result.get("error") or "")
 
@@ -369,7 +368,7 @@ def test_read_file(
     end: int,
     must_contain: str,
 ) -> None:
-    result = review.dispatch_tool(
+    result = review.agent.dispatch_tool(
         "read_file", {"path": path, "start": start, "end": end}
     )
     assert result.get("ok"), f"tool returned not-ok: {result}"
@@ -389,7 +388,7 @@ def test_read_file(
     ids=["path_escape", "missing", "path_is_directory"],
 )
 def test_read_file_errors(review: AiCodeReview, path: str, expected_error: str) -> None:
-    result = review.dispatch_tool("read_file", {"path": path})
+    result = review.agent.dispatch_tool("read_file", {"path": path})
     assert not result.get("ok"), f"unexpectedly ok: {result}"
     assert expected_error in (result.get("error") or "")
 
@@ -416,7 +415,9 @@ def test_list_files(
     recursive: bool,
     expected: str,
 ) -> None:
-    result = review.dispatch_tool("list_files", {"path": path, "recursive": recursive})
+    result = review.agent.dispatch_tool(
+        "list_files", {"path": path, "recursive": recursive}
+    )
     assert result.get("ok"), f"tool returned not-ok: {result}"
     entries = result.get("result", {}).get("entries", [])
     assert any(
@@ -436,7 +437,7 @@ def test_list_files(
 def test_list_files_errors(
     review: AiCodeReview, path: str, expected_error: str
 ) -> None:
-    result = review.dispatch_tool("list_files", {"path": path})
+    result = review.agent.dispatch_tool("list_files", {"path": path})
     assert not result.get("ok"), f"unexpectedly ok: {result}"
     assert expected_error in (result.get("error") or "")
 
@@ -455,7 +456,7 @@ def test_list_files_errors(
     ids=lambda v: str(v),
 )
 def test_git_log(review: AiCodeReview, path: str, min_count: int) -> None:
-    result = review.dispatch_tool("git_log", {"path": path})
+    result = review.agent.dispatch_tool("git_log", {"path": path})
     assert result.get("ok"), f"tool returned not-ok: {result}"
     commits = result.get("result", [])
     total = result.get("total", 0)
@@ -476,10 +477,8 @@ def test_git_log(review: AiCodeReview, path: str, min_count: int) -> None:
     ],
     ids=["path_escape", "missing_path"],
 )
-def test_git_log_errors(
-    review: AiCodeReview, path: str, expected_error: str
-) -> None:
-    result = review.dispatch_tool("git_log", {"path": path})
+def test_git_log_errors(review: AiCodeReview, path: str, expected_error: str) -> None:
+    result = review.agent.dispatch_tool("git_log", {"path": path})
     assert not result.get("ok"), f"unexpectedly ok: {result}"
     assert expected_error in (result.get("error") or "")
 
@@ -490,7 +489,7 @@ def test_git_log_errors(
 
 
 def test_git_show(review: AiCodeReview) -> None:
-    result = review.dispatch_tool("git_show", {"rev": PINNED_COMMIT})
+    result = review.agent.dispatch_tool("git_show", {"rev": PINNED_COMMIT})
     assert result.get("ok"), f"tool returned not-ok: {result}"
     payload = result.get("result", {})
     assert payload.get("rev") == PINNED_COMMIT
@@ -499,7 +498,9 @@ def test_git_show(review: AiCodeReview) -> None:
 
 
 def test_git_show_name_only(review: AiCodeReview) -> None:
-    result = review.dispatch_tool("git_show", {"rev": PINNED_COMMIT, "name_only": True})
+    result = review.agent.dispatch_tool(
+        "git_show", {"rev": PINNED_COMMIT, "name_only": True}
+    )
     assert result.get("ok"), f"tool returned not-ok: {result}"
     payload = result.get("result", {})
     assert payload.get("rev") == PINNED_COMMIT
@@ -509,7 +510,7 @@ def test_git_show_name_only(review: AiCodeReview) -> None:
 
 def test_git_show_object_path(review: AiCodeReview) -> None:
     rev = f"{PINNED_COMMIT}:fs/open.c"
-    result = review.dispatch_tool("git_show", {"rev": rev})
+    result = review.agent.dispatch_tool("git_show", {"rev": rev})
     assert result.get("ok"), f"tool returned not-ok: {result}"
     payload = result.get("result", {})
     assert payload.get("rev") == rev
@@ -529,7 +530,7 @@ def test_git_show_object_path(review: AiCodeReview) -> None:
 def test_git_show_errors(
     review: AiCodeReview, args: Dict[str, Any], expected_error: str
 ) -> None:
-    result = review.dispatch_tool("git_show", args)
+    result = review.agent.dispatch_tool("git_show", args)
     assert not result.get("ok"), f"unexpectedly ok: {result}"
     assert expected_error in (result.get("error") or "")
 
@@ -540,8 +541,9 @@ def test_git_show_errors(
 
 
 def test_git_cat_file(review: AiCodeReview) -> None:
-    result = review.dispatch_tool(
-        "git_cat_file", {"rev": PINNED_COMMIT, "path": "fs/open.c", "start": 1, "end": 20}
+    result = review.agent.dispatch_tool(
+        "git_cat_file",
+        {"rev": PINNED_COMMIT, "path": "fs/open.c", "start": 1, "end": 20},
     )
     assert result.get("ok"), f"tool returned not-ok: {result}"
     payload = result.get("result", {})
@@ -562,6 +564,6 @@ def test_git_cat_file(review: AiCodeReview) -> None:
 def test_git_cat_file_errors(
     review: AiCodeReview, args: Dict[str, Any], expected_error: str
 ) -> None:
-    result = review.dispatch_tool("git_cat_file", args)
+    result = review.agent.dispatch_tool("git_cat_file", args)
     assert not result.get("ok"), f"unexpectedly ok: {result}"
     assert expected_error in (result.get("error") or "")
