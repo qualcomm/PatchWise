@@ -3,6 +3,7 @@
 
 import argparse
 import logging
+import sys
 from pathlib import Path
 
 from git import Repo
@@ -18,6 +19,10 @@ from .patch_review import (
     review_commit,
 )
 from patchwise.patch_review.ai_agent import add_ai_arguments, apply_ai_args
+from .patch_review.ai_review.ai_code_review import (
+    add_aicodereview_arguments,
+    apply_aicodereview_args,
+)
 from .utils.config import parse_config, update_user_config
 from .utils.tui import display_prompt_with_options
 
@@ -45,6 +50,9 @@ def parse_args(config: dict) -> argparse.Namespace:
 
     ai_group = parser.add_argument_group("AI Review Options")
     add_ai_arguments(ai_group)
+
+    aicodereview_group = parser.add_argument_group("AiCodeReview Options")
+    add_aicodereview_arguments(aicodereview_group)
 
     logging_group = parser.add_argument_group("Logging Options")
     add_logging_arguments(logging_group, config)
@@ -104,6 +112,20 @@ def main():
     apply_ai_args(args)
 
     reviews = get_selected_reviews_from_args(args)
+
+    if "AiCodeReview" not in reviews and (
+        args.url is not None or args.cache_dir is not None
+    ):
+        passed = [
+            flag
+            for flag, val in (("--url", args.url), ("--cache_dir", args.cache_dir))
+            if val is not None
+        ]
+        sys.exit(
+            f"error: {' and '.join(passed)} only effective with --reviews aicodereview"
+        )
+
+    apply_aicodereview_args(args)
 
     repo = Repo(args.repo_path)
     commits = get_commits(repo, args.commits)
