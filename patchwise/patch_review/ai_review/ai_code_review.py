@@ -164,12 +164,23 @@ Checklist:
         today = datetime.date.today().isoformat()
         crawled = ""
         if getattr(self, "reviewer_context", None):
-            crawled = (
-                "\n### Crawled Maintainer Comments (JSON)\n\n"
-                "```json\n"
-                + json.dumps(self.reviewer_context, indent=2, ensure_ascii=False)
-                + "\n```\n"
-            )
+            try:
+                crawled = (
+                    "\n### Crawled Maintainer Comments (JSON)\n\n"
+                    "```json\n"
+                    + json.dumps(
+                        self.reviewer_context,
+                        indent=2,
+                        ensure_ascii=False,
+                        default=str,
+                    )
+                    + "\n```\n"
+                )
+            except Exception as e:
+                self.logger.warning(
+                    f"Failed to serialize reviewer_context; dropping crawled examples: {e}"
+                )
+                crawled = ""
 
         return f"\nDate: {today}\n" + """
 # System Prompt
@@ -362,39 +373,50 @@ regulator-name.
         for idx, maintainer in enumerate(self.reviewers, 1):
             self.logger.debug(f"Processing reviewer {idx}/{len(self.reviewers)}: {maintainer}")
 
-            self.crawler_config["MAINTAINER"] = maintainer
-            limit_per_reviewer = self.crawler_config["MAX_COMMENT"] // len(self.reviewers)
-            self.crawler_config["LIMIT_PER_REVIEWER"] = limit_per_reviewer
-            crawler = LoreCrawler(self.crawler_config, self.logger)
+            try:
+                self.crawler_config["MAINTAINER"] = maintainer
+                limit_per_reviewer = self.crawler_config["MAX_COMMENT"] // len(self.reviewers)
+                self.crawler_config["LIMIT_PER_REVIEWER"] = limit_per_reviewer
+                crawler = LoreCrawler(self.crawler_config, self.logger)
 
-            maintainer_name = maintainer.replace(" ", "_").replace("@", "_at_")
-            cache_file = os.path.join(self.crawler_config["CACHE_DIR"], f"crawled_{maintainer_name}.json")
-            raw_docs: List[Dict[str, Any]] = []
+                maintainer_name = maintainer.replace(" ", "_").replace("@", "_at_")
+                cache_file = os.path.join(self.crawler_config["CACHE_DIR"], f"crawled_{maintainer_name}.json")
+                raw_docs: List[Dict[str, Any]] = []
 
-            if os.path.exists(cache_file):
-                self.logger.debug(f"  Found cached data: {cache_file}")
-                try:
-                    with open(cache_file, "r", encoding="utf-8") as f:
-                        cached_data = json.load(f)
-                        raw_docs = cached_data[:limit_per_reviewer]
-                        self.logger.debug(
-                            f"  Loaded {len(raw_docs)} cached records for {maintainer} "
-                            f"(limited from {len(cached_data)})"
-                        )
-                except Exception as e:
-                    self.logger.warning(f"  Failed to read cache: {e}, starting online crawling...")
+                if os.path.exists(cache_file):
+                    self.logger.debug(f"  Found cached data: {cache_file}")
+                    try:
+                        with open(cache_file, "r", encoding="utf-8") as f:
+                            cached_data = json.load(f)
+                            if not isinstance(cached_data, list):
+                                raise ValueError(
+                                    f"cache file has unexpected shape: {type(cached_data).__name__}"
+                                )
+                            raw_docs = cached_data[:limit_per_reviewer]
+                            self.logger.debug(
+                                f"  Loaded {len(raw_docs)} cached records for {maintainer} "
+                                f"(limited from {len(cached_data)})"
+                            )
+                    except Exception as e:
+                        self.logger.warning(f"  Failed to read cache: {e}, starting online crawling...")
+                        raw_docs = crawler.run()
+                else:
+                    self.logger.debug(f"  No cache found, starting LoreCrawler for {maintainer}...")
                     raw_docs = crawler.run()
-            else:
-                self.logger.debug(f"  No cache found, starting LoreCrawler for {maintainer}...")
-                raw_docs = crawler.run()
 
-            if raw_docs:
-                for doc in raw_docs:
-                    doc["maintainer"] = maintainer
-                all_docs.extend(raw_docs)
-                self.logger.debug(f"  Added {len(raw_docs)} items from {maintainer}")
-            else:
-                self.logger.warning(f"  Could not get reviewer data for {maintainer}")
+                if raw_docs:
+                    for doc in raw_docs:
+                        if isinstance(doc, dict):
+                            doc["maintainer"] = maintainer
+                    all_docs.extend(d for d in raw_docs if isinstance(d, dict))
+                    self.logger.debug(f"  Added {len(raw_docs)} items from {maintainer}")
+                else:
+                    self.logger.warning(f"  Could not get reviewer data for {maintainer}")
+            except Exception as e:
+                self.logger.warning(
+                    f"  Skipping reviewer {maintainer} due to crawler error: {e}"
+                )
+                continue
 
         if not all_docs:
             self.logger.warning("Could not get any reviewer data from any reviewer")
@@ -408,8 +430,14 @@ regulator-name.
 
     def run(self) -> str:
         """Execute the AI code review."""
-        self.get_reviewers_from_maintainer_script(self.commit, self.repo.working_dir)
-        self.fetch_reviewer_comment()
+        try:
+            self.get_reviewers_from_maintainer_script(self.commit, self.repo.working_dir)
+            self.fetch_reviewer_comment()
+        except Exception as e:
+            self.logger.error(
+                f"Maintainer comment crawl failed; continuing without crawled examples: {e}"
+            )
+            self.reviewer_context = []
 
         additional_context = (
             self.ADDITIONAL_CONTEXT_TEMPLATE.format(
