@@ -267,11 +267,11 @@ class LoreCrawler:
         self.logger.debug(f"[*] Crawler: searching {query} on {self.source_url}...")
         documents = []
         limit = self.config.get("LIMIT_PER_REVIEWER", 0)
+        total_entries_processed = 0
 
         try:
             offset = 0
             page = 1
-            total_entries_processed = 0
             ns = {"atom": "http://www.w3.org/2005/Atom"}
 
             while True:
@@ -355,12 +355,15 @@ class LoreCrawler:
         self.logger.debug(f"[*] Crawler: Task completed. Processed a total of {total_entries_processed} raw records and generated {len(documents)} valid comment documents.")
 
         if documents:
-            maintainer_name = self.config["MAINTAINER"].replace(" ", "_").replace("@", "_at_")
-            os.makedirs(self.cache_dir, exist_ok=True)
-            json_filename = os.path.join(self.cache_dir, f"crawled_{maintainer_name}.json")
+            try:
+                maintainer_name = self.config["MAINTAINER"].replace(" ", "_").replace("@", "_at_")
+                os.makedirs(self.cache_dir, exist_ok=True)
+                json_filename = os.path.join(self.cache_dir, f"crawled_{maintainer_name}.json")
 
-            with open(json_filename, "w", encoding="utf-8") as f:
-                json.dump(documents, f, ensure_ascii=False, indent=2)
-            self.logger.debug(f"[*] Saved JSON file: {json_filename}")
+                with open(json_filename, "w", encoding="utf-8") as f:
+                    json.dump(documents, f, ensure_ascii=False, indent=2)
+                self.logger.debug(f"[*] Saved JSON file: {json_filename}")
+            except Exception as e:
+                self.logger.warning(f"[!] Crawler: Failed to write cache to {self.cache_dir}: {e}")
 
         return documents
