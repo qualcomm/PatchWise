@@ -1,20 +1,34 @@
 # Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 
+import argparse
 import datetime
+import json
 import os
+import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any, Dict, List
+
+from git.objects.commit import Commit
 
 from patchwise import SANDBOX_PATH
 from patchwise.patch_review.decorators import register_llm_review, register_long_review
 from patchwise.patch_review.ai_review.ai_review import AiReview
+from patchwise.patch_review.ai_review.fetch_reviewer_comment import (
+    DEFAULT_SOURCE_URL,
+    LoreCrawler,
+)
 
 
 @register_llm_review
 @register_long_review
 class AiCodeReview(AiReview):
     """AI-powered code review for Linux kernel patches using LSP and clangd."""
+
+    # Crawler configuration (overridable via --url / --cache_dir)
+    lore_url: str = DEFAULT_SOURCE_URL
+    cache_dir: str = str(SANDBOX_PATH)
 
     PROMPT_TEMPLATE = """
 # User Prompt
@@ -148,6 +162,15 @@ Checklist:
     def get_system_prompt(self) -> str:
         """Generate the system prompt including kernel coding style guidelines."""
         today = datetime.date.today().isoformat()
+        crawled = ""
+        if getattr(self, "reviewer_context", None):
+            crawled = (
+                "\n### Crawled Maintainer Comments (JSON)\n\n"
+                "```json\n"
+                + json.dumps(self.reviewer_context, indent=2, ensure_ascii=False)
+                + "\n```\n"
+            )
+
         return f"\nDate: {today}\n" + """
 # System Prompt
 
@@ -233,7 +256,7 @@ regulator-name.
 >  			regulator-min-microvolt = <2800000>;
 ```
 
-""" + self.get_kernel_coding_style()
+""" + crawled + self.get_kernel_coding_style()
 
     def format_chat_response(self, text: str):
         formatted_prompt = self.REVIEW_CLEANUP_PROMPT_TEMPLATE.format(
@@ -256,8 +279,138 @@ regulator-name.
         super().setup()
         self.kernel_path = Path(self.repo.working_dir)
 
+        # Crawler configuration. SOURCE_URL and CACHE_DIR come from the --url
+        # and --cache_dir command-line flags (see add_aicodereview_arguments).
+        self.crawler_config = {
+            "MAINTAINER": "",  # set per reviewer
+            "MAX_COMMENT": 20,  # total across all reviewers
+            "PROXY": None,
+            "LIMIT_PER_REVIEWER": "",  # 0 means no limit per crawler run
+            "SOURCE_URL": AiCodeReview.lore_url,
+            "CACHE_DIR": AiCodeReview.cache_dir,
+            "NOISE_KEYWORDS": [
+                "applied", "applied, thanks", "applied, thanks.",
+                "queued", "queued for", "thanks", "thanks.",
+                "lgtm", "looks good to me",
+                "acked", "picked up", "merged", "fine", "cheers", "...", "^^^", "reviewed-by", "+1"
+            ],
+            "NOISE_TECH": ["should", "could", "need", "issue", "problem", "bug",
+                           "fix", "change", "modify", "suggest", "consider",
+                           "however", "but", "instead", "better", "improve"],
+            "NOISE_LENGTH": 100,
+            "MAX_CONTEXT_LINES": 40,
+        }
+
+        self.reviewers: List[str] = []
+        self.reviewer_context: List[Dict[str, Any]] = []
+
+    def get_reviewers_from_maintainer_script(
+        self, commit: Commit, repo_path: str
+    ) -> None:
+        """Use the kernel's get_maintainer.pl script to find reviewers for a commit."""
+        try:
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".patch", delete=False) as tmp_file:
+                patch_content = commit.repo.git.format_patch("-1", commit.hexsha, "--stdout")
+                tmp_file.write(patch_content)
+                tmp_file_path = tmp_file.name
+
+            get_maintainer_script = Path(repo_path) / "scripts" / "get_maintainer.pl"
+
+            if not get_maintainer_script.exists():
+                self.logger.warning(f"get_maintainer.pl script not found at {get_maintainer_script}")
+                self.reviewers = []
+                return
+
+            result = subprocess.run(
+                ["perl", str(get_maintainer_script), tmp_file_path],
+                capture_output=True,
+                text=True,
+                cwd=repo_path,
+            )
+
+            Path(tmp_file_path).unlink(missing_ok=True)
+
+            if result.returncode != 0:
+                self.logger.error(f"get_maintainer.pl failed: {result.stderr}")
+                self.reviewers = []
+                return
+
+            reviewers: List[str] = []
+            for line in result.stdout.strip().split("\n"):
+                line = line.strip()
+                if line and "list" not in line.lower():
+                    name = line.split("<")[0].strip()
+                    name = name.strip('"').strip("'").strip()
+                    if name:
+                        reviewers.append(name)
+
+            self.reviewers = reviewers
+            self.logger.info(f"Found {len(reviewers)} reviewers: {reviewers}")
+
+        except Exception as e:
+            self.logger.error(f"Error running get_maintainer.pl: {e}")
+            self.reviewers = []
+
+    def fetch_reviewer_comment(self) -> None:
+        if not self.reviewers:
+            self.logger.warning("No reviewers found, skipping comment fetching")
+            return
+
+        self.logger.debug(f"Fetching reviewer comments for {len(self.reviewers)} reviewer(s)")
+        all_docs: List[Dict[str, Any]] = []
+
+        for idx, maintainer in enumerate(self.reviewers, 1):
+            self.logger.debug(f"Processing reviewer {idx}/{len(self.reviewers)}: {maintainer}")
+
+            self.crawler_config["MAINTAINER"] = maintainer
+            limit_per_reviewer = self.crawler_config["MAX_COMMENT"] // len(self.reviewers)
+            self.crawler_config["LIMIT_PER_REVIEWER"] = limit_per_reviewer
+            crawler = LoreCrawler(self.crawler_config, self.logger)
+
+            maintainer_name = maintainer.replace(" ", "_").replace("@", "_at_")
+            cache_file = os.path.join(self.crawler_config["CACHE_DIR"], f"crawled_{maintainer_name}.json")
+            raw_docs: List[Dict[str, Any]] = []
+
+            if os.path.exists(cache_file):
+                self.logger.debug(f"  Found cached data: {cache_file}")
+                try:
+                    with open(cache_file, "r", encoding="utf-8") as f:
+                        cached_data = json.load(f)
+                        raw_docs = cached_data[:limit_per_reviewer]
+                        self.logger.debug(
+                            f"  Loaded {len(raw_docs)} cached records for {maintainer} "
+                            f"(limited from {len(cached_data)})"
+                        )
+                except Exception as e:
+                    self.logger.warning(f"  Failed to read cache: {e}, starting online crawling...")
+                    raw_docs = crawler.run()
+            else:
+                self.logger.debug(f"  No cache found, starting LoreCrawler for {maintainer}...")
+                raw_docs = crawler.run()
+
+            if raw_docs:
+                for doc in raw_docs:
+                    doc["maintainer"] = maintainer
+                all_docs.extend(raw_docs)
+                self.logger.debug(f"  Added {len(raw_docs)} items from {maintainer}")
+            else:
+                self.logger.warning(f"  Could not get reviewer data for {maintainer}")
+
+        if not all_docs:
+            self.logger.warning("Could not get any reviewer data from any reviewer")
+            return
+
+        self.logger.debug(
+            f"Total captured: {len(all_docs)} reviewer context items "
+            f"from {len(self.reviewers)} reviewer(s)"
+        )
+        self.reviewer_context = all_docs
+
     def run(self) -> str:
         """Execute the AI code review."""
+        self.get_reviewers_from_maintainer_script(self.commit, self.repo.working_dir)
+        self.fetch_reviewer_comment()
+
         additional_context = (
             self.ADDITIONAL_CONTEXT_TEMPLATE.format(
                 additional_context=self.additional_context
@@ -290,3 +443,26 @@ regulator-name.
         result = self.agent.run_agent_loop(messages, force_tool_usage=True)
 
         return self.format_chat_response(result)
+
+
+def add_aicodereview_arguments(
+    parser_or_group: argparse.ArgumentParser | argparse._ArgumentGroup,
+):
+    parser_or_group.add_argument(
+        "--url",
+        default=None,
+        help=f"Lore archive base URL used by AiCodeReview to fetch maintainer review history. Only valid with --reviews aicodereview. (default: {DEFAULT_SOURCE_URL})",
+    )
+    parser_or_group.add_argument(
+        "--cache_dir",
+        default=None,
+        help=f"Directory where AiCodeReview caches crawled reviewer comments. Only valid with --reviews aicodereview. (default: {SANDBOX_PATH})",
+    )
+
+
+def apply_aicodereview_args(args: argparse.Namespace) -> None:
+    """Apply AiCodeReview-related CLI args. Values left as None keep class defaults."""
+    if args.url is not None:
+        AiCodeReview.lore_url = args.url
+    if args.cache_dir is not None:
+        AiCodeReview.cache_dir = args.cache_dir
