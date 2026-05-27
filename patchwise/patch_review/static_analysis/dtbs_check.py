@@ -109,5 +109,7 @@ class DtbsCheck(StaticAnalysis):
 
         if not output:
             self.logger.info("No new dtbs_check errors found")
-
+        elif not output.endswith("\n"):
+            output += "\n"
+            
         return output
