@@ -212,55 +212,15 @@ class LoreCrawler:
         if not clean_text:
             return False
 
-        if clean_text.strip().lower() in ["suzuki"]:
-            return False
-
         status_keywords = ["applied"]
         if any(keyword in clean_text for keyword in status_keywords):
             return False
         if len(clean_text) < self.config["NOISE_LENGTH"]:
             for keyword in self.config["NOISE_KEYWORDS"]:
-                if (keyword in clean_text) and ("but" not in clean_text) and (self._has_code_snippet(clean_text) is False):
+                if (keyword in clean_text) and ("but" not in clean_text) and not self._has_code_snippet(clean_text):
                     return False
 
         return True
-
-    def _fetch_all_entries(self, query):
-        all_entries = []
-        offset = 0
-        page = 1
-        ns = {"atom": "http://www.w3.org/2005/Atom"}
-
-        while True:
-            self.logger.debug(f"[*] Crawler: fetching page {page} (offset={offset})...")
-
-            try:
-                params = {"q": query, "x": "A", "o": offset}
-
-                res = self.session.get(self.source_url, params=params, timeout=15)
-                res.raise_for_status()
-
-                root = ET.fromstring(res.content)
-                entries = root.findall("atom:entry", ns)
-
-                if not entries:
-                    self.logger.debug(f"[*] Crawler: Page {page} no result, page end")
-                    break
-
-                all_entries.extend(entries)
-                self.logger.debug(f"[*] Crawler: Page {page} has {len(entries)} comments")
-
-                if len(entries) < 200:
-                    self.logger.debug("[*] Crawler: Fetched all results")
-                    break
-
-                offset += len(entries)
-                page += 1
-                time.sleep(1)
-            except Exception as e:
-                self.logger.debug(f"[!] Crawler: Facing issue while fetching page {page}: {e}")
-                break
-        return all_entries
 
     def run(self):
         query = f'f:"{self.config["MAINTAINER"]}"'
@@ -298,7 +258,7 @@ class LoreCrawler:
 
                     for i, entry in enumerate(entries):
                         if limit > 0 and len(documents) >= limit:
-                            self.logger.debug(f"*] Crawler: The valid comment limit ({limit}) has been reached. Stopping processing.")
+                            self.logger.debug(f"[*] Crawler: The valid comment limit ({limit}) has been reached. Stopping processing.")
                             break
 
                         total_entries_processed += 1

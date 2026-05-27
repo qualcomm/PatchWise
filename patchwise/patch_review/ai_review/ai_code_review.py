@@ -5,6 +5,7 @@ import argparse
 import datetime
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -21,12 +22,40 @@ from patchwise.patch_review.ai_review.fetch_reviewer_comment import (
 )
 
 
+def _extract_role_tag(line: str) -> str:
+    """Return the parenthetical role tag at the end of a get_maintainer.pl
+    line, or "" if there is none.
+
+    Examples:
+        "Bob Listman <bob@example.com> (maintainer:DRIVER)" -> "maintainer:DRIVER"
+        "linux-kernel@vger.kernel.org (open list:X86 ARCHITECTURE (32-BIT AND 64-BIT))"
+            -> "open list:X86 ARCHITECTURE (32-BIT AND 64-BIT)"
+
+    A naive `\\(([^)]*)\\)\\s*$` regex misses the second case because the
+    role tag's subsystem name contains its own parentheses, leaving role
+    empty and letting mailing-list rows leak past the "list" filter.
+    """
+    line = line.rstrip()
+    if not line.endswith(")"):
+        return ""
+    depth = 0
+    for i in range(len(line) - 1, -1, -1):
+        c = line[i]
+        if c == ")":
+            depth += 1
+        elif c == "(":
+            depth -= 1
+            if depth == 0:
+                return line[i + 1:-1]
+    return ""
+
+
 @register_llm_review
 @register_long_review
 class AiCodeReview(AiReview):
     """AI-powered code review for Linux kernel patches using LSP and clangd."""
 
-    # Crawler configuration (overridable via --url / --cache_dir)
+    # Crawler configuration (overridable via --url / --cache-dir)
     lore_url: str = DEFAULT_SOURCE_URL
     cache_dir: str = str(SANDBOX_PATH)
 
@@ -159,22 +188,42 @@ Checklist:
             ]
         )
 
+    @staticmethod
+    def _wrap_in_code_fence(body: str, info: str = "") -> str:
+        """Wrap *body* in a markdown code fence longer than any backtick run inside it.
+
+        Crawled maintainer text is untrusted and may itself contain ```; a
+        fixed triple-backtick fence would let such content escape the code
+        block and become free-form prompt text. We pick a fence whose length
+        is one greater than the longest backtick run present, so the content
+        cannot terminate the wrapper.
+        """
+        longest = current = 0
+        for ch in body:
+            if ch == "`":
+                current += 1
+                longest = max(longest, current)
+            else:
+                current = 0
+        fence = "`" * max(3, longest + 1)
+        return f"{fence}{info}\n{body}\n{fence}"
+
     def get_system_prompt(self) -> str:
         """Generate the system prompt including kernel coding style guidelines."""
         today = datetime.date.today().isoformat()
         crawled = ""
         if getattr(self, "reviewer_context", None):
             try:
+                body = json.dumps(
+                    self.reviewer_context,
+                    indent=2,
+                    ensure_ascii=False,
+                    default=str,
+                )
                 crawled = (
                     "\n### Crawled Maintainer Comments (JSON)\n\n"
-                    "```json\n"
-                    + json.dumps(
-                        self.reviewer_context,
-                        indent=2,
-                        ensure_ascii=False,
-                        default=str,
-                    )
-                    + "\n```\n"
+                    + self._wrap_in_code_fence(body, info="json")
+                    + "\n"
                 )
             except Exception as e:
                 self.logger.warning(
@@ -291,12 +340,12 @@ regulator-name.
         self.kernel_path = Path(self.repo.working_dir)
 
         # Crawler configuration. SOURCE_URL and CACHE_DIR come from the --url
-        # and --cache_dir command-line flags (see add_aicodereview_arguments).
+        # and --cache-dir command-line flags (see add_aicodereview_arguments).
         self.crawler_config = {
             "MAINTAINER": "",  # set per reviewer
             "MAX_COMMENT": 20,  # total across all reviewers
             "PROXY": None,
-            "LIMIT_PER_REVIEWER": "",  # 0 means no limit per crawler run
+            "LIMIT_PER_REVIEWER": 0,  # 0 means no limit per crawler run
             "SOURCE_URL": AiCodeReview.lore_url,
             "CACHE_DIR": AiCodeReview.cache_dir,
             "NOISE_KEYWORDS": [
@@ -315,31 +364,36 @@ regulator-name.
         self.reviewers: List[str] = []
         self.reviewer_context: List[Dict[str, Any]] = []
 
-    def get_reviewers_from_maintainer_script(
-        self, commit: Commit, repo_path: str
-    ) -> None:
+    def get_reviewers_from_maintainer_script(self, commit: Commit) -> None:
         """Use the kernel's get_maintainer.pl script to find reviewers for a commit."""
+        repo_path = commit.repo.working_dir
+        tmp_file_path: str | None = None
         try:
-            with tempfile.NamedTemporaryFile(mode="w", suffix=".patch", delete=False) as tmp_file:
-                patch_content = commit.repo.git.format_patch("-1", commit.hexsha, "--stdout")
-                tmp_file.write(patch_content)
-                tmp_file_path = tmp_file.name
+            perl = shutil.which("perl")
+            if not perl:
+                self.logger.warning("perl not found on PATH; skipping get_maintainer.pl")
+                self.reviewers = []
+                return
 
             get_maintainer_script = Path(repo_path) / "scripts" / "get_maintainer.pl"
-
             if not get_maintainer_script.exists():
                 self.logger.warning(f"get_maintainer.pl script not found at {get_maintainer_script}")
                 self.reviewers = []
                 return
 
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".patch", delete=False) as tmp_file:
+                # Capture the path *before* writing, so the `finally` clause
+                # below can unlink it even if format_patch / write raise.
+                tmp_file_path = tmp_file.name
+                patch_content = commit.repo.git.format_patch("-1", commit.hexsha, "--stdout")
+                tmp_file.write(patch_content)
+
             result = subprocess.run(
-                ["perl", str(get_maintainer_script), tmp_file_path],
+                [perl, str(get_maintainer_script), tmp_file_path],
                 capture_output=True,
                 text=True,
                 cwd=repo_path,
             )
-
-            Path(tmp_file_path).unlink(missing_ok=True)
 
             if result.returncode != 0:
                 self.logger.error(f"get_maintainer.pl failed: {result.stderr}")
@@ -349,11 +403,23 @@ regulator-name.
             reviewers: List[str] = []
             for line in result.stdout.strip().split("\n"):
                 line = line.strip()
-                if line and "list" not in line.lower():
-                    name = line.split("<")[0].strip()
-                    name = name.strip('"').strip("'").strip()
-                    if name:
-                        reviewers.append(name)
+                if not line:
+                    continue
+                # Drop mailing-list rows by inspecting the role tag, not the
+                # whole line — names like "Bob Listman" must not be filtered.
+                role = _extract_role_tag(line).lower()
+                if "list" in role:
+                    continue
+                name = line.split("<")[0].strip().strip('"').strip("'").strip()
+                if not name:
+                    continue
+                # Belt-and-suspenders: reviewers should be human names, not
+                # bare email addresses. Drop "foo@bar (role)" rows that
+                # somehow slipped past the role-tag filter (e.g. malformed
+                # input where the role tag did not match at all).
+                if "@" in name:
+                    continue
+                reviewers.append(name)
 
             self.reviewers = reviewers
             self.logger.info(f"Found {len(reviewers)} reviewers: {reviewers}")
@@ -361,6 +427,9 @@ regulator-name.
         except Exception as e:
             self.logger.error(f"Error running get_maintainer.pl: {e}")
             self.reviewers = []
+        finally:
+            if tmp_file_path:
+                Path(tmp_file_path).unlink(missing_ok=True)
 
     def fetch_reviewer_comment(self) -> None:
         if not self.reviewers:
@@ -375,7 +444,7 @@ regulator-name.
 
             try:
                 self.crawler_config["MAINTAINER"] = maintainer
-                limit_per_reviewer = self.crawler_config["MAX_COMMENT"] // len(self.reviewers)
+                limit_per_reviewer = max(1, self.crawler_config["MAX_COMMENT"] // len(self.reviewers))
                 self.crawler_config["LIMIT_PER_REVIEWER"] = limit_per_reviewer
                 crawler = LoreCrawler(self.crawler_config, self.logger)
 
@@ -431,7 +500,7 @@ regulator-name.
     def run(self) -> str:
         """Execute the AI code review."""
         try:
-            self.get_reviewers_from_maintainer_script(self.commit, self.repo.working_dir)
+            self.get_reviewers_from_maintainer_script(self.commit)
             self.fetch_reviewer_comment()
         except Exception as e:
             self.logger.error(
@@ -479,12 +548,20 @@ def add_aicodereview_arguments(
     parser_or_group.add_argument(
         "--url",
         default=None,
-        help=f"Lore archive base URL used by AiCodeReview to fetch maintainer review history. Only valid with --reviews aicodereview. (default: {DEFAULT_SOURCE_URL})",
+        help=(
+            "Lore archive base URL used by AiCodeReview to fetch maintainer "
+            f"review history. Falls back to {DEFAULT_SOURCE_URL} if not set. "
+            "Only valid with --reviews aicodereview."
+        ),
     )
     parser_or_group.add_argument(
-        "--cache_dir",
+        "--cache-dir",
         default=None,
-        help=f"Directory where AiCodeReview caches crawled reviewer comments. Only valid with --reviews aicodereview. (default: {SANDBOX_PATH})",
+        help=(
+            "Directory where AiCodeReview caches crawled reviewer comments. "
+            f"Falls back to {SANDBOX_PATH} if not set. "
+            "Only valid with --reviews aicodereview."
+        ),
     )
 
 
