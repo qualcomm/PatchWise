@@ -118,7 +118,7 @@ def main():
     ):
         passed = [
             flag
-            for flag, val in (("--url", args.url), ("--cache_dir", args.cache_dir))
+            for flag, val in (("--url", args.url), ("--cache-dir", args.cache_dir))
             if val is not None
         ]
         sys.exit(
