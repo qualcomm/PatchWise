@@ -46,7 +46,7 @@ def _extract_role_tag(line: str) -> str:
         elif c == "(":
             depth -= 1
             if depth == 0:
-                return line[i + 1:-1]
+                return line[i + 1 : -1]
     return ""
 
 
@@ -211,27 +211,30 @@ Checklist:
     def get_system_prompt(self) -> str:
         """Generate the system prompt including kernel coding style guidelines."""
         today = datetime.date.today().isoformat()
-        crawled = ""
-        if getattr(self, "reviewer_context", None):
-            try:
-                body = json.dumps(
-                    self.reviewer_context,
-                    indent=2,
-                    ensure_ascii=False,
-                    default=str,
-                )
-                crawled = (
-                    "\n### Crawled Maintainer Comments (JSON)\n\n"
-                    + self._wrap_in_code_fence(body, info="json")
-                    + "\n"
-                )
-            except Exception as e:
-                self.logger.warning(
-                    f"Failed to serialize reviewer_context; dropping crawled examples: {e}"
-                )
-                crawled = ""
+        if self.enable_experimental_features:
+            crawled = ""
+            if getattr(self, "reviewer_context", None):
+                try:
+                    body = json.dumps(
+                        self.reviewer_context,
+                        indent=2,
+                        ensure_ascii=False,
+                        default=str,
+                    )
+                    crawled = (
+                        "\n### Crawled Maintainer Comments (JSON)\n\n"
+                        + self._wrap_in_code_fence(body, info="json")
+                        + "\n"
+                    )
+                except Exception as e:
+                    self.logger.warning(
+                        f"Failed to serialize reviewer_context; dropping crawled examples: {e}"
+                    )
+                    crawled = ""
 
-        return f"\nDate: {today}\n" + """
+        return (
+            f"\nDate: {today}\n"
+            + """
 # System Prompt
 
 ## Instructions
@@ -316,7 +319,12 @@ regulator-name.
 >  			regulator-min-microvolt = <2800000>;
 ```
 
-""" + crawled + self.get_kernel_coding_style()
+"""
+            + "{crawled}".format(
+                crawled=crawled if self.enable_experimental_features else ""
+            )
+            + self.get_kernel_coding_style()
+        )
 
     def format_chat_response(self, text: str):
         formatted_prompt = self.REVIEW_CLEANUP_PROMPT_TEMPLATE.format(
@@ -339,30 +347,61 @@ regulator-name.
         super().setup()
         self.kernel_path = Path(self.repo.working_dir)
 
-        # Crawler configuration. SOURCE_URL and CACHE_DIR come from the --url
-        # and --cache-dir command-line flags (see add_aicodereview_arguments).
-        self.crawler_config = {
-            "MAINTAINER": "",  # set per reviewer
-            "MAX_COMMENT": 20,  # total across all reviewers
-            "PROXY": None,
-            "LIMIT_PER_REVIEWER": 0,  # 0 means no limit per crawler run
-            "SOURCE_URL": AiCodeReview.lore_url,
-            "CACHE_DIR": AiCodeReview.cache_dir,
-            "NOISE_KEYWORDS": [
-                "applied", "applied, thanks", "applied, thanks.",
-                "queued", "queued for", "thanks", "thanks.",
-                "lgtm", "looks good to me",
-                "acked", "picked up", "merged", "fine", "cheers", "...", "^^^", "reviewed-by", "+1"
-            ],
-            "NOISE_TECH": ["should", "could", "need", "issue", "problem", "bug",
-                           "fix", "change", "modify", "suggest", "consider",
-                           "however", "but", "instead", "better", "improve"],
-            "NOISE_LENGTH": 100,
-            "MAX_CONTEXT_LINES": 40,
-        }
+        if self.enable_experimental_features:
 
-        self.reviewers: List[str] = []
-        self.reviewer_context: List[Dict[str, Any]] = []
+            # Crawler configuration. SOURCE_URL and CACHE_DIR come from the --url
+            # and --cache-dir command-line flags (see add_aicodereview_arguments).
+            self.crawler_config = {
+                "MAINTAINER": "",  # set per reviewer
+                "MAX_COMMENT": 20,  # total across all reviewers
+                "PROXY": None,
+                "LIMIT_PER_REVIEWER": 0,  # 0 means no limit per crawler run
+                "SOURCE_URL": AiCodeReview.lore_url,
+                "CACHE_DIR": AiCodeReview.cache_dir,
+                "NOISE_KEYWORDS": [
+                    "applied",
+                    "applied, thanks",
+                    "applied, thanks.",
+                    "queued",
+                    "queued for",
+                    "thanks",
+                    "thanks.",
+                    "lgtm",
+                    "looks good to me",
+                    "acked",
+                    "picked up",
+                    "merged",
+                    "fine",
+                    "cheers",
+                    "...",
+                    "^^^",
+                    "reviewed-by",
+                    "+1",
+                ],
+                "NOISE_TECH": [
+                    "should",
+                    "could",
+                    "need",
+                    "issue",
+                    "problem",
+                    "bug",
+                    "fix",
+                    "change",
+                    "modify",
+                    "suggest",
+                    "consider",
+                    "however",
+                    "but",
+                    "instead",
+                    "better",
+                    "improve",
+                ],
+                "NOISE_LENGTH": 100,
+                "MAX_CONTEXT_LINES": 40,
+            }
+
+            self.reviewers: List[str] = []
+            self.reviewer_context: List[Dict[str, Any]] = []
 
     def get_reviewers_from_maintainer_script(self, commit: Commit) -> None:
         """Use the kernel's get_maintainer.pl script to find reviewers for a commit."""
@@ -409,29 +448,34 @@ regulator-name.
         except Exception as e:
             self.logger.error(f"Error running get_maintainer.pl: {e}")
             self.reviewers = []
-        finally:
-            if tmp_file_path:
-                Path(tmp_file_path).unlink(missing_ok=True)
 
     def fetch_reviewer_comment(self) -> None:
         if not self.reviewers:
             self.logger.warning("No reviewers found, skipping comment fetching")
             return
 
-        self.logger.debug(f"Fetching reviewer comments for {len(self.reviewers)} reviewer(s)")
+        self.logger.debug(
+            f"Fetching reviewer comments for {len(self.reviewers)} reviewer(s)"
+        )
         all_docs: List[Dict[str, Any]] = []
 
         for idx, maintainer in enumerate(self.reviewers, 1):
-            self.logger.debug(f"Processing reviewer {idx}/{len(self.reviewers)}: {maintainer}")
+            self.logger.debug(
+                f"Processing reviewer {idx}/{len(self.reviewers)}: {maintainer}"
+            )
 
             try:
                 self.crawler_config["MAINTAINER"] = maintainer
-                limit_per_reviewer = max(1, self.crawler_config["MAX_COMMENT"] // len(self.reviewers))
+                limit_per_reviewer = max(
+                    1, self.crawler_config["MAX_COMMENT"] // len(self.reviewers)
+                )
                 self.crawler_config["LIMIT_PER_REVIEWER"] = limit_per_reviewer
                 crawler = LoreCrawler(self.crawler_config, self.logger)
 
                 maintainer_name = maintainer.replace(" ", "_").replace("@", "_at_")
-                cache_file = os.path.join(self.crawler_config["CACHE_DIR"], f"crawled_{maintainer_name}.json")
+                cache_file = os.path.join(
+                    self.crawler_config["CACHE_DIR"], f"crawled_{maintainer_name}.json"
+                )
                 raw_docs: List[Dict[str, Any]] = []
 
                 if os.path.exists(cache_file):
@@ -449,10 +493,14 @@ regulator-name.
                                 f"(limited from {len(cached_data)})"
                             )
                     except Exception as e:
-                        self.logger.warning(f"  Failed to read cache: {e}, starting online crawling...")
+                        self.logger.warning(
+                            f"  Failed to read cache: {e}, starting online crawling..."
+                        )
                         raw_docs = crawler.run()
                 else:
-                    self.logger.debug(f"  No cache found, starting LoreCrawler for {maintainer}...")
+                    self.logger.debug(
+                        f"  No cache found, starting LoreCrawler for {maintainer}..."
+                    )
                     raw_docs = crawler.run()
 
                 if raw_docs:
@@ -460,9 +508,13 @@ regulator-name.
                         if isinstance(doc, dict):
                             doc["maintainer"] = maintainer
                     all_docs.extend(d for d in raw_docs if isinstance(d, dict))
-                    self.logger.debug(f"  Added {len(raw_docs)} items from {maintainer}")
+                    self.logger.debug(
+                        f"  Added {len(raw_docs)} items from {maintainer}"
+                    )
                 else:
-                    self.logger.warning(f"  Could not get reviewer data for {maintainer}")
+                    self.logger.warning(
+                        f"  Could not get reviewer data for {maintainer}"
+                    )
             except Exception as e:
                 self.logger.warning(
                     f"  Skipping reviewer {maintainer} due to crawler error: {e}"
@@ -481,14 +533,15 @@ regulator-name.
 
     def run(self) -> str:
         """Execute the AI code review."""
-        try:
-            self.get_reviewers_from_maintainer_script(self.commit)
-            self.fetch_reviewer_comment()
-        except Exception as e:
-            self.logger.error(
-                f"Maintainer comment crawl failed; continuing without crawled examples: {e}"
-            )
-            self.reviewer_context = []
+        if self.enable_experimental_features:
+            try:
+                self.get_reviewers_from_maintainer_script(self.commit)
+                self.fetch_reviewer_comment()
+            except Exception as e:
+                self.logger.error(
+                    f"Maintainer comment crawl failed; continuing without crawled examples: {e}"
+                )
+                self.reviewer_context = []
 
         additional_context = (
             self.ADDITIONAL_CONTEXT_TEMPLATE.format(
