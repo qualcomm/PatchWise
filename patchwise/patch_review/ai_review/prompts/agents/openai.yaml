@@ -1,0 +1,4 @@
+interface:
+  display_name: "Review Commits"
+  short_description: "Review kernel commits, lore patch series, source files, or calibrate memory"
+  default_prompt: "Use $review-commits to review the last 3 commits, a lore Message-ID series, one source file, or maintainer feedback for memory calibration."

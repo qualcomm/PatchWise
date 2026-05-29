@@ -14,6 +14,7 @@ LLM_REVIEWS: List[Type[AiReview]] = []
 STATIC_ANALYSIS_REVIEWS: List[Type[StaticAnalysis]] = []
 SHORT_REVIEWS: List[Type[PatchReview]] = []
 LONG_REVIEWS: List[Type[PatchReview]] = []
+DEEP_REVIEWS: List[Type[PatchReview]] = []
 
 # Registries for different fixes
 REGISTERED_FIXES: Dict[Type[PatchReview], Type[AiFix]] = {}
@@ -51,6 +52,13 @@ def register_long_review(cls: Type[Any]) -> Type[Any]:
     if cls not in LONG_REVIEWS:
         LONG_REVIEWS.append(cls)
     register_patch_review(cls)
+    return cls
+
+
+def register_deep_review(cls: Type[Any]) -> Type[Any]:
+    if cls not in DEEP_REVIEWS:
+        DEEP_REVIEWS.append(cls)
+    register_llm_review(cls)
     return cls
 
 

@@ -1,0 +1,2596 @@
+{
+  "entries": [
+    {
+      "id": "MEM-0001",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/dt-bindings.md",
+      "sha256": "8de16c9a8aaade05455aef8c7480361ae96880b07b5e23215d753967b42c78f8",
+      "status": "draft",
+      "title": "Qcom DTS pin-conflict fix \u2014 base board DTS vs overlay DTSO placement",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0002",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/active/dt-bindings.md",
+      "sha256": "b4887ab37da05020b4dec2c33b049cd122958594e46f8145ad91b8d08cafecb0",
+      "status": "active",
+      "title": "Qcom DTS node override \u2014 blank line required before status property",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0003",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "6c5e6f270f9115339ae1d0c94ace0bfc0569fad3075e78bbe48424ff77bc9911",
+      "status": "draft",
+      "title": "qcom EDP PHY \u2014 NULL guard removal accepted when all platforms audited",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0004",
+      "last_updated": "2026-05-31",
+      "path": "refs/memory/deprecated/commit-message.md",
+      "sha256": "8e3c091731468f825b075d97b611423d5c4f27c52c5dac0df1c0d32f2bfe1b95",
+      "status": "deprecated",
+      "title": "Missing `Cc: stable@vger.kernel.org` on a stable-eligible `Fixes:` patch \u2014 flag as [MINOR]",
+      "topic": "commit-message"
+    },
+    {
+      "id": "MEM-0005",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/commit-message.md",
+      "sha256": "1b7339c2d96d2c70eef4feaa3113fd6cc47dadfd3786393f18ffc241821e71e9",
+      "status": "draft",
+      "title": "Commit message must explain removal of named kernel element",
+      "topic": "commit-message"
+    },
+    {
+      "id": "MEM-0006",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "7d5a1fdd69b70eebeff09afce2e429f3a9cb34cee7dce79d148d54f072a5844f",
+      "status": "draft",
+      "title": "Stray blank line within Qcom QMP PHY init-cfg tables",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0007",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/commit-message.md",
+      "sha256": "d03d44fd24ee16bf7a191a0564e9b0944148b33a4b4c8cd693e11f7b2fb20b6f",
+      "status": "draft",
+      "title": "Lowercase \"platform\" as common noun in commit subjects",
+      "topic": "commit-message"
+    },
+    {
+      "id": "MEM-0008",
+      "last_updated": "2026-05-27",
+      "path": "refs/memory/draft/dt-bindings.md",
+      "sha256": "ca83ff3930efed33af5c1843f6379340cdb19067141c0684700b0596ba4224ae",
+      "status": "draft",
+      "title": "DT binding commit \u2014 \"Add compatible string\" not \"Document X\" for single-entry additions (subject and body)",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0009",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "8a7875dd1a54db08e55c6c798a2a195dd8763f1a320ae5540488c7bc88af77cf",
+      "status": "draft",
+      "title": "Qcom AudioReach GPR/Q6APM/Q6PRM DTSI node hierarchy \u2014 accepted placement pattern",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0010",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/dt-bindings.md",
+      "sha256": "eea696c717471fc7fc6fe708c590b3327c8a1f25271203bfcb2f708b9e78256f",
+      "status": "draft",
+      "title": "Qcom APCS compatible string naming -- use -apss-shared not -apcs-hmss-global",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0011",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/dt-bindings.md",
+      "sha256": "a6cf05b1df3c5627938432f7c42a0826abc759d01999b5d86150ac2030f5782e",
+      "status": "draft",
+      "title": "DT binding commit body \u2014 include device type and definite article for compatible-string additions",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0012",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "7e465c8fcaad834ae48fe0842021415ae7d06a9f94e270ca074cb2e7b246e710",
+      "status": "draft",
+      "title": "Prefer direct `return` over intermediate `ret` variable in early-return int functions",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0013",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/dt-bindings.md",
+      "sha256": "78473ea01b097840911b54c9703c62898ab5e9a92239ababc30a63d432f4ef1e",
+      "status": "draft",
+      "title": "Qcom DTS hardware replacement \u2014 check for board revision or variant change",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0014",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/dt-bindings.md",
+      "sha256": "8502d2b79e5ce49f65df09fad9d154395b62c6df107e24bdb7a06dbb4228a441",
+      "status": "draft",
+      "title": "DT binding commit body \u2014 name the fallback compatible for versioned enum group additions",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0015",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "2850765eeceeae6cc0cc84cf8716788bf3feef5517f9ae4c35fc07671bfb298a",
+      "status": "draft",
+      "title": "Void helpers performing fallible ops should return int, not rely on caller field-checks",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0016",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/dt-bindings.md",
+      "sha256": "239098fd9d1f342af5c901f08087a6df4227f4d8b2a74d0f7f0614089a656c50",
+      "status": "draft",
+      "title": "qcom,msa-fixed-perm in new Qcom SNoC WiFi nodes \u2014 verify per-SoC by cross-referencing family DTS",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0017",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/dt-bindings.md",
+      "sha256": "2cb58f625f70ff453e5d852e418425a429e0a5721bb1d772e9e41480485da534",
+      "status": "draft",
+      "title": "qcom,coresight-itnoc DTS node name must match `^itnoc(@[0-9a-f]+)?$`",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0018",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/dt-bindings.md",
+      "sha256": "30b8a6a69e03df3f9080e81504201111f16330e2e84f2dbc3827e6f0babc7322",
+      "status": "draft",
+      "title": "CoreSight `clock-names = \"apb_pclk\"` vs binding `const: apb` schema divergence",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0019",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "30a6902e77825e796b265d3802c17c47f728b79ccd28b0818f1c746ecd5ce9bd",
+      "status": "draft",
+      "title": "fastrpc probe \u2014 verify carveout type before using res.start as DMA address",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0020",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "94b7b380f3e3180933001ccc1724f6ce53d95a852ab1830427574662ba5b864a",
+      "status": "draft",
+      "title": "PCI shared WAKE# GPIO -- -EBUSY is expected; add in-code comment not error propagation",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0021",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/commit-message.md",
+      "sha256": "5b6fab7f9630d6eda03c399f7807f5dce138934cfcfa3ab2aff390c491a6673c",
+      "status": "draft",
+      "title": "Use \"shall\" not \"should\" when quoting PCIe spec normative requirements in commit messages",
+      "topic": "commit-message"
+    },
+    {
+      "id": "MEM-0022",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/dt-bindings.md",
+      "sha256": "c31ac07de1971dfcb30bc6466c8efad3c57ea35ad9a24d558fbffd2ec5ecaa28",
+      "status": "draft",
+      "title": "DT binding commit body \u2014 explicitly name the new compatible string for single-entry additions",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0023",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "5a54dd3e8d29eda52a4d45621927c3ddc05f79b3263564c1c042f5a183565399",
+      "status": "draft",
+      "title": "clk KUnit tests must be DAMP \u2014 do not modify existing test functions to add new-feature assertions",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0024",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "7016193dab15f196a7990915d822a3b121b7e32d9f2568d550b708e6b8d278b7",
+      "status": "draft",
+      "title": "KUnit test param arrays \u2014 check ALL block comments AND desc strings for copy-paste errors",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0025",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "f673e999b231691d4feab1e9a9013804c51eda47caa9e5054438f3d6deaf3b73",
+      "status": "draft",
+      "title": "Qcom pinctrl series \u2014 DTS patches route through Bjorn's qcom SoC tree, not pinctrl tree",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0026",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "ba4ebed6a5e2d516baff92cd370fb92ebf39012701e197b6dfff6c731305114b",
+      "status": "draft",
+      "title": "PCI/ASPM -- masking L1 from aspm_support must also mask L1SS",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0027",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/dt-bindings.md",
+      "sha256": "8d45faa3c7c6defde62528872812508c57e3e869186f02d20e2de7aa8d8fdd67",
+      "status": "draft",
+      "title": "DT binding YAML \u2014 `maxItems` is redundant when an `items:` list is present",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0028",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "94695d7582745cca92a9277ab5a1d9731b8a5ac225a6a17e149f5307a4d76f0d",
+      "status": "draft",
+      "title": "Qcom QMP PHY header \u2014 new generic PHY-index constants duplicate existing USB43DP constants",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0029",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/dt-bindings.md",
+      "sha256": "d682912d89f5dc2eb530b7a63c19882a756701a8380158a61001c30012261e6c",
+      "status": "draft",
+      "title": "DT binding \u2014 splitting if/then/else into separate if/then blocks silently drops else constraints",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0030",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "f82f6b71a918a961898e68a994e469bd8fecf1f79ac0764c506687edebf371c2",
+      "status": "draft",
+      "title": "`device_get_match_data()` result must be checked for NULL before use",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0031",
+      "last_updated": "2026-05-30",
+      "path": "refs/memory/draft/dt-bindings.md",
+      "sha256": "8f31df9ab201567583469372198fc29a4bc27427817c5ebb3c79d0a85e800b81",
+      "status": "draft",
+      "title": "binding adds `required:` for existing compatible \u2014 verify DTS coverage and require commit-body ABI justification",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0032",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/commit-message.md",
+      "sha256": "fff7150b14f38c4f2a7095064341cc015af513f257d0d03289b802c455c204e0",
+      "status": "draft",
+      "title": "Generic kernel export commits -- hardware-specific benchmarks belong in the cover letter; problem description must survive",
+      "topic": "commit-message"
+    },
+    {
+      "id": "MEM-0033",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "7c526928245049de0f6931739c746a7b0a441564718d49e7a89584ede038c66e",
+      "status": "draft",
+      "title": "EXPORT_SYMBOL must match the export class used by existing related exports in the same file",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0034",
+      "last_updated": "2026-05-30",
+      "path": "refs/memory/active/commit-message.md",
+      "sha256": "ebae42ae91efde6d8fcfd9e89af24efea75dcb7baa91a493bf537352eddd00c1",
+      "status": "active",
+      "title": "Non-standard AI disclosure trailer tag \u2014 flag [NIT] and suggest prose note",
+      "topic": "commit-message"
+    },
+    {
+      "id": "MEM-0035",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/dt-bindings.md",
+      "sha256": "c86907ea3653a019d0b061a8e0ec891bf0976ce194fcb76ddf1ffe9a816d6e2e",
+      "status": "draft",
+      "title": "DT binding commit body \u2014 state omission explicitly when a named resource is absent for a new SoC entry",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0036",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "1c9c16cab09ef179f4595f8d4b5e8904137fc70c2df60519ee12aaba66c141b3",
+      "status": "draft",
+      "title": "Prefer early-continue guard clause inside loops to reduce nesting depth",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0037",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "34cf8b99f47d1aab3075b09274c922168e2fa4b4101603badc28ab2373d3253f",
+      "status": "draft",
+      "title": "Qcom PCIe shared bus clocks \u2014 do not vote for clocks managed by interconnect or bootloader HW_CTL",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0038",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/commit-message.md",
+      "sha256": "d38408f61dd74d0760ff8b174d3827b8cde75797955265356e7b06ae9b3e83b1",
+      "status": "draft",
+      "title": "`Fixes:` tag should point to the commit that introduced the specific bug, not a later reorganization",
+      "topic": "commit-message"
+    },
+    {
+      "id": "MEM-0039",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "58860d500ae1f754f2444232a607d9c9fa38ab5579a03a1da827e6bafb81d1b2",
+      "status": "draft",
+      "title": "fastrpc_buf->cctx \u2014 get()/put() must be symmetric on all alloc/free paths",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0040",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/commit-message.md",
+      "sha256": "ab303007a77c927691e183573f34d7d502cb9a4e53417d3ce2eeb0a0c4f89090",
+      "status": "draft",
+      "title": "Bug-fix patches missing a `Fixes:` tag \u2014 flag [MINOR]",
+      "topic": "commit-message"
+    },
+    {
+      "id": "MEM-0041",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "2fd5f7236a7b0cefb3db1962e3c0810591027be2811a07d6a03b226fb73f8cea",
+      "status": "draft",
+      "title": "Qcom TLMM pinctrl \u2014 modern SoCs must omit `intr_target_reg` from PINGROUP macro",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0042",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "61699f8a01f31ca23464529b68acce922a993e8ae1b8d0e1e276711f4140cd15",
+      "status": "draft",
+      "title": "ARM/Coresight --- bus_find_device() reference must be held by the caller, not dropped inside the lookup helper",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0043",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "b2ecae3d88cee7e39f0ddf2877fd0949b96f34ff84d9980431867982cb09ddc9",
+      "status": "draft",
+      "title": "fastrpc \u2014 commit body must explain DSP-side semantics of changed protocol parameters",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0044",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "bd145c0c2acc7e9567a78c7090566e2e79fba6b553bd6050b7cd99225ffaade7",
+      "status": "draft",
+      "title": "fastrpc probe \u2014 question whether dma_alloc_coherent is appropriate for Audio PD reserved-memory",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0045",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/dt-bindings.md",
+      "sha256": "5ad5f0d29838848586029a4185650f9924f6f1c65e1edd142d389de894d39979",
+      "status": "draft",
+      "title": "DT binding commit body \u2014 named reference SoC must have an entry in the same binding section",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0046",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "b8e5f7776dd1d393d7a85726c1a0159d141aab791cd603b05ce7ed4dceda07fb",
+      "status": "draft",
+      "title": "Qcom SCM tracepoints -- TP_fast_assign SMC args must use unsigned long throughout for cross-arch correctness",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0047",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/active/subsystem-specific.md",
+      "sha256": "a976f44b01f907958f3aaca83bf535d54d2a9d6984ed12ff085c3809fb032b75",
+      "status": "active",
+      "title": "`this_cpu_write/read()` wrong when target CPU may differ from current CPU",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0048",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "ddb03ce0364050402d0fb060c840ca07022c77497de919caf49f07a4155f6c2f",
+      "status": "draft",
+      "title": "ARM/Coresight \u2014 author-acknowledged PREEMPT_RT TODO accepted as deferred work",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0049",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "a2b0776cb2769cbfecd20e10ea0279f8078fe39829003760b9b45dc28685688b",
+      "status": "draft",
+      "title": "Do not replicate non-exported kernel function logic \u2014 propose an export patch instead",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0050",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "f65d95c283e5d334cb69607c26befc62fcc22ae273b0cea0879b18f6a5e05e6f",
+      "status": "draft",
+      "title": "Kernel tracepoint header in drivers/ subdirectory -- Makefile include path and TRACE_INCLUDE_FILE both required",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0051",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "3813a72ddf6143d580f2b28c6acf23c8e48555a2ded06426e9a2764cfcb82200",
+      "status": "draft",
+      "title": "Prefer int over small unsigned integer types for loop indices",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0052",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "7f05a02617aac4875860778305f944aac95ee138ccdd52af13efe1f0fee27eab",
+      "status": "draft",
+      "title": "ARM/Coresight \u2014 sysfs visibility flag should suppress all non-label attrs, not specific named attrs",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0053",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "2b0f8ff5b316b0652498d04777134f1896110291f502302d7afa2744e0d4a155",
+      "status": "draft",
+      "title": "Static platform-quirk table not preferred when a runtime kernel API can detect the condition",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0054",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/dt-bindings.md",
+      "sha256": "6370eb03678ad3b50be672ac524bf0d87204ca2ed4f539938a4a041fcf7ecdd2",
+      "status": "draft",
+      "title": "New SoC DT-binding commit body \u2014 identify SoC family context and companion driver",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0055",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/dt-bindings.md",
+      "sha256": "c9a791ab12189dc0b8c391a41ccc64b58757b92687aefbe8f7d6adb590154c19",
+      "status": "draft",
+      "title": "DT binding example using a cross-tree compatible fails Rob's dt_binding_check at rc1 base",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0056",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "7d8050357d3f73b008a3515f810ff3561627133bed9ff1bfcc6e45cc4ca8ce85",
+      "status": "draft",
+      "title": "Multi-variant DRM panel driver -- per-variant supply code is dispatch-table gated; -ENODEV false-positive guard",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0057",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "a0d1d4067d1996f69a32c50312e6b4f54b2c23f34b3ee5a0ec9ec5d52a4783d7",
+      "status": "draft",
+      "title": "Timed busy-wait under spin_lock_irqsave() \u2014 verify timeout < minimum hardware watchdog deadline",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0058",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "7c643f06af236675b9413a989e6a68c7d50ef333057b774a87f2c83c5775ca43",
+      "status": "draft",
+      "title": "Write/send callback returning 0 instead of negative errno on submit failure silently drops data",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0059",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "66f453fcde54847da7d5ad6a3689e2931a12dd4d884972054c8f478b48f36dab",
+      "status": "draft",
+      "title": "Qcom TLMM pinctrl \u2014 `.ngpios` must count GPIO-only pins; IPCAT SDC confusion",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0060",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/patch-scope.md",
+      "sha256": "1dbb29d5e54b81622f7d245d0f601e9d817c308c9b12d50597566c962b1d5f5c",
+      "status": "draft",
+      "title": "Large PHY-mode-framework patches must be split into logical incremental steps",
+      "topic": "patch-scope"
+    },
+    {
+      "id": "MEM-0061",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/dt-bindings.md",
+      "sha256": "5ea7182cb839da712385764ac22b2f6197ff849aed30b41c748bcc599927be31",
+      "status": "draft",
+      "title": "PHY binding \u2014 new provider-side topology property may be questioned as redundant with consumer phys cells",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0062",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "061ac5fd3a4a0f6288ed533d301cace30a3efdf61f1d88d6876edd8844a66292",
+      "status": "draft",
+      "title": "pinctrl-spmi-gpio \u2014 cast spacing in of_device_id table follows pre-existing style; [NIT] not [MINOR]",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0063",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "c1f8cd666ecfb49caa20cfb505707a38464e31da8bb194516b7b0882538a3732",
+      "status": "draft",
+      "title": "Driver probe must not overwrite a global module_param to encode per-device state",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0064",
+      "last_updated": "2026-05-30",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "f464ecbbd15c8fd4dd8d8fc02a6d2a2e8b013fc8fe64d354cae7970e5f68e802",
+      "status": "draft",
+      "title": "Qcom clock driver `qcom_cc_desc` \u2014 verify whether `.use_rpm` is needed",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0065",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "6daa3e0d05243ee491ff438a62eee4cf8cfcc3d6b8ed8cc31cf592734de7bed7",
+      "status": "draft",
+      "title": "Qcom SMD-RPM --- SNOC bus clocks may serve audio NPA nodes despite no icc consumers",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0066",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "b1872410e79ac2b9a0439b4a3187407710cb7ba5d966c2c309acd67ac4fd67d6",
+      "status": "draft",
+      "title": "Qcom GCC reset tables --- check for missing secondary USB PHY BCR",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0067",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "c0fd7969a1f6d2b3db9c5f85f0345c9005ccbe191e4cb73d686fb07b44464ed1",
+      "status": "draft",
+      "title": "Qcom rpmhpd \u2014 identical *_rpmhpds[] array must be deduplicated; reuse existing descriptor or use DT fallback compatible",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0068",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/patch-scope.md",
+      "sha256": "50abacbc37fbd7b28f53e52f1ce0186fe8fd042247e48691500ccfdd7bc38c8e",
+      "status": "draft",
+      "title": "Standalone export-only patches without a consumer in the same series are NAKed",
+      "topic": "patch-scope"
+    },
+    {
+      "id": "MEM-0069",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "d5a09b9fcfbe82cb9621edd8156c3b6c298292d9db9e8d6f6d64f496d1744836",
+      "status": "draft",
+      "title": "Negative int return from count-get function assigned to unsigned int without error check",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0070",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/dt-bindings.md",
+      "sha256": "95a6b999c3fb2e2578de0841f0afac056cb60dd259d7781f2b49b706bb7febdc",
+      "status": "draft",
+      "title": "Qcom DT compatible strings \u2014 deprecated internal IP block names must not appear in upstream naming",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0071",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/dt-bindings.md",
+      "sha256": "e7b99b278f0216de726204b762026bcde176244707a38de3678adfce62f7eaba",
+      "status": "draft",
+      "title": "New DT fallback compatible must have a corresponding driver of_device_id entry",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0072",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "ba899e553d8a9204e267b60d62a9dad88b9407777c70bb37ddcba0c10b34d55c",
+      "status": "draft",
+      "title": "Unsigned int count field used as a zero-ambiguous cache-populated sentinel",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0073",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/commit-message.md",
+      "sha256": "6232fd2b0af4fcb1bb6513127f9dbd26183631ce4cb77b78be6d9856bf89a6fc",
+      "status": "draft",
+      "title": "DTS idle state removal \u2014 commit body must explain specific cpuidle/governor context, not just vague performance claim",
+      "topic": "commit-message"
+    },
+    {
+      "id": "MEM-0074",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/commit-message.md",
+      "sha256": "c0310cd0d13141c8797ee579006d9af31321fac7dfa4c3510f8d91170f6a5de7",
+      "status": "draft",
+      "title": "Use \"aligning with\" or \"consistent with\" instead of \"inline with\" in commit bodies",
+      "topic": "commit-message"
+    },
+    {
+      "id": "MEM-0075",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/dt-bindings.md",
+      "sha256": "4d7066654adc88a9b35d6d52c622a930845355426d9d07b10adbb1e83d41e416",
+      "status": "draft",
+      "title": "DT binding \u2014 multiple new compatible strings in one patch must be placed symmetrically",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0076",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "5f14b24b43a13503f4a866ea7621146eb533d49bb7599124ef415123bbb5e623",
+      "status": "draft",
+      "title": "Qcom QMP PHY init tables \u2014 duplicate register write without explanatory comment is likely copy-paste redundancy",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0077",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "c8d5d825435efef50e9d86f739bd167db6d7b8a8b1f39bda17ce6c5417dd009b",
+      "status": "draft",
+      "title": "regmap_config.max_register must cover all register addresses used in the series",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0078",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/dt-bindings.md",
+      "sha256": "4149e1bbf26d5744f47d2afcdca298e7a947209a730f769f3170215ee55b46fc",
+      "status": "draft",
+      "title": "Platform-specific sub-feature binding \u2014 check existing SoC compatible before adding a new one",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0079",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/commit-message.md",
+      "sha256": "d2fcf9c7e946fffe28fcdec51b7155e56a07e46ecd592eb865ae52339d031538",
+      "status": "draft",
+      "title": "Large complexity-adding series must state concrete technical benefits in cover letter",
+      "topic": "commit-message"
+    },
+    {
+      "id": "MEM-0080",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/commit-message.md",
+      "sha256": "57f41221b2d893122127e90ff0b4f48ff469728a5ca125dcb28abbe2f7adfd18",
+      "status": "draft",
+      "title": "Unexplained vendor-internal chip abbreviations in commit bodies --- flag [NIT]",
+      "topic": "commit-message"
+    },
+    {
+      "id": "MEM-0081",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "8f3581ba0fed2b3f1237bda9ea107d110de469a50c68c49a7b59633d7199373d",
+      "status": "draft",
+      "title": "ath12k QMI optional TLV capability fields \u2014 no stale-value concern when phy_cap_send reruns on SERVER_ARRIVE",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0082",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "44fa13e94b64f6ec5488432560357178ab529d1b4571d913ab28af9d69001fa0",
+      "status": "draft",
+      "title": "`pci_irq_vector()` return value \u2014 use `>= 0` as error check, not `> 0`",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0083",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "55f00aeae1473e4019c1188402d320b6e1f036d42429a4272629ba54f8ee5dca",
+      "status": "draft",
+      "title": "ath12k series \u2014 missing KITE branch tree tag blocks all automated CI testing",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0084",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "4f6a407da3879702afea54177e097afa88be06f9716adee6ef4acb6a76d1a16b",
+      "status": "draft",
+      "title": "Tracepoint placed after a multi-exit function \u2014 check whether early-return paths bypass it",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0085",
+      "last_updated": "2026-05-27",
+      "path": "refs/memory/draft/commit-message.md",
+      "sha256": "6ade2536ab0fe2d9256655abf0016077f0edc18ed44d58db9a77ee0f061ce5a7",
+      "status": "draft",
+      "title": "Tracepoint/instrumentation series commit bodies must state the observability motivation",
+      "topic": "commit-message"
+    },
+    {
+      "id": "MEM-0086",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "54b1b3627e6f1f509eab40365b7544006d68adacd03b3507620cc7aab628ff5f",
+      "status": "draft",
+      "title": "DRM_BRIDGE_OP_HDMI_AUDIO requires hdmi_write_audio_infoframe and hdmi_clear_audio_infoframe callbacks",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0087",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "bdd654e83c86dd0d1993ee382a990ea53e8919cfb6c895f308e52995422b2939",
+      "status": "draft",
+      "title": "Holding a driver mutex across request_firmware() or a long msleep() blocks all protected operations",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0088",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "1c12a152a2e889b395718e37476bdc8232c59e3295de8216078310a2b2d92c5d",
+      "status": "draft",
+      "title": "i2c_device_id table must not use DT-style \"vendor,device\" vendor prefix",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0089",
+      "last_updated": "2026-05-27",
+      "path": "refs/memory/draft/commit-message.md",
+      "sha256": "d0eb0dcf2329364acd136245a5d0a97ea2ed47f488edb51b25526b7be21c0dba",
+      "status": "draft",
+      "title": "GENMASK bit-field expansion with no current in-tree consumer \u2014 commit message must state preparatory intent and ABI safety",
+      "topic": "commit-message"
+    },
+    {
+      "id": "MEM-0090",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "795dfef5e9e499d36bd3dd1fcbb54d640e0b6812191793cbc62ca51df9bc1e5f",
+      "status": "draft",
+      "title": "ARM/Coresight \u2014 per-CPU sticky failure flags must be cleared on device unregister and module removal",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0091",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "a7dab4ab053169fb885b901ae60bbbb8552f27f4a6ee8adb20b4fdd57b26c178",
+      "status": "draft",
+      "title": "ARM/Coresight \u2014 question new `coresight_device` struct fields applicable only to a device subtype",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0092",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/dt-bindings.md",
+      "sha256": "a54f8ef62ed895fb4d3991908c749fa5c86fabfab7326af1bed6955d732ba835",
+      "status": "draft",
+      "title": "DT binding \u2014 new compatible added to deprecated: true schema without updating the non-deprecated successor",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0093",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/commit-message.md",
+      "sha256": "6b999314f393fba114d4280a420e37ed91561b751742a1368a79bfc9d8730750",
+      "status": "draft",
+      "title": "Commit subject -- \"Enable X support\" implies toggling existing feature; use \"Add X support\" for new hardware",
+      "topic": "commit-message"
+    },
+    {
+      "id": "MEM-0094",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/dt-bindings.md",
+      "sha256": "b7662dd17aa2d53bd585e41aa70d818ec274a6f0fb4a1d53265f5402e1a8121c",
+      "status": "draft",
+      "title": "Qcom PAS DT binding YAML \u2014 use GPL-2.0 OR BSD-2-Clause not GPL-2.0-only OR BSD-2-Clause",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0095",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/dt-bindings.md",
+      "sha256": "a186bcb108eefceb5dc2631287fd32c9cfdf3cd82eb64c64c7308bae357d11ac",
+      "status": "draft",
+      "title": "DT binding allOf if/then with single-compatible enum is always-true \u2014 move constraints to top-level properties",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0096",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/dt-bindings.md",
+      "sha256": "161b1f3669ca81de387946f1c4dc7bd7253532815e411d31512a72c5d955d6cc",
+      "status": "draft",
+      "title": "DT binding example \u2014 arm-gic interrupt specifier takes exactly 3 cells; trailing extra cell is a bug",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0097",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/patch-scope.md",
+      "sha256": "6f07e29658437ac0468b9ec136cd0d991842849eefa03c9f1f8701ca1416747d",
+      "status": "draft",
+      "title": "\"While at it\" in commit body signals separable generic-infrastructure change \u2014 recommend patch split",
+      "topic": "patch-scope"
+    },
+    {
+      "id": "MEM-0098",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/dt-bindings.md",
+      "sha256": "6a8e8af483f2fe6147e2bec3bd05260bc225ba9eea90e09c7aae93f0f2a0aa6c",
+      "status": "draft",
+      "title": "DT binding YAML --- `$nodename` pattern must be anchored with `^` and `$`",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0099",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "9a319bcfa6b35d7da989ddaf856211e1ca823db4b5d5798e7892de322cd8e003",
+      "status": "draft",
+      "title": "Regulator driver --- `n_voltages` must equal `max_sel + 1`, not voltage-range / step-size + 1",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0100",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "d8c7725730a23baa2ca60f002bb5b96c172736ccffee81771b7bfc8990c6fe62",
+      "status": "draft",
+      "title": "Regulator driver --- `active_discharge_on` must be set when `active_discharge_reg` and `active_discharge_mask` are used",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0101",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/dt-bindings.md",
+      "sha256": "962d9a79ed045d19e838418b448a35d6939ae7dcd0c930e694e75958d0219b49",
+      "status": "draft",
+      "title": "DT binding YAML `title:` must describe the hardware block, not the software driver",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0102",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/dt-bindings.md",
+      "sha256": "0c67b41f0a9c861692404ecaccb0aa0351886782f3d2f25223d76bcf44441ca9",
+      "status": "draft",
+      "title": "DT binding schema must declare `interrupts-extended` if the example uses it",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0103",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/dt-bindings.md",
+      "sha256": "e26844fc96ac9bb2993639ac656c749506c69501b02f0cdbead3d3b920022490",
+      "status": "draft",
+      "title": "New DT binding for a single named SoC must use a SoC-specific compatible as primary entry",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0104",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "ca8c6e81f71530e6e954d57ce0afed05162db056991f7787f4aabc03da4f35c7",
+      "status": "draft",
+      "title": "Firmware protocol response -- negative `int` errno assigned to `u32` status field silently corrupts the error code",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0105",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "2dd16e7fdbcdd7e8917c47c674ebd286e920c8cb3d827d433ccb4d87510deced",
+      "status": "draft",
+      "title": "Virtual regulator `.disable` op must call `regulator_disable()` unconditionally",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0106",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/dt-bindings.md",
+      "sha256": "1e49c3d0d77133a8f0dd2e32192cd986cf988eba008a1610c3546eaed2a6ea30",
+      "status": "draft",
+      "title": "qcom interconnect binding example -- qcom,bcm-voters must not carry a # prefix",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0107",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "8aafde67b221a919d95d363e94b6ae5ea8a13c185f90614ffefdc873f15d851f",
+      "status": "draft",
+      "title": "qcom interconnect driver -- BCM nodes[] must include all masters routing through that BCM",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0108",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "4ebe38225b8ea495f3df4fd3af0c15e85227e8c145b084bc024c232d87839504",
+      "status": "draft",
+      "title": "Qcom GCC + icc-clk -- bundle icc-clk support with the initial GCC driver introduction commit",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0109",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/dt-bindings.md",
+      "sha256": "0f791ecc59b5476fa762c71f1893694d37fcedff29eb7398713aca75b9fba793",
+      "status": "draft",
+      "title": "icc-clk binding header -- each node ID group must have a backing clock in the GCC clock header",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0110",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/dt-bindings.md",
+      "sha256": "97dd9a8a11286f12c34121d5db5a7b5311315ebdbc3cf7f0c16aef6875fbd70f",
+      "status": "draft",
+      "title": "checkpatch TYPO_SPELLING false positive for \"SoM\" (System-on-Module)",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0111",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/dt-bindings.md",
+      "sha256": "6212045aaa3a2c66b3f4ac683703b02cbe0ec583424b5185888ef74239af9e0a",
+      "status": "draft",
+      "title": "DT binding YAML \u2014 single-entry `enum:` list should be `const:`",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0112",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/dt-bindings.md",
+      "sha256": "598f8d985979cfc5db03918118e90129ba8642e1e08de705ea34503bb4c78b7b",
+      "status": "draft",
+      "title": "Qcom DTS \u2014 `status = \"okay\"` is redundant when the node is not disabled in the base DTSI",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0113",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "728e802d35c7c20a196247133b501fcfa038e2b04fde7dc531b30c7c57e8c75a",
+      "status": "draft",
+      "title": "drm/msm \u2014 prefer `guard()` scoped lock over raw `mutex_lock()`/`mutex_unlock()`",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0114",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "65297a627f598f4a50893415a02c416b01ba18e3be76857f54250f563d6d9222",
+      "status": "draft",
+      "title": "ath12k QMI \u2014 new optional capability field in phy_cap_resp must appear in the existing ath12k_dbg() log call",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0115",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "74a2daf64bf2302cbaaeddd5fdb59cfb89d9ebc088a1d2f13cca809ca739e833",
+      "status": "draft",
+      "title": "Counter incremented under mutex in power_up but decremented without lock in power_down \u2014 flag [BUG]",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0116",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "4f3c97169e19d4aed1aca77eb26ca327eaad973860aa6e796d65a6206ae05852",
+      "status": "draft",
+      "title": "__free(firmware) is a valid kernel scope cleanup specifier \u2014 do not flag as invalid",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0117",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/dt-bindings.md",
+      "sha256": "ea9890e24e49f9c3d6e4fd57bad2239268f0c1ada8cb3216716e53b66c534170",
+      "status": "draft",
+      "title": "DTS GPIO/property polarity correction \u2014 check binding YAML examples for matching stale value",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0118",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "f6420801056bee2c3db6025c24cebd68745c7b37060db1713916737c9cab831d",
+      "status": "draft",
+      "title": "Qcom DTS series \u2014 ARM32 patches must be submitted separately from arm64 patches",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0119",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "b60762b726ad5937687dc5557fc55cb632b974a3f72a1349e6afe0b458ad3d5a",
+      "status": "draft",
+      "title": "ARM/Coresight CTI \u2014 do not annotate hardware-variant flag check with `unlikely()`",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0120",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "89a020ac18c5f79e78a6abc700b3c0392978b728fa1af3a458c0411b60f945e9",
+      "status": "draft",
+      "title": "ARM/Coresight CTI \u2014 prefer (offset, index) parameter pair over single bit-packed register encoding",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0121",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "0089324a05e8867deb46b3078c7441ab4a3ccb57c4e60222c933ebb9deb8d777",
+      "status": "draft",
+      "title": "ARM/Coresight CTI \u2014 store bank index in `cs_off_attribute`; use `container_of()` in sysfs visibility callback",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0122",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "600a1c61083d51d8ad2f08e71ae3d5dd6e1155a2302289f0f67a956d62cbc356",
+      "status": "draft",
+      "title": "ath12k platform-variant series -- each patch must explain backward compatibility",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0123",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "e6bbe4dfdc71f97e61190dd0eb619e0dd064b081fbb8013e07a7b748f273dff6",
+      "status": "draft",
+      "title": "Intentionally discarded return value in teardown path -- add comment or log",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0124",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "af8a473f71b5b9d3309480e8b0c3e7e5dc9afa72c418b757e3557cbc7804a08e",
+      "status": "draft",
+      "title": "Qcom Geni I2C clock-mode table -- hardcoded array index into geni_i2c_clk_map_* is fragile; use mode-based lookup",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0125",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "c9acba536bbcf3995b529ab8b8625e7dd8399cf9cd76f8abaa7715db9c3a965f",
+      "status": "draft",
+      "title": "Struct field widening (e.g. u8 to u16) requires a comment explaining bit-width rationale and max values per mode",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0126",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "0811508da6fe0e238490b71b9077af16340d95b051ade8ee4b39f9101a8c28eb",
+      "status": "draft",
+      "title": "Qcom QUPv3 -- new hardware-mode feature must include a runtime version capability check",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0127",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "572098f9a79ef2c80147b461d30abdc4462876b5f1f49c0fecc3cfee52b5ef31",
+      "status": "draft",
+      "title": "Qcom Geni I2C -- prefer ternary over if/else for single-argument conditional function calls",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0128",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "85ff45ca18d806fdd49d640f81e4731e4bd53a3aa778feeb25736d8563e5b6cb",
+      "status": "draft",
+      "title": "Probe error-label EPROBE_DEFER guard -- `return 0` leaks resources and returns false success",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0129",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "ad066ec33b0124050e1440a47327908517eca5ccfcba7a4749380606fedbe397",
+      "status": "draft",
+      "title": "Qcom PCIe -- per-boot operational message should use dev_dbg, not dev_info",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0130",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "619a68da98e619e516ce16efa1378ee311f9c7cd54424e6ffe4efccacff9c91b",
+      "status": "draft",
+      "title": "ARM/Coresight ETM4x --- seq_ctrl[] is sized for transitions (3), not states (4); rename macro accordingly",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0131",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "c29b0b7de97915c5e96f5cee17e477dddfa3e3775728724253cef0abad5b8084",
+      "status": "draft",
+      "title": "Qcom IMEM/SRAM stats and debugfs reader drivers belong in drivers/soc/qcom/, not drivers/firmware/qcom/",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0132",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "a28a87203a59b0e44aaf6fca0f16c7ec801d8aed3d7b363429704af48b6c5992",
+      "status": "draft",
+      "title": "Qualcomm Innovation Center copyright must use the year-less format",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0133",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "f982d432503578a38b9c202c803ce98cebe8c6eb1fa073d7c92bdce10af75898",
+      "status": "draft",
+      "title": "Qcom SRAM/IMEM stats driver --- define memory layout as struct and use memcpy_fromio() instead of per-field readl_relaxed()",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0134",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "ed09abcb81e44dcce64d5724254e4c5a75a389df93802b903cd9c6297a5ff05c",
+      "status": "draft",
+      "title": "Qcom debugfs stats driver --- add files under existing /sys/kernel/debug/qcom_stats/, not a new directory",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0135",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "19d7ec2f5a1ef8244ed8e543d44b59b51014c50e2820db1946eef3d5f078056f",
+      "status": "draft",
+      "title": "Qcom driver --- do not list multiple of_device_id compatible strings when the driver does not differentiate behaviour between them",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0136",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/active/subsystem-specific.md",
+      "sha256": "4f5f7749330545a53211668e9319a14947653c8bb3e61cf59dab4e911a25c8de",
+      "status": "active",
+      "title": "ARM/Coresight --- _coresight_build_path() multi-path contamination is out-of-spec; do not flag",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0137",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "8838125951f4c00e3971547222472167b6b3e999f4b99c6dc0a476262bc821f1",
+      "status": "draft",
+      "title": "ARM/Coresight device_unregister inside coresight_mutex causes circular lock dependency",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0138",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "b339258d664fb5ee8fb8029f41e2bebc21767b3f05f36a286b78f376c3397ac6",
+      "status": "draft",
+      "title": "ARM/Coresight subtype union must not be accessed without checking csdev->type first",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0139",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/patch-scope.md",
+      "sha256": "c56605251e7e410fea7de8689b4b02304552621a3077e1002039acdba5e4655d",
+      "status": "draft",
+      "title": "Preparatory patch must not contain logic deferred to a later patch in the series description",
+      "topic": "patch-scope"
+    },
+    {
+      "id": "MEM-0140",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "af28cdac646a74330d01513df5ccb1bca74ac25114ade8c51fde662ec807be8b",
+      "status": "draft",
+      "title": "Notifier-handle pointer must not be used in a 3-state (NULL / valid / ERR_PTR) pattern \u2014 flag [BUG]",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0141",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "3c07a3e8dda6a45923be476f07491ebf6bc45f243a0d5cfebebe7bf7881b7882",
+      "status": "draft",
+      "title": "ath12k multi-device shared-state constructor must not embed hardware-specific IDs \u2014 flag [MINOR]",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0142",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "e991b4ebc4467bf7d8171f48e0a86d5375aedc03d77e6b01e712694d61771eef",
+      "status": "draft",
+      "title": "reinit_completion() must precede the action that triggers the completion \u2014 race window if placed after the triggering call",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0143",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "4fa748ee024999439670784bbc49d3aa6a4d27b7d5377bc343ec7626636c891b",
+      "status": "draft",
+      "title": "ICC bandwidth vote acquired in probe must be released on all subsequent error paths",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0144",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/dt-bindings.md",
+      "sha256": "5d12e94563338ecd2c94eacfdeec12cbf22b7e7970e709653ad6eaaa3aecf2b9",
+      "status": "draft",
+      "title": "devm_of_icc_get(NULL) -- interconnect-names DT property is not consumed by the driver",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0145",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/commit-message.md",
+      "sha256": "9eb718221328d2944ecc0e266c88702803c3fa6c2fb4e2c4a51b56f73c6976f7",
+      "status": "draft",
+      "title": "Race-condition fix commit message must describe intermittent failure, not overstate as unconditional",
+      "topic": "commit-message"
+    },
+    {
+      "id": "MEM-0146",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "50949d21ea6b55d769e8427c9dc9cc28dc83c9e366c75fc08419eba3ab9f0e80",
+      "status": "draft",
+      "title": "ndo_start_xmit runs in atomic/softirq context \u2014 use pm_runtime_get() not pm_runtime_resume_and_get()",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0147",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "4e5040a005b58cca09bef3e72528eca0202c9075a0c1d87a95195c6291a3d971",
+      "status": "draft",
+      "title": "netdev_tx_t must return NETDEV_TX_OK or NETDEV_TX_BUSY, never a negative errno",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0148",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/commit-message.md",
+      "sha256": "94a351acb4596ada621221d0b4294e7a3a443681504f030af13271480decc8fe",
+      "status": "draft",
+      "title": "Commit body copy-pasted from sibling patch \u2014 wrong driver or subsystem name silently present",
+      "topic": "commit-message"
+    },
+    {
+      "id": "MEM-0149",
+      "last_updated": "2026-05-27",
+      "path": "refs/memory/deprecated/patch-scope.md",
+      "sha256": "25076e80c61368fc0b1a143404643579ecc418772ff5526148ca89dba8b46035",
+      "status": "deprecated",
+      "title": "`Fixes:` patch in a feature series must be decoupled for stable backport",
+      "topic": "patch-scope"
+    },
+    {
+      "id": "MEM-0151",
+      "last_updated": "2026-05-27",
+      "path": "refs/memory/active/subsystem-specific.md",
+      "sha256": "2fc116b61a7ea7affb3ee6210caedf99c0a4f0ae657b93394b99fd7f1a6b5b86",
+      "status": "active",
+      "title": "ath12k AHB \u2014 new qcom_scm_pas*() callers conflict with pending OP-TEE PAS migration",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0152",
+      "last_updated": "2026-05-27",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "c2c9b99a6b5bdf359cf269bf1cdea716f56bfe0619d5254b2563fd3d95325996",
+      "status": "draft",
+      "title": "Atomic lifecycle counter \u2014 decrement must not execute on paths where increment was never reached \u2014 flag [BUG]",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0153",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/dt-bindings.md",
+      "sha256": "f75a297ca743796fff0d7da3eabdd0fbaedc5d2ce9495e0137c525bc20e0fd21",
+      "status": "draft",
+      "title": "Qcom PCIe DT binding example - use GIC_SPI not GIC_ESPI for standard PCIe interrupts",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0154",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/dt-bindings.md",
+      "sha256": "ee94a2d1a60311ac3e15a2c589a6c0e8ca91d777110dd7e7e66a870636612d3c",
+      "status": "draft",
+      "title": "Qcom PCIe DT binding example - reset-gpios undeclared; perst-gpios is the correct name",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0155",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "2d6a2f46077102bdb8de932beb7d84c4dbec836f9b8761bc93de94ac6649a49a",
+      "status": "draft",
+      "title": "QMP PHY register offset headers - no leading zeros for sub-0x100 hex values",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0156",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/dt-bindings.md",
+      "sha256": "ca3fc11ba7aa8d021fca3d650937a47e72ab15ac85ad4d67086b2f1ea0bc1a2b",
+      "status": "draft",
+      "title": "checkpatch TYPO_SPELLING false positive for Synopsys (semiconductor company name)",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0157",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "cf0d362a5dbc58eb7af93e13113b7bdb53ceb05ce9dc654fc9f73c71e56d5ad5",
+      "status": "draft",
+      "title": "Qcom automotive SoC new series \u2014 cover letter must clarify if SoC is new silicon or a VM partition of existing hardware",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0158",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "f0d694987ae772f0f89207095346474e97b81dacf55fc39beae51b5322087bbf",
+      "status": "draft",
+      "title": "Macro wrapper for implicit THIS_MODULE \u2014 use descriptive suffix, not `__` prefix, for the exported implementation",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0159",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/commit-message.md",
+      "sha256": "1e72b9dd34fc52307309fbe748e742ccbab811843f8ce5889d820b295e6908d1",
+      "status": "draft",
+      "title": "Changing an initcall level must update the function's timing-rationale comment",
+      "topic": "commit-message"
+    },
+    {
+      "id": "MEM-0160",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "a53b3962c98e6e5df3cb72f438a52b93a0cb2243a61003d1a7114a1713f416f3",
+      "status": "draft",
+      "title": "`pure_initcall` for early infrastructure \u2014 confirm no other `pure_initcall` user accesses the resource before raising link-order concern",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0161",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/dt-bindings.md",
+      "sha256": "595c0908a6f59d4c38395f0bc58fc07778385df9d40a922cd8419775e1108417",
+      "status": "draft",
+      "title": "`reboot-mode` child node of `arm,psci` node \u2014 psci.yaml `additionalProperties: false` requires binding update first",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0162",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/dt-bindings.md",
+      "sha256": "a465a59d12f3d8d4b332782a578d12245ae7d86d0092916a6fef8dbaba2830c1",
+      "status": "draft",
+      "title": "PSCI binding guard for reboot-mode uses arm,psci-1.0 but SYSTEM_RESET2 is PSCI 1.1",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0163",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "918b96c2d529d51497078a462e15b4e8c54966cc3a4127d04a8f0c96bb44e3db",
+      "status": "draft",
+      "title": "reboot-mode DTS nodes must include a compatible property for driver to bind",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0164",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "0df10a33909036c2bb0f4e935810cd3125bf42659ff5472f6d6d52874b2e0931",
+      "status": "draft",
+      "title": "MFD cell fwnode assignment must come after mfd_acpi_add_device() not before",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0165",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "3720dd46ebed433571f19d3a13cbe73090f61810c7905b90aa4220b6d8812425",
+      "status": "draft",
+      "title": "reboot-mode mode-* DT properties must be single u32; of_property_read_u32() ignores subsequent cells",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0166",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/dt-bindings.md",
+      "sha256": "5ea71e15d61a573ced7df5a61fdbc6ca13247b349c71f5fe9517db850394d58e",
+      "status": "draft",
+      "title": "Unnecessary UEFI/kernel load-address comments in Qcom reserved-memory",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0167",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/dt-bindings.md",
+      "sha256": "1fc63f331e1dbda389a6e2c3d96b0ec755f24b5c7d34b43c31814a2d882c5cba",
+      "status": "draft",
+      "title": "Qcom SoC base DTSI psci node must carry a psci: label",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0168",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/dt-bindings.md",
+      "sha256": "90978603cdb7cdaffc2e586a619c1cd75783512dda7b8a710ebcdb92b2742706",
+      "status": "draft",
+      "title": "cache-size property missing in Qcom DTS L2/L3 cache nodes",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0169",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/dt-bindings.md",
+      "sha256": "97285f227dd314cf4266670a15a2ad3e2bb835098c1ab17ec4a070d0c7a34521",
+      "status": "draft",
+      "title": "Qcom MPM qcom,mpm-pin-count must match RPM firmware virtual count",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0170",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/dt-bindings.md",
+      "sha256": "f0de4cacef53151dc6757541d09862bf9e35a171fa8b708170462eadaf73ac99",
+      "status": "draft",
+      "title": "DTS reg address entries must use consistent hex zero-padding width",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0171",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/active/commit-message.md",
+      "sha256": "7632f5a5e7c6efe836d2d80e0aace37891ba7dc844aa3b37263692c34b1903dc",
+      "status": "active",
+      "title": "`Co-developed-by:` must not replicate the `From:` author",
+      "topic": "commit-message"
+    },
+    {
+      "id": "MEM-0172",
+      "last_updated": "2026-05-30",
+      "path": "refs/memory/draft/dt-bindings.md",
+      "sha256": "5748a1d4dec6c69d1e43629e00c26d05aba9a1456b47bfd778cc59627d17ad78",
+      "status": "draft",
+      "title": "DT binding fallback-group addition \u2014 commit body must confirm hardware property compatibility with fallback SoC",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0173",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "64cfb3952b8e6877237b42f1fae9af18faf1bede4551c1a3d64232b40acf4ced",
+      "status": "draft",
+      "title": "New pci/pwrctrl driver for named endpoint chip -- check for parallel series by other authors",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0174",
+      "last_updated": "2026-05-30",
+      "path": "refs/memory/active/subsystem-specific.md",
+      "sha256": "17d013e7838238b83f69377845bf66118dc4a395ecb8a1498f3991a3e456cb57",
+      "status": "active",
+      "title": "MHI client series \u2014 question framework-level PM centralisation before accepting per-client data-path guards",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0175",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/commit-message.md",
+      "sha256": "e4ecf815486098681742135d77e825a92f5e6106522f7295cd2fb23f4c5f8489",
+      "status": "draft",
+      "title": "New SoC driver descriptor limiting a shared config parameter \u2014 commit body must explain hardware reason for the limit",
+      "topic": "commit-message"
+    },
+    {
+      "id": "MEM-0176",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/dt-bindings.md",
+      "sha256": "61cf19ad47b52e599eda19c8f5ea6aa4ec4b7dd9b135ea63909ac9eeb947d82b",
+      "status": "draft",
+      "title": "DT binding YAML example \u2014 hardware-specific property values must match the target SoC",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0177",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "4658a2474d09156994afe22122bcce60ce96a0609937e30d420ef70a40a0ff5a",
+      "status": "draft",
+      "title": "New kernel bus_type .dma_configure must call iommu_device_use_default_domain() and provide .dma_cleanup",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0178",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/deprecated/subsystem-specific.md",
+      "sha256": "b6ad1ce3bdc0fa4439bae946cbca17a790f9fe2fc42da7097292457c7775bbcd",
+      "status": "deprecated",
+      "title": "Probe-time entity-count dev_info() calls rejected \u2014 use dev_dbg() or tracing",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0179",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "fe99dd1c3a1744b2c4bb9a737e3334da7d2f46d1f5f6b974477fbe5c83bf8ed1",
+      "status": "draft",
+      "title": "`BIT(n)` preferred over `GENMASK(n,n)` for single-bit driver config fields --- flag [NIT]",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0180",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "4a87ae3343291e03e7d6b54402b19fe56fbfa44408ecd22daa7326e7c30c7bc5",
+      "status": "draft",
+      "title": "qcom-pdc multi-mode series --- cover letter must document test configurations and results",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0181",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "52a39fd81fe2591122eab9362d56ea10bff62e39a180c20e828987fc8bc8807b",
+      "status": "draft",
+      "title": "irqchip register read-modify-write on a field shared with another irqchip path must hold the chip lock",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0182",
+      "last_updated": "2026-05-26",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "210572adb23134044fa75a01fd9a6bb417e4da1e744863fb7bd1f91c1e4fa239",
+      "status": "draft",
+      "title": "Function pointer in driver struct assigned the same concrete function on all paths --- justify or remove",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0183",
+      "last_updated": "2026-05-29",
+      "path": "refs/memory/draft/commit-message.md",
+      "sha256": "d8644320210fa205fdc69fb6001b267a40a0f8dc184a7ff03ce027e81903543c",
+      "status": "draft",
+      "title": "`Co-authored-by:` (GitHub convention) is non-standard --- use `Co-developed-by:` + matching `Signed-off-by:`",
+      "topic": "commit-message"
+    },
+    {
+      "id": "MEM-0184",
+      "last_updated": "2026-05-30",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "944998b62408ad12f668b0d08eea5e2408318e52b4fb69700a02193add3c0ef6",
+      "status": "draft",
+      "title": "perf cs-etm state machine extension --- new packet type case must call cs_etm__packet_swap() for correct boundary tracking",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0185",
+      "last_updated": "2026-05-27",
+      "path": "refs/memory/active/subsystem-specific.md",
+      "sha256": "e18120bd526502c90fcaaf4464b1a8e366b9127d65121193e23af6081d366288",
+      "status": "active",
+      "title": "`__free()` cleanup-helper variable declared after a statement \u2014 do not flag \"declaration after statement\"",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0186",
+      "last_updated": "2026-05-27",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "acf05575240091db7bde13553ea38ac9c600ab35fc231c7eb3b52fcefd15923a",
+      "status": "draft",
+      "title": "qcom GCC driver \u2014 trivial reset/clock omission from original series draws maintainer question",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0187",
+      "last_updated": "2026-05-27",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "e8ec2e1556d6ee0558d090e14b2015073d2e19a911fc651ab1d630a3b80193de",
+      "status": "draft",
+      "title": "qcom-pcie legacy-binding driver workaround \u2014 maintainer requests DT migration instead",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0188",
+      "last_updated": "2026-05-27",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "4f58a7de725fbe400141ca7968eeccb575a32e7e0a9b0a2d12bc9f97cf7797d0",
+      "status": "draft",
+      "title": "dev_warn() in recursive DT-traversal function causes log spam \u2014 flag [NIT], suggest dev_warn_once()",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0189",
+      "last_updated": "2026-05-27",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "2d53039fa16857ed650c326406155d9d8b15b616c271914c626ef71681f37769",
+      "status": "draft",
+      "title": "sdhci-msm ICE fields and probe code must be guarded by #ifdef CONFIG_MMC_CRYPTO",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0190",
+      "last_updated": "2026-05-27",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "cf21c75aecf03546b24115fc5132a3c6c26aabecaa101a276c84f2f91f2c26e2",
+      "status": "draft",
+      "title": "GPI DMA `gchan->config` must be accessed via protocol-discriminated cast, not raw byte offset",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0191",
+      "last_updated": "2026-05-27",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "a9b6b205f89443f0868f21ee05c8eb5e12b48bd17afe2cc55449dea7b6c46533",
+      "status": "draft",
+      "title": "`geni_se_clk_freq_match` must use exact match when HS timing constants are pre-computed for a specific source frequency",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0192",
+      "last_updated": "2026-05-27",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "8fe3b67a6c1488b8fe3cd6c997caef20a66c2bd6fcbadc0085d9b607722ff872",
+      "status": "draft",
+      "title": "checkpatch TYPO_SPELLING false positive for \"TRE\" in GPI/GENI DMA code",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0193",
+      "last_updated": "2026-05-27",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "fc0d5bf6fb5f9f2e05c80cff87278def19ac4ae2c51ab9cdfa1878637eb1da00",
+      "status": "draft",
+      "title": "Defensive NULL parameter guards in static internal driver functions are unwanted",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0194",
+      "last_updated": "2026-05-27",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "17b5f255b311fa3ed22b55a696f504818027df33bc855ea3ea67862b1ea9c1fa",
+      "status": "draft",
+      "title": "`device_may_wakeup()` in PM suspend implies IRQ registration \u2014 redundant `irq_num > 0` guards rejected",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0195",
+      "last_updated": "2026-05-27",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "9d95344233a239d5ba1fb6db55bda664bd9e1e0ca3a9e8a1ee5ec12a5f629c65",
+      "status": "draft",
+      "title": "GPI DMA new TRE type requires updating MAX_TRE and descriptor ring allocation",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0196",
+      "last_updated": "2026-05-27",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "9cc929e72798b43d264507d2d8353d84b9f9c3b8ae4014b63aba5f16bdfbca3e",
+      "status": "draft",
+      "title": "i2c-qcom-geni \u2014 new I2C opcode must be added to all opcode condition guards, not only TRE construction",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0197",
+      "last_updated": "2026-05-27",
+      "path": "refs/memory/draft/commit-message.md",
+      "sha256": "a4726fb50fabc46a016e5feba56dbd09e1ad48d4827004d0495f5c16cd79d38d",
+      "status": "draft",
+      "title": "New hardware-mode feature commit body must state which hardware makes the mode necessary and what existing code lacked",
+      "topic": "commit-message"
+    },
+    {
+      "id": "MEM-0198",
+      "last_updated": "2026-05-27",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "98bbdf706d6455285d626ab0a98560d6ed626a34bf56c4f370fd44c14d59ed78",
+      "status": "draft",
+      "title": "devres LIFO ordering \u2014 async work cancel action must be registered after DMA channels and mutexes",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0199",
+      "last_updated": "2026-05-27",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "aed69c6a69b2121a615cd6b0ba525ff924b931ba832ba6f025c910457d43deb3",
+      "status": "draft",
+      "title": "Explicit free of devm-managed resources inside a devres callback causes double-free",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0200",
+      "last_updated": "2026-05-27",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "dd54d8e87087f67c8aa6941650db3028510dec2b874e4722418660d4246fce1b",
+      "status": "draft",
+      "title": "Qcom osm-l3/EPSS driver \u2014 new SoC-specific LUT-entry cap must be audited against sibling small-class SoCs",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0201",
+      "last_updated": "2026-05-27",
+      "path": "refs/memory/draft/dt-bindings.md",
+      "sha256": "1a772792c785096638d977736aae3b02a86428d826e0ae259d67e93891bab295",
+      "status": "draft",
+      "title": "DT binding YAML example \u2014 embedded DTS node contents must use tab indentation, not spaces",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0202",
+      "last_updated": "2026-05-27",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "30efd5cf81cfc83bb06fa0ec025b5ca7915cfb62c3812c31c93fce5c8a7bf58e",
+      "status": "draft",
+      "title": "Qcom clk/GDSC --- BRANCH_HALT on gated clock branches is a mechanically implied companion to HW_CTRL_TRIGGER; commit body need not enumerate it separately",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0203",
+      "last_updated": "2026-05-27",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "1a71a42b6d8c55d25a0564937d54137db5d1ce4898e6c12f98607e49ad809744",
+      "status": "draft",
+      "title": "Venus pm_helpers --- devm_pm_domain_attach_list() stub may leave core->pmdomains NULL when CONFIG_PM_GENERIC_DOMAINS is disabled; guard before pd_devs access",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0204",
+      "last_updated": "2026-05-29",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "bb48d0a3e171166e451cd68f9f9e8bfa74462f63048150507d0c7f5970dcebb5",
+      "status": "draft",
+      "title": "DRM colorop \u2014 repeated `->next` linked-list traversal appearing 3+ times should be extracted into a named iterator macro",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0205",
+      "last_updated": "2026-05-27",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "f0e91be79c66760cd03b88a6b3ea9aff686f6fda0a9a9cdffe46e7229fcee62d",
+      "status": "draft",
+      "title": "work_struct embedded in heap-allocated struct requires cancel_work_sync() in teardown path",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0206",
+      "last_updated": "2026-05-27",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "968fabeb391d0d035234b899a4480e228e091267c7c69ad16280a0f73602516a",
+      "status": "draft",
+      "title": "remoteproc subdev stop/unprepare unbalanced call -- per-callback NULL guard is symptom fix; subdevs_started bool is preferred architectural fix",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0207",
+      "last_updated": "2026-05-29",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "5b28997de933757a0948ba952f8f28ec425551f6bfe3fe1d4253b36001d9df00",
+      "status": "draft",
+      "title": "of_find_device_by_node() + dev_get_drvdata() NULL must return -EPROBE_DEFER, not -ENODEV",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0208",
+      "last_updated": "2026-05-29",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "3f2cf18ad70aee2276a4f968b50acc4c7dc0fabbb881283e58fdc529d20c790c",
+      "status": "draft",
+      "title": "Phandle-resolved drvdata cast \u2014 validate target is the expected driver type before use",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0209",
+      "last_updated": "2026-05-30",
+      "path": "refs/memory/draft/dt-bindings.md",
+      "sha256": "0281716c0753bcc458f1fcaf2a809098c8e6f3bd146a35da7f0e2a460a0a5a5e",
+      "status": "draft",
+      "title": "DT binding YAML \u2014 `properties: X: true` in an `allOf if/then` does not restrict X to that compatible",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0210",
+      "last_updated": "2026-05-29",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "f0bca8089f752d3f0942cae57d2c398bfbc2d08bce5c349973be09c93e6bc3f6",
+      "status": "draft",
+      "title": "`ERR_PTR()` in a header stub requires `<linux/err.h>` \u2014 header must be self-contained",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0211",
+      "last_updated": "2026-05-29",
+      "path": "refs/memory/deprecated/subsystem-specific.md",
+      "sha256": "d1ac26248ee6b3a57fe2de7a16aff140012fb394389391e239dfefdad25f0919",
+      "status": "deprecated",
+      "title": "`dev_get_drvdata()` NULL in probe-reachable lookup \u2192 return `-EPROBE_DEFER`, not `-ENODEV`",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0212",
+      "last_updated": "2026-05-29",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "bc917a18f0abfe4300e94dc52f7d061d3a95cbd07782a2379922e50b8071ea84",
+      "status": "draft",
+      "title": "Stack-allocated completion passed to async hardware transaction \u2014 UAF on `wait_for_completion_timeout()` timeout without cancel",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0213",
+      "last_updated": "2026-05-29",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "0734ce0148e04b2d1602bcc4ee0c9e991cc6feaca410330491bcc8a31f07eaf2",
+      "status": "draft",
+      "title": "pinctrl \u2014 new function enum value must be added to ALL parallel function-name arrays",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0214",
+      "last_updated": "2026-05-29",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "af9f5c5220de7c07a900a1d945cca03c5d9047ac5ccd476ecf18e2c285f02ae5",
+      "status": "draft",
+      "title": "devres LIFO ordering \u2014 framework-registered data must not be allocated after `devm_*_register()`",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0215",
+      "last_updated": "2026-05-29",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "fc772113f9ffa14997bf84f0ba080539426e21717d9a1dc4d845b293636e726f",
+      "status": "draft",
+      "title": "spmi-gpio \u2014 software pseudo-function index must bypass hardware function register write",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0216",
+      "last_updated": "2026-05-29",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "1bd70bd00792899fabbc0782927ce1357204bc55379f9e9e1bfb8e3e67be6062",
+      "status": "draft",
+      "title": "pinctrl \u2014 new pinconf parameter in `_set` must have matching `_get` implementation",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0217",
+      "last_updated": "2026-05-29",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "35ba693435d85f8573422caf9ffa926f22d3090c2e95c533aa2860e32670a979",
+      "status": "draft",
+      "title": "GENI SE I2C \u2014 conf registers not restored after system sleep when moved to probe-only",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0218",
+      "last_updated": "2026-05-29",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "d6f87cd08adca764066c9840d0628b0e00c46a5a68ea0f53efc3521ee237f171",
+      "status": "draft",
+      "title": "geni_se_clk_freq_match() nearest-match may pair wrong SCL counters with returned clock index",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0219",
+      "last_updated": "2026-05-29",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "e1988339336ae5ebc2dd70225c824560f2e4b2c184cb94d752e171ac88c88f7e",
+      "status": "draft",
+      "title": "SE_GENI_CLK_SEL write must mask index with CLK_SEL_MSK to avoid setting reserved bits",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0220",
+      "last_updated": "2026-05-29",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "fcfcdfb516ab36f64d089f2de2e4b1b838c214d53dca7da94bf1b70a011e0d76",
+      "status": "draft",
+      "title": "pinctrl \u2014 level-shifter pseudo-function must enforce mutual exclusivity with hardware GPIO output functions",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0221",
+      "last_updated": "2026-05-29",
+      "path": "refs/memory/active/subsystem-specific.md",
+      "sha256": "8fca58768f86a3be4d8539f5c7ae4e132a2e4c606b9b19ba5e1cad25030ef8f9",
+      "status": "active",
+      "title": "`clk_ops.is_enabled` returning negative errno is treated as \"enabled\" \u2014 intentional conservative behavior; require comment",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0222",
+      "last_updated": "2026-05-29",
+      "path": "refs/memory/active/dt-bindings.md",
+      "sha256": "8e25e194d74df40eb3ab2866f6b725a86a3ab1e0e8eecb3695880051622455f8",
+      "status": "active",
+      "title": "Qcom TCSR YAML \u2014 SoC-specific compatibles with unique supply topologies must get their own binding file, not extend sm8550-tcsr.yaml",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0225",
+      "last_updated": "2026-05-29",
+      "path": "refs/memory/deprecated/subsystem-specific.md",
+      "sha256": "ca62a03a59b7a64f55c72150c20743445c209a7bd9325bd5df7bd19061069451",
+      "status": "deprecated",
+      "title": "CLK `enable`/`disable` callbacks run under spinlock \u2014 `udelay` is correct; `usleep_range` is wrong",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0226",
+      "last_updated": "2026-05-29",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "a3161f26eb6da19853239bbb2ddb44c5987bad9f2398cc91a81750f439c90679",
+      "status": "draft",
+      "title": "Boot-enabled QREF clock \u2014 `unprepare` calling `regulator_bulk_disable` without prior kernel `prepare` is unbalanced",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0227",
+      "last_updated": "2026-05-29",
+      "path": "refs/memory/draft/dt-bindings.md",
+      "sha256": "8195227ae2a3dd2f18238e128ed1224356d8aaa58c934d0403021f2d60698a1c",
+      "status": "draft",
+      "title": "DT binding YAML `allOf if/then` \u2014 `compatible: enum` doesn't match array-typed property; use `contains: const` or `contains: enum`",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0228",
+      "last_updated": "2026-05-29",
+      "path": "refs/memory/draft/dt-bindings.md",
+      "sha256": "1e88409ff67996148ba6a081279afcddb8e75125728549355ca3724fafbf9c93",
+      "status": "draft",
+      "title": "DT binding YAML `allOf if/then` \u2014 `minItems` in `then:` without `required:` does not prevent absent mandatory properties",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0229",
+      "last_updated": "2026-05-29",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "5346492601d9cef9927a03e0d64e025c3ca2699ec438ac6248031bc66373418b",
+      "status": "draft",
+      "title": "Qcom iris/media \u2014 `iris_vpu_power_off_hw()` disables power domains before disabling hardware clocks",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0230",
+      "last_updated": "2026-05-29",
+      "path": "refs/memory/draft/dt-bindings.md",
+      "sha256": "63d952a7b148243ef6f1d11b5353902bb8c9228922db4a72265a9f76558bdd57",
+      "status": "draft",
+      "title": "Qcom USB DWC3 board DTS \u2014 `dr_mode = \"otg\"` is the default and should be dropped",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0231",
+      "last_updated": "2026-05-29",
+      "path": "refs/memory/draft/dt-bindings.md",
+      "sha256": "a9ef4b894c11209926b016b86b87d3f46d45c384e60eddd52e7eef5ab5a87377",
+      "status": "draft",
+      "title": "Qcom USB DWC3 \u2014 `usb-role-switch` belongs in SoC DTSI, not board DTS",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0232",
+      "last_updated": "2026-05-29",
+      "path": "refs/memory/draft/dt-bindings.md",
+      "sha256": "d3aaf205d935149d7888129dff0f0191543b4b6edb2a7117ad7ab7e667cc3179",
+      "status": "draft",
+      "title": "`usb-c-connector` in pmic-glink node \u2014 SBU endpoint must use `port@2`, not `port@1`",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0233",
+      "last_updated": "2026-05-30",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "506b92adca61bb4d60b3db4be8a51bc0afea0c618f5c42c6ed0d3d8412129a64",
+      "status": "draft",
+      "title": "`local_t` must not be used for per-device shared state \u2014 use `atomic_t`",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0234",
+      "last_updated": "2026-05-29",
+      "path": "refs/memory/draft/dt-bindings.md",
+      "sha256": "6edbd6c568ed2381a7ed05133f380050e3072006db1f2772b1d22f89352d975b",
+      "status": "draft",
+      "title": "DTS uses clock constant from prerequisite series not yet in tree \u2014 causes DT build failure",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0235",
+      "last_updated": "2026-05-29",
+      "path": "refs/memory/active/subsystem-specific.md",
+      "sha256": "d0ea89471e3bf529c6eec031f874807565a22b29824a66dcba61f5e73753a42f",
+      "status": "active",
+      "title": "Qcom iris series must base on `media-committers/next`, not linux-next",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0236",
+      "last_updated": "2026-05-30",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "935955693cc946bbc7786623c8cf52484ba9a51efd8222003658bd31b822e56e",
+      "status": "draft",
+      "title": "Qcom clock driver \u2014 prefer `.clk_cbcrs` over bare `qcom_branch_set_clk_en()` calls in probe",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0237",
+      "last_updated": "2026-05-29",
+      "path": "refs/memory/draft/dt-bindings.md",
+      "sha256": "f5493aaf1291c2293b326ed8c81899c36ff28068379631a946b80b7bcf182881",
+      "status": "draft",
+      "title": "Qcom DISPCC/GPUCC binding \u2014 new SoC extends existing SoC binding with more inputs; check existing SoC hardware too",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0238",
+      "last_updated": "2026-05-29",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "cd9d722544fa0bd4a1aa07a3086332107a6cfe7957687d614a9159a4be8f1ffd",
+      "status": "draft",
+      "title": "Qcom DISPCC/GPUCC \u2014 static global struct pointer rewritten in probe to select per-compatible freq_tbl",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0240",
+      "last_updated": "2026-05-29",
+      "path": "refs/memory/draft/patch-scope.md",
+      "sha256": "46ed77a76eebf0815afbfc35f2ba3a558d7292ee8f7768f7e8509997ef9a825a",
+      "status": "draft",
+      "title": "Overly broad `prerequisite-patch-id` list must not gate an entire series on unrelated DT infrastructure prerequisites",
+      "topic": "patch-scope"
+    },
+    {
+      "id": "MEM-0241",
+      "last_updated": "2026-05-31",
+      "path": "refs/memory/deprecated/dt-bindings.md",
+      "sha256": "1c8bfade7058d82745418e44aa2e76a01d9e902a508b9eebb65712e47ff1a5fd",
+      "status": "deprecated",
+      "title": "DT binding `if:` condition must use `contains:` not `properties:` for array-valued `compatible`",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0242",
+      "last_updated": "2026-05-31",
+      "path": "refs/memory/deprecated/dt-bindings.md",
+      "sha256": "e2b2049c06a964cb4902ad2ce85f079941bbc49fe3c9e946aa6b5f437ca4b179",
+      "status": "deprecated",
+      "title": "DT binding conditional `then:` with `minItems` without `required:` silently passes absent properties",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0243",
+      "last_updated": "2026-05-29",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "a7f3b75eaa176d9294e7ba66227d8d9f4f14a5f58a11de9a81995b9c83f906ed",
+      "status": "draft",
+      "title": "sdhci-msm \u2014 `MMC_CAP2_CRYPTO` guard in early-probe helper is always false at cold-boot; but the same helper may be re-invoked during PM resume with caps2 already set",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0244",
+      "last_updated": "2026-05-30",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "ac07d730cfa191ce0e04e3fd9a9f3df9ae4b04127a57591839dd648ba03dc022",
+      "status": "draft",
+      "title": "Qcom DISPCC/GPUCC driver \u2014 silently changing `fw_name` or GDSC flags/wait_vals for existing SoC while adding new SoC support",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0245",
+      "last_updated": "2026-05-29",
+      "path": "refs/memory/active/subsystem-specific.md",
+      "sha256": "a988a001944c67697dd4387a117a858c7412283d290338ed1177a9f5eddcc2c6",
+      "status": "active",
+      "title": "API-removal series replaces convenience API with verbose inline at 20+ sites \u2014 reviewer will request a replacement wrapper",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0246",
+      "last_updated": "2026-05-29",
+      "path": "refs/memory/draft/patch-scope.md",
+      "sha256": "df3c98979eb8c33e42c63e96f90d542bd4f7fcaa37383ea8da220cc89b4344de",
+      "status": "draft",
+      "title": "Functional API change must not be mixed with parameter renames or cleanup in the same patch",
+      "topic": "patch-scope"
+    },
+    {
+      "id": "MEM-0247",
+      "last_updated": "2026-05-29",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "c5c684609c98ef0745a9543793ce655ba83c3506fc5f1dc83d6e5aaadecc4810",
+      "status": "draft",
+      "title": "DRM/MSM DP \u2014 `atomic_enable()` serialization justifies RMW; \"same thread\" comment is incorrect and will be rejected",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0248",
+      "last_updated": "2026-05-29",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "2d589101b3b1102af856b8aadb1100039597760a55b6bc63ff584f5dbcd02d2f",
+      "status": "draft",
+      "title": "DRM struct using custom `->next` pointer instead of `struct list_head` will draw maintainer question",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0249",
+      "last_updated": "2026-05-29",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "2b22a47e5395f7ae63def65cf4408391d117920f7550ae2c647722c089ef7c09",
+      "status": "draft",
+      "title": "New DRM atomic rejection semantics for a new object type may break existing IGT colorop tests",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0250",
+      "last_updated": "2026-05-29",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "6682d881a44bb2bce6de388f467ea82494c88ca8409769f99504b1de4f959a69",
+      "status": "draft",
+      "title": "TRACE_EVENT `__dynamic_array` \u2014 do not add a redundant `__field` for its length",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0251",
+      "last_updated": "2026-05-29",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "99ca2ff564c76385ea8ad3b0fc11200b0709782782d475beecc69c26b9a5e8c9",
+      "status": "draft",
+      "title": "ARM/Coresight CTI \u2014 vendor-extension header must be folded into `coresight-cti.h`; separate file causes circular dependency",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0252",
+      "last_updated": "2026-05-29",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "866e6e8d92ff0969f0a7a2fa34b100a5db3f39ce3f6a7c2c35bea4d09e21b4ae",
+      "status": "draft",
+      "title": "ARM/Coresight CTI \u2014 do not write to CLAIMSET/CLAIMCLR for Qcom CTI; bypass claim operations via helpers",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0253",
+      "last_updated": "2026-05-29",
+      "path": "refs/memory/draft/commit-message.md",
+      "sha256": "a3cebc7884fa4ab2b7bcf04ab7739f04407b1ee861c27cc7f358692b55f84ab6",
+      "status": "draft",
+      "title": "Multi-version series \u2014 carry `Reviewed-by`/`Acked-by` tags from prior version into updated patches",
+      "topic": "commit-message"
+    },
+    {
+      "id": "MEM-0254",
+      "last_updated": "2026-05-29",
+      "path": "refs/memory/draft/dt-bindings.md",
+      "sha256": "5103c96ad7a6cd5c9c26de122461b4e71d38a55a0149558225c2d50bf8b5df48",
+      "status": "draft",
+      "title": "Qcom DT binding filename missing `qcom,` prefix silently drops linux-arm-msm from get_maintainer",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0255",
+      "last_updated": "2026-05-29",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "070a34834e3a7e234326d9d5fbd2855258380b47e0df708e937f7a28f6e5619a",
+      "status": "draft",
+      "title": "Test binary using fork()+pipes \u2014 unused pipe ends must be closed after fork()",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0256",
+      "last_updated": "2026-05-29",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "eab3a121fd37e08d55160c8ea58c1e8dd3c2eaf9ba5bbb8ad0a526a9d6ced05b",
+      "status": "draft",
+      "title": "Test binary functions grep'd by name from shell script must have external linkage",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0257",
+      "last_updated": "2026-05-29",
+      "path": "refs/memory/active/subsystem-specific.md",
+      "sha256": "36424c9c87db2dcca027d225ac368981e352a3e00e47611b6d7ee836b14ac2f5",
+      "status": "active",
+      "title": "Qcom CAMSS \u2014 identical SoC resource struct should use DTS fallback, not duplicate struct + new enum value",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0258",
+      "last_updated": "2026-05-30",
+      "path": "refs/memory/active/dt-bindings.md",
+      "sha256": "240f878586a41768ea535f553d696bede1ad3113833db1c0c440de5b4ce6105f",
+      "status": "active",
+      "title": "DT binding \u2014 per-compatible `minItems:` difference requires per-compatible item descriptions via if/then blocks",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0259",
+      "last_updated": "2026-05-30",
+      "path": "refs/memory/active/dt-bindings.md",
+      "sha256": "7e448dd2a27f554ef2edc48a99eb9b2edab2fd7600fc1d01e62dad16c3597a55",
+      "status": "active",
+      "title": "Qcom CAMSS DT node \u2014 IOMMU SID list must be complete and justified against sibling SoC",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0260",
+      "last_updated": "2026-05-30",
+      "path": "refs/memory/draft/dt-bindings.md",
+      "sha256": "dfb813878dcb3c790b42a2f83b5d8eb58304fea9b4ffa7d9bd48f380604b3e4e",
+      "status": "draft",
+      "title": "Qcom DTS overlay shared by multiple boards \u2014 filename must reflect the common base, not one specific board",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0261",
+      "last_updated": "2026-05-30",
+      "path": "refs/memory/active/dt-bindings.md",
+      "sha256": "88af7d7f4336a70aaa965b480bcee0215bde861e80939239bb37c5ee9e1c4ec5",
+      "status": "active",
+      "title": "Sensor DTS node \u2014 absent regulators require inline comment explaining supply source",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0262",
+      "last_updated": "2026-05-31",
+      "path": "refs/memory/deprecated/dt-bindings.md",
+      "sha256": "ea10ce99088c9a0e34ab3fe5f576ff0f55cf34b56f91dbb1177b1ed62e174f7e",
+      "status": "deprecated",
+      "title": "Qcom CAMSS binding \u2014 CSIPHY must be described as distinct sub-nodes, not monolithic registers in the CAMSS parent",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0263",
+      "last_updated": "2026-05-29",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "8f0131a120a0e2e195f0e34e72fb9192abf8257579069a5e62fdc5f05ce53fb6",
+      "status": "draft",
+      "title": "ARM/Coresight CTI \u2014 `cti_allocate_trig_con()` bitmask sized by `nr_trig_max` needs in/out-sigs bounds check",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0264",
+      "last_updated": "2026-05-29",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "35e2f5488cf1768bdcc21e967cb1073b80cc5bead60ebf762005360e12fccd38",
+      "status": "draft",
+      "title": "ARM/Coresight CTI \u2014 new banked sysfs register attrs require `Documentation/ABI/testing/sysfs-bus-coresight-devices-cti` update",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0265",
+      "last_updated": "2026-05-30",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "496e90745a3d6682fb2a288de25e5fa7262238663c524728b2c518dd3d74816c",
+      "status": "draft",
+      "title": "`tools/` user-space test binary must not include `<linux/compiler.h>` \u2014 use `__attribute__((noinline))` directly",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0266",
+      "last_updated": "2026-05-30",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "b1478796a59ea98d41482fbe1f19c1452e5ee1d85458251478af3fcec68d5cfa",
+      "status": "draft",
+      "title": "drm/msm Adreno GPU series must base on msm-next-robclark, not linux-next",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0267",
+      "last_updated": "2026-05-30",
+      "path": "refs/memory/draft/commit-message.md",
+      "sha256": "92b62f37d5522cdd1e3f23e7012588b0dc1c3f664d3f89fd0ddceff68645608f",
+      "status": "draft",
+      "title": "Cover letter changelog must itemize specific changes, not just cite reviewer names or vague summaries",
+      "topic": "commit-message"
+    },
+    {
+      "id": "MEM-0268",
+      "last_updated": "2026-05-30",
+      "path": "refs/memory/draft/commit-message.md",
+      "sha256": "350d644ffb93902114c517c2a4f9e0a332fb0d050346333e5329543441ed32bf",
+      "status": "draft",
+      "title": "Networking patches targeting the `net` or `net-next` tree must carry a `[PATCH net]` or `[PATCH net-next]` subject prefix",
+      "topic": "commit-message"
+    },
+    {
+      "id": "MEM-0269",
+      "last_updated": "2026-05-30",
+      "path": "refs/memory/draft/commit-message.md",
+      "sha256": "a3f02fb3912881e6795c014ab61d8d11f1cfe38f8a85be8094eddd0e0f919d78",
+      "status": "draft",
+      "title": "Verbose \"Dostoyevsky\" cover letter with AI hallmarks \u2014 pinctrl maintainer requests Assisted-by tag",
+      "topic": "commit-message"
+    },
+    {
+      "id": "MEM-0270",
+      "last_updated": "2026-05-30",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "3d6680aa390d0c4e01935a9212dda889d1abea23eb1b936ef05ac3b41f807091",
+      "status": "draft",
+      "title": "`irq_chip_*_parent()` helpers do not check `parent_data` for NULL \u2014 explicit guard required when hierarchy is trimmed",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0271",
+      "last_updated": "2026-05-30",
+      "path": "refs/memory/draft/commit-message.md",
+      "sha256": "bc1f347a2c3682eb0475f01807df58f3b8e891bd9274af2f175d7facc9ddbe2a",
+      "status": "draft",
+      "title": "Race-fix series without Cc: stable \u2014 maintainer may request BROKEN marker patch first",
+      "topic": "commit-message"
+    },
+    {
+      "id": "MEM-0272",
+      "last_updated": "2026-05-30",
+      "path": "refs/memory/draft/patch-scope.md",
+      "sha256": "d2ba21532335c77dd08092d3f69856a455886a86b39ef87279341535460f6b25",
+      "status": "draft",
+      "title": "Series listing unmerged cross-tree prerequisites \u2014 maintainer skips review as unmergeable and untestable",
+      "topic": "patch-scope"
+    },
+    {
+      "id": "MEM-0273",
+      "last_updated": "2026-05-30",
+      "path": "refs/memory/draft/dt-bindings.md",
+      "sha256": "3aa70bd46892f1e29df2eb61f9ee06e961077f05710eccda6c4dff7578f0b848",
+      "status": "draft",
+      "title": "Qcom PCIe DT binding \u2014 compatible string must follow `qcom,pcie-<soc>` (function-first) convention",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0274",
+      "last_updated": "2026-05-30",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "91e30655b7ceddc6f35981c29231d47918971ea6fbc969568cfb20ac9563fdf1",
+      "status": "draft",
+      "title": "pinctrl \u2014 mutual exclusivity between a software pseudo-function and physical GPIO functions must be enforced at `pinconf_set` time",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0275",
+      "last_updated": "2026-05-30",
+      "path": "refs/memory/draft/dt-bindings.md",
+      "sha256": "c173468a3c38644240a646d6938797e297e8aabc0b308286df7673a3818ec9b9",
+      "status": "draft",
+      "title": "DT binding `qcom,pmic-id`-style properties \u2014 do not use instance IDs; use DT-standard identification",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0276",
+      "last_updated": "2026-05-30",
+      "path": "refs/memory/draft/dt-bindings.md",
+      "sha256": "ff2e434f148a68a078aaebec67e3a4d168d1739c9a5224deef4528a568a02687",
+      "status": "draft",
+      "title": "DT binding custom vendor voltage/enable property \u2014 check for standard pinconf generic properties first",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0277",
+      "last_updated": "2026-05-30",
+      "path": "refs/memory/draft/patch-scope.md",
+      "sha256": "3ca8f7d2002d19ff402ce2a9fb992320da54872c2b9e5f1ee78e1f41b1f1ee0a",
+      "status": "draft",
+      "title": "Trivially-small follow-up that only modifies prerequisite-series files \u2014 squash into prerequisite",
+      "topic": "patch-scope"
+    },
+    {
+      "id": "MEM-0278",
+      "last_updated": "2026-05-30",
+      "path": "refs/memory/draft/commit-message.md",
+      "sha256": "4c7496ea2f133a3bdf78d146e51acba06c92f2296f8852d0e484f511812bc93e",
+      "status": "draft",
+      "title": "Qcom clock patch subject says \"drop critical clocks\" but includes non-CLK_IS_CRITICAL clocks \u2014 commit body must explain all removed clocks",
+      "topic": "commit-message"
+    },
+    {
+      "id": "MEM-0279",
+      "last_updated": "2026-05-30",
+      "path": "refs/memory/draft/dt-bindings.md",
+      "sha256": "40078d1e2587aee01e3dbee6411c99f9bbe14dd09b74380b0328960cc0a8a7e0",
+      "status": "draft",
+      "title": "New board DTS with custom GPIO-key or button GPIOs must include pinctrl states",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0280",
+      "last_updated": "2026-05-30",
+      "path": "refs/memory/draft/dt-bindings.md",
+      "sha256": "fc183e64e5a156e8d2f4e7335cba89987dda68e08765e505d6f862ae7894656d",
+      "status": "draft",
+      "title": "`regulator-always-on` on a supply that has a functional consumer \u2014 question whether it is needed",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0281",
+      "last_updated": "2026-05-30",
+      "path": "refs/memory/draft/dt-bindings.md",
+      "sha256": "0a17ae92dcb4562e848edeb68fb63bda9560c58300112872040822aa7fc83f2d",
+      "status": "draft",
+      "title": "New board DTS \u2014 `/delete-node/` + recreate reserved-memory nodes when only `reg` changes; prefer property override",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0282",
+      "last_updated": "2026-05-30",
+      "path": "refs/memory/draft/commit-message.md",
+      "sha256": "8f14452420b82a07a16898b557ce562770157c887152a24b58e9398d5dba268f",
+      "status": "draft",
+      "title": "`Reported-by:` must not be used for non-bug improvements \u2014 use `Suggested-by:`",
+      "topic": "commit-message"
+    },
+    {
+      "id": "MEM-0283",
+      "last_updated": "2026-05-30",
+      "path": "refs/memory/draft/commit-message.md",
+      "sha256": "adccac26e086f6728320ab033e7b6106fbd6a87ce65109758dcb671cb51fed67",
+      "status": "draft",
+      "title": "Commit body \"the only X\" uniqueness claim \u2014 verify before accepting",
+      "topic": "commit-message"
+    },
+    {
+      "id": "MEM-0284",
+      "last_updated": "2026-05-31",
+      "path": "refs/memory/deprecated/dt-bindings.md",
+      "sha256": "608d0792f762ff6442256fa3857ee738c54aedd6d150c15405d9bf6bf4549b8c",
+      "status": "deprecated",
+      "title": "Qcom CAMSS DT binding \u2014 CSIPHY must be a distinct sub-node; flat embedded-CSIPHY topology is blocked",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0285",
+      "last_updated": "2026-05-31",
+      "path": "refs/memory/deprecated/dt-bindings.md",
+      "sha256": "ce3f0a86be522682f6a1de6e8c6fd03cca53fa0b4748c3bb73caf43071e91a6f",
+      "status": "deprecated",
+      "title": "DTS overlay filename must enumerate all covered board variants when shared across multiple boards",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0286",
+      "last_updated": "2026-05-30",
+      "path": "refs/memory/active/subsystem-specific.md",
+      "sha256": "1d6d0141a00dd93be2f54e8b08caa73b6c5dbf890fe793aad8f8bd4bb5e50f0b",
+      "status": "active",
+      "title": "Qcom CAMSS DT binding \u2014 CSIPHY must be a distinct sub-node; monolithic CAMSS binding embedding CSIPHY will be rejected",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0287",
+      "last_updated": "2026-05-30",
+      "path": "refs/memory/draft/patch-scope.md",
+      "sha256": "78f38edf3861c3126d9b2e3d9555b6a0fecc810aa0e7631163ef338b48d2211a",
+      "status": "draft",
+      "title": "Non-functional stub commit adding empty driver descriptor \u2014 resources deferred to a later patch in the same series",
+      "topic": "patch-scope"
+    },
+    {
+      "id": "MEM-0288",
+      "last_updated": "2026-05-31",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "8383a06160369b520cba6916c51da9f0580cd1da0f3751b0d4791c7a28f104d7",
+      "status": "draft",
+      "title": "fastrpc bug-fix patch \u2014 verify the defect is not already fixed in linux-next before reviewing",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0289",
+      "last_updated": "2026-05-31",
+      "path": "refs/memory/draft/dt-bindings.md",
+      "sha256": "aa1e22db975266ea2a984844d42d4147c12a9a2cd14cf372fa864b38567a05a5",
+      "status": "draft",
+      "title": "Qcom variant binding \u2014 `compatible: const:` rejects multi-string fallback array; use `oneOf:` when a parent wrapper defines fallback compatibles",
+      "topic": "dt-bindings"
+    },
+    {
+      "id": "MEM-0290",
+      "last_updated": "2026-05-31",
+      "path": "refs/memory/active/subsystem-specific.md",
+      "sha256": "83695a1d481c2eee2fe1d36ee4434385e82e16a5552c367d283b9ed8b54c8220",
+      "status": "active",
+      "title": "Qcom GENI SPI/SE driver \u2014 `geni_se_resources_init()` leaves `se->clk` as ERR_PTR on ACPI; subsequent `clk_round_rate()` will dereference ERR_PTR",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0291",
+      "last_updated": "2026-05-31",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "fe70a7775da0af3a0adce7db0220c38f475481ae819a70fd9d692cebe9acc904",
+      "status": "draft",
+      "title": "Qcom GENI SE \u2014 `geni_se_resources_activate()` does not restore OPP rate on resume; subsequent transfers may see zero-voltage state",
+      "topic": "subsystem-specific"
+    },
+    {
+      "id": "MEM-0292",
+      "last_updated": "2026-05-31",
+      "path": "refs/memory/draft/subsystem-specific.md",
+      "sha256": "37cd323bb3b5b39d42886419eaeb247812ae0721d4af8155374fa38d617035ed",
+      "status": "draft",
+      "title": "Qcom GENI SPI \u2014 GPI DMA path (`setup_gsi_xfer`) must use the same clock/rate abstraction as the non-DMA path; hard-coded `get_spi_clk_cfg` breaks SCMI platforms",
+      "topic": "subsystem-specific"
+    }
+  ]
+}

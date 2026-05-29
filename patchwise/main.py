@@ -15,6 +15,7 @@ from .logger_setup import add_logging_arguments, setup_logger
 from .patch_review import (
     add_review_arguments,
     fix_reported_issues,
+    deep_review_codebase_error,
     get_selected_reviews_from_args,
     review_commit,
 )
@@ -69,7 +70,17 @@ def parse_args(config: dict) -> argparse.Namespace:
         help="Directory to save the review results. (default: %(default)s)",
     )
 
-    return parser.parse_args()
+    args = parser.parse_args()
+    if getattr(args, "deep_review", False) or "DeepReview" in getattr(
+        args, "reviews", []
+    ):
+        error = deep_review_codebase_error(args.repo_path)
+        if error:
+            parser.error(
+                "--deep-review requires --repo-path to point at a Linux kernel "
+                f"codebase: {error}"
+            )
+    return args
 
 
 def get_commits(repo: Repo, commits: list[str]) -> list[Commit]:

@@ -5,19 +5,22 @@ import argparse
 import atexit
 import logging
 import signal
+from pathlib import Path
 from typing import Any, Iterable
 
+from git import InvalidGitRepositoryError, NoSuchPathError, Repo
 from git.objects.commit import Commit
 
 # Import each review module so its @register_* decorators fire.
 from .static_analysis import checkpatch, coccicheck, dt_check, dtbs_check, sparse
-from .ai_review import ai_code_review, llm_commit_audit
+from .ai_review import ai_code_review, deep_review, llm_commit_audit
 
 # Import each fix module so its @register_* decorators fire.
 from .ai_fix import ai_patch_fix
 
 from patchwise.patch_review.decorators import (
     AVAILABLE_PATCH_REVIEWS,
+    DEEP_REVIEWS,
     LLM_REVIEWS,
     LONG_REVIEWS,
     REGISTERED_FIXES,
@@ -126,6 +129,56 @@ def register_containers_cleanup() -> None:
     signal.signal(signal.SIGTERM, signal_handler)
 
 
+def _deep_review_requested(reviews: set[str]) -> bool:
+    return bool(reviews & {cls.__name__ for cls in DEEP_REVIEWS})
+
+
+def deep_review_codebase_error(repo_path: str) -> str | None:
+    """Return an error if repo_path is not a usable Linux kernel codebase."""
+    if not repo_path:
+        return "missing --repo-path"
+
+    path = Path(repo_path).expanduser()
+    if not path.exists():
+        return f"path does not exist: {path}"
+    if not path.is_dir():
+        return f"path is not a directory: {path}"
+
+    try:
+        Repo(path, search_parent_directories=False)
+    except (InvalidGitRepositoryError, NoSuchPathError):
+        return f"path is not a git repository: {path}"
+
+    makefile = path / "Makefile"
+    if not makefile.is_file():
+        return f"missing kernel Makefile: {makefile}"
+
+    kernel_markers = (
+        path / "Kconfig",
+        path / "scripts",
+        path / "include" / "linux",
+        path / "drivers",
+        path / "Documentation",
+    )
+    marker_count = sum(marker.exists() for marker in kernel_markers)
+    if marker_count < 2:
+        return f"path does not look like a Linux kernel tree: {path}"
+
+    return None
+
+
+def validate_deep_review_codebase(reviews: set[str], repo_path: str) -> None:
+    if not _deep_review_requested(reviews):
+        return
+
+    error = deep_review_codebase_error(repo_path)
+    if error:
+        raise ValueError(
+            "--deep-review requires --repo-path to point at a Linux kernel "
+            f"codebase: {error}"
+        )
+
+
 def review_commit(
     reviews: set[str],
     commit: Commit,
@@ -133,6 +186,8 @@ def review_commit(
     additional_context: str = "",
     enable_experimental_features: bool = False,
 ) -> PatchReviewResults:
+    validate_deep_review_codebase(reviews, repo_path)
+
     all_reviews = {cls.__name__: cls for cls in AVAILABLE_PATCH_REVIEWS}
 
     selected_reviews = [all_reviews[name] for name in reviews if name in all_reviews]
@@ -198,6 +253,9 @@ def add_review_arguments(
     }
     # For display in help messages
     available_review_choices = sorted([cls.__name__ for cls in AVAILABLE_PATCH_REVIEWS])
+    default_review_choices = sorted(
+        [cls.__name__ for cls in AVAILABLE_PATCH_REVIEWS if cls not in DEEP_REVIEWS]
+    )
 
     def _case_insensitive_review(review_name: str) -> str:
         lower_name = review_name.lower()
@@ -213,7 +271,7 @@ def add_review_arguments(
         nargs="+",
         type=_case_insensitive_review,
         choices=available_review_choices,
-        default=available_review_choices,
+        default=default_review_choices,
         help="Space-separated list of reviews to run. (default: %(default)s)",
     )
 
@@ -222,6 +280,12 @@ def add_review_arguments(
         "--short-reviews",
         action="store_true",
         help=f"Run only short reviews: [`{_review_list_str(SHORT_REVIEWS)}`]. Overrides --reviews.",
+    )
+
+    parser_or_group.add_argument(
+        "--deep-review",
+        action="store_true",
+        help=f"Run only deep AI reviews: [`{_review_list_str(DEEP_REVIEWS)}`]. Overrides --reviews.",
     )
 
     parser_or_group.add_argument(
@@ -257,6 +321,8 @@ def get_selected_reviews_from_args(args: argparse.Namespace) -> set[str]:
         group_sets.append(set(cls.__name__ for cls in SHORT_REVIEWS))
     if getattr(args, "long_reviews", False):
         group_sets.append(set(cls.__name__ for cls in LONG_REVIEWS))
+    if getattr(args, "deep_review", False):
+        group_sets.append(set(cls.__name__ for cls in DEEP_REVIEWS))
 
     explicit_reviews: set[str] = (
         set(args.reviews) if hasattr(args, "reviews") and args.reviews else set()
