@@ -366,42 +366,24 @@ regulator-name.
 
     def get_reviewers_from_maintainer_script(self, commit: Commit) -> None:
         """Use the kernel's get_maintainer.pl script to find reviewers for a commit."""
-        repo_path = commit.repo.working_dir
-        tmp_file_path: str | None = None
         try:
-            perl = shutil.which("perl")
-            if not perl:
-                self.logger.warning("perl not found on PATH; skipping get_maintainer.pl")
-                self.reviewers = []
-                return
-
-            get_maintainer_script = Path(repo_path) / "scripts" / "get_maintainer.pl"
-            if not get_maintainer_script.exists():
-                self.logger.warning(f"get_maintainer.pl script not found at {get_maintainer_script}")
-                self.reviewers = []
-                return
-
-            with tempfile.NamedTemporaryFile(mode="w", suffix=".patch", delete=False) as tmp_file:
-                # Capture the path *before* writing, so the `finally` clause
-                # below can unlink it even if format_patch / write raise.
-                tmp_file_path = tmp_file.name
-                patch_content = commit.repo.git.format_patch("-1", commit.hexsha, "--stdout")
-                tmp_file.write(patch_content)
-
-            result = subprocess.run(
-                [perl, str(get_maintainer_script), tmp_file_path],
-                capture_output=True,
-                text=True,
-                cwd=repo_path,
+            patch_content = commit.repo.git.format_patch(
+                "-1", commit.hexsha, "--stdout"
             )
+            kernel_dir = str(self.docker_manager.kernel_dir)
+            proc = self.docker_manager.run_interactive_command(
+                ["perl", "scripts/get_maintainer.pl", "--no-rolestats"],
+                cwd=kernel_dir,
+            )
+            stdout, stderr = proc.communicate(input=patch_content)
 
-            if result.returncode != 0:
-                self.logger.error(f"get_maintainer.pl failed: {result.stderr}")
+            if proc.returncode != 0:
+                self.logger.error(f"get_maintainer.pl failed: {stderr}")
                 self.reviewers = []
                 return
 
             reviewers: List[str] = []
-            for line in result.stdout.strip().split("\n"):
+            for line in stdout.strip().split("\n"):
                 line = line.strip()
                 if not line:
                     continue
