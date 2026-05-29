@@ -14,6 +14,7 @@ LLM_REVIEWS: List[Type[AiReview]] = []
 STATIC_ANALYSIS_REVIEWS: List[Type[StaticAnalysis]] = []
 SHORT_REVIEWS: List[Type[PatchReview]] = []
 LONG_REVIEWS: List[Type[PatchReview]] = []
+DEEP_REVIEWS: List[Type[PatchReview]] = []
 
 # Registries for different fixes
 REGISTERED_FIXES: Dict[Type[PatchReview], Type[AiFix]] = {}
@@ -50,6 +51,18 @@ def register_short_review(cls: Type[Any]) -> Type[Any]:
 def register_long_review(cls: Type[Any]) -> Type[Any]:
     if cls not in LONG_REVIEWS:
         LONG_REVIEWS.append(cls)
+    register_patch_review(cls)
+    return cls
+
+
+def register_deep_review(cls: Type[Any]) -> Type[Any]:
+    if cls not in DEEP_REVIEWS:
+        DEEP_REVIEWS.append(cls)
+    # Deep review is a heavyweight, opt-in flow that requires a full Linux
+    # kernel tree.  Register it as an available patch review (so it can be
+    # selected explicitly via --reviews / --deep-review) but deliberately keep
+    # it out of the broad LLM_REVIEWS group, so selectors like --llm-reviews
+    # and --all-reviews do not silently pull in the deep-review flow.
     register_patch_review(cls)
     return cls
 

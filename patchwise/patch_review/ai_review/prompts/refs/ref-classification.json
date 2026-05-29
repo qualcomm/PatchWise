@@ -1,0 +1,376 @@
+{
+  "schema": "review-commits.ref-classification.v1",
+  "_doc": "Classifies refs by owner plane. Sub-agent reviewer packets may include only subagent_allowed refs.",
+  "refs/code-logic-action-trigger.md": {
+    "class": "legacy-only",
+    "subagent_allowed": false
+  },
+  "refs/code-logic-alloc-release.md": {
+    "class": "legacy-only",
+    "subagent_allowed": false
+  },
+  "refs/code-logic-interaction.md": {
+    "class": "legacy-only",
+    "subagent_allowed": false
+  },
+  "refs/code-logic-pointer-api.md": {
+    "class": "legacy-only",
+    "subagent_allowed": false
+  },
+  "refs/code-logic-register-io.md": {
+    "class": "legacy-only",
+    "subagent_allowed": false
+  },
+  "refs/code-logic-release-contract.md": {
+    "class": "legacy-only",
+    "subagent_allowed": false
+  },
+  "refs/code-logic-setup-result.md": {
+    "class": "legacy-only",
+    "subagent_allowed": false
+  },
+  "refs/code-logic-state-machine.md": {
+    "class": "legacy-only",
+    "subagent_allowed": false
+  },
+  "refs/code-logic-stored-pointer.md": {
+    "class": "legacy-only",
+    "subagent_allowed": false
+  },
+  "refs/code-logic-type-tag.md": {
+    "class": "legacy-only",
+    "subagent_allowed": false
+  },
+  "refs/code-logic-wire-protocol.md": {
+    "class": "legacy-only",
+    "subagent_allowed": false
+  },
+  "refs/code-logic.md": {
+    "class": "legacy-only",
+    "subagent_allowed": false
+  },
+  "refs/coding-style.md": {
+    "class": "legacy-only",
+    "subagent_allowed": false
+  },
+  "refs/commit-message.md": {
+    "class": "legacy-only",
+    "subagent_allowed": false
+  },
+  "refs/core.md": {
+    "class": "legacy-only",
+    "subagent_allowed": false
+  },
+  "refs/dt-binding-dts.md": {
+    "class": "legacy-only",
+    "subagent_allowed": false
+  },
+  "refs/dt-binding-yaml.md": {
+    "class": "legacy-only",
+    "subagent_allowed": false
+  },
+  "refs/dt-binding.md": {
+    "class": "legacy-only",
+    "subagent_allowed": false
+  },
+  "refs/dt-driver.md": {
+    "class": "legacy-only",
+    "subagent_allowed": false
+  },
+  "refs/gate-rules.md": {
+    "class": "legacy-only",
+    "subagent_allowed": false
+  },
+  "refs/hardware-eng-irq-dma-context.md": {
+    "class": "legacy-only",
+    "subagent_allowed": false
+  },
+  "refs/hardware-eng-percpu-hotplug.md": {
+    "class": "legacy-only",
+    "subagent_allowed": false
+  },
+  "refs/hardware-eng-pm-register-access.md": {
+    "class": "legacy-only",
+    "subagent_allowed": false
+  },
+  "refs/hardware-eng-programming-sequence.md": {
+    "class": "legacy-only",
+    "subagent_allowed": false
+  },
+  "refs/hardware-eng-resource-lifecycle.md": {
+    "class": "legacy-only",
+    "subagent_allowed": false
+  },
+  "refs/hardware-eng-topology-bus.md": {
+    "class": "legacy-only",
+    "subagent_allowed": false
+  },
+  "refs/hardware-eng.md": {
+    "class": "legacy-only",
+    "subagent_allowed": false
+  },
+  "refs/html-template.md": {
+    "class": "orchestrator-only",
+    "subagent_allowed": false
+  },
+  "refs/mode-c-workflow.md": {
+    "class": "orchestrator-only",
+    "subagent_allowed": false
+  },
+  "refs/orchestrator-workflow.md": {
+    "class": "orchestrator-only",
+    "subagent_allowed": false
+  },
+  "refs/output-format-mini.md": {
+    "class": "output-format",
+    "subagent_allowed": true
+  },
+  "refs/qcom-scm-memory.md": {
+    "class": "legacy-only",
+    "subagent_allowed": false
+  },
+  "refs/ref-classification.json": {
+    "class": "orchestrator-only",
+    "subagent_allowed": false
+  },
+  "refs/review-constants.json": {
+    "class": "validator-only",
+    "subagent_allowed": false
+  },
+  "refs/reviewer-base.md": {
+    "class": "reviewer-base",
+    "subagent_allowed": true
+  },
+  "refs/reviewer-packet-schema.md": {
+    "class": "orchestrator-only",
+    "subagent_allowed": false
+  },
+  "refs/rule-cards/dt-companion-property-dependency.md": {
+    "class": "rule-card",
+    "subagent_allowed": true
+  },
+  "refs/rule-cards/dt-old-dtb-compatibility.md": {
+    "class": "rule-card",
+    "subagent_allowed": true
+  },
+  "refs/rule-cards/dt-provider-cells-const.md": {
+    "class": "rule-card",
+    "subagent_allowed": true
+  },
+  "refs/rule-cards/dt-vmid-value-space.md": {
+    "class": "rule-card",
+    "subagent_allowed": true
+  },
+  "refs/rule-cards/qcom-scm-vmid-memory-assignment.md": {
+    "class": "rule-card",
+    "subagent_allowed": true
+  },
+  "refs/rule-index.json": {
+    "class": "validator-only",
+    "subagent_allowed": false
+  },
+  "refs/special-cases.md": {
+    "class": "legacy-only",
+    "subagent_allowed": false
+  },
+  "refs/startup-workflow.md": {
+    "class": "orchestrator-only",
+    "subagent_allowed": false
+  },
+  "refs/validator-coverage.md": {
+    "class": "validator-only",
+    "subagent_allowed": false
+  },
+  "refs/validator-feedback.md": {
+    "class": "validator-only",
+    "subagent_allowed": false
+  },
+  "refs/validator-rules.md": {
+    "class": "validator-only",
+    "subagent_allowed": false
+  },
+  "refs/rule-cards/dt-compatible-fallback-contract.md": {
+    "class": "rule-card",
+    "subagent_allowed": true
+  },
+  "refs/rule-cards/dt-binding-schema-basics.md": {
+    "class": "rule-card",
+    "subagent_allowed": true
+  },
+  "refs/rule-cards/dt-resource-abi-matrix.md": {
+    "class": "rule-card",
+    "subagent_allowed": true
+  },
+  "refs/rule-cards/dt-binding-example-completeness.md": {
+    "class": "rule-card",
+    "subagent_allowed": true
+  },
+  "refs/rule-cards/dt-dts-resource-shape.md": {
+    "class": "rule-card",
+    "subagent_allowed": true
+  },
+  "refs/rule-cards/dt-dts-board-file-contract.md": {
+    "class": "rule-card",
+    "subagent_allowed": true
+  },
+  "refs/rule-cards/dt-dts-ordering-indentation.md": {
+    "class": "rule-card",
+    "subagent_allowed": true
+  },
+  "refs/rule-cards/dt-driver-of-match-contract.md": {
+    "class": "rule-card",
+    "subagent_allowed": true
+  },
+  "refs/rule-cards/dt-driver-property-read-contract.md": {
+    "class": "rule-card",
+    "subagent_allowed": true
+  },
+  "refs/rule-cards/runtime-pm-bracket-safety.md": {
+    "class": "rule-card",
+    "subagent_allowed": true
+  },
+  "refs/rule-cards/framework-status-callback-power-state.md": {
+    "class": "rule-card",
+    "subagent_allowed": true
+  },
+  "refs/rule-cards/level-irq-reenable-without-clear.md": {
+    "class": "rule-card",
+    "subagent_allowed": true
+  },
+  "refs/rule-cards/cross-instance-pointer-unbind.md": {
+    "class": "rule-card",
+    "subagent_allowed": true
+  },
+  "refs/rule-cards/readpath-widening-writer-locked.md": {
+    "class": "rule-card",
+    "subagent_allowed": true
+  },
+  "refs/rule-cards/unvalidated-arithmetic-input.md": {
+    "class": "rule-card",
+    "subagent_allowed": true
+  },
+  "refs/rule-cards/alternate-path-state-reset.md": {
+    "class": "rule-card",
+    "subagent_allowed": true
+  },
+  "refs/rule-cards/branch-precedence-regression.md": {
+    "class": "rule-card",
+    "subagent_allowed": true
+  },
+  "refs/rule-cards/aggregate-per-element-scale.md": {
+    "class": "rule-card",
+    "subagent_allowed": true
+  },
+  "refs/rule-cards/retained-dynamic-object-cleanup.md": {
+    "class": "rule-card",
+    "subagent_allowed": true
+  },
+  "refs/rule-cards/managed-device-link-manual-remove.md": {
+    "class": "rule-card",
+    "subagent_allowed": true
+  },
+  "refs/rule-cards/registration-before-enable-ordering.md": {
+    "class": "rule-card",
+    "subagent_allowed": true
+  },
+  "refs/rule-cards/platform-child-device-resource-lifecycle.md": {
+    "class": "rule-card",
+    "subagent_allowed": true
+  },
+  "refs/rule-cards/platform-id-table-module-alias-contract.md": {
+    "class": "rule-card",
+    "subagent_allowed": true
+  },
+  "refs/rule-cards/errptr-guard-contract.md": {
+    "class": "rule-card",
+    "subagent_allowed": true
+  },
+  "refs/rule-cards/atomic-context-sleep.md": {
+    "class": "rule-card",
+    "subagent_allowed": true
+  },
+  "refs/rule-cards/dma-buffer-ownership.md": {
+    "class": "rule-card",
+    "subagent_allowed": true
+  },
+  "refs/rule-cards/stored-stack-address-escape.md": {
+    "class": "rule-card",
+    "subagent_allowed": true
+  },
+  "refs/rule-cards/rcu-refcount-release.md": {
+    "class": "rule-card",
+    "subagent_allowed": true
+  },
+  "refs/rule-cards/resource-acquire-release-symmetry.md": {
+    "class": "rule-card",
+    "subagent_allowed": true
+  },
+  "refs/rule-cards/hw-programming-sequence.md": {
+    "class": "rule-card",
+    "subagent_allowed": true
+  },
+  "refs/rule-cards/percpu-hotplug-safety.md": {
+    "class": "rule-card",
+    "subagent_allowed": true
+  },
+  "refs/rule-cards/register-field-access.md": {
+    "class": "rule-card",
+    "subagent_allowed": true
+  },
+  "refs/rule-cards/uninit-struct-before-use.md": {
+    "class": "rule-card",
+    "subagent_allowed": true
+  },
+  "refs/rule-cards/unchecked-setup-result.md": {
+    "class": "rule-card",
+    "subagent_allowed": true
+  },
+  "refs/rule-cards/lock-coverage-symmetry.md": {
+    "class": "rule-card",
+    "subagent_allowed": true
+  },
+  "refs/rule-cards/probe-defer-export-topology.md": {
+    "class": "rule-card",
+    "subagent_allowed": true
+  },
+  "refs/rule-cards/per-block-global-vote-scope.md": {
+    "class": "rule-card",
+    "subagent_allowed": true
+  },
+  "refs/rule-cards/cleanup-style-consistency.md": {
+    "class": "rule-card",
+    "subagent_allowed": true
+  },
+  "refs/rule-cards/dt-vendor-prefix-discipline.md": {
+    "class": "rule-card",
+    "subagent_allowed": true
+  },
+  "refs/rule-cards/qcom-clock-controller-framework.md": {
+    "class": "rule-card",
+    "subagent_allowed": true
+  },
+  "refs/rule-cards/shared-scratch-serialization.md": {
+    "class": "rule-card",
+    "subagent_allowed": true
+  },
+  "refs/code-logic-qcom-clock.md": {
+    "class": "legacy-only",
+    "subagent_allowed": false
+  },
+  "refs/rule-cards/asoc-kcontrol-runtime-state.md": {
+    "class": "rule-card",
+    "subagent_allowed": true
+  },
+  "refs/rule-cards/devfreq-governor-state-contract.md": {
+    "class": "rule-card",
+    "subagent_allowed": true
+  },
+  "refs/rule-cards/dt-schema-conditional-composition.md": {
+    "class": "rule-card",
+    "subagent_allowed": true
+  },
+  "refs/rule-cards/firmware-xfer-buffer-contract.md": {
+    "class": "rule-card",
+    "subagent_allowed": true
+  }
+}

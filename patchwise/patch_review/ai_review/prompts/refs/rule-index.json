@@ -1,0 +1,1944 @@
+{
+  "schema": "review-commits.rule-index.v1",
+  "_doc": "Maps high-miss-rate validator checks to the human-facing rule paragraph they enforce. The Rule Focus Summary uses this to surface which named rules a patch's diff is likely to invoke.\n\nSelection rule: only checks with diff-only Gate-1 (no evidence_manifest dependency) AND a measured miss rate >= 25% on the historical corpus, OR a 100% miss rate at any volume, AND a Gate-1 predicate selective enough that surfacing it adds signal rather than noise.\n\nExcluded despite high miss volume:\n  - selector_cardinality_source_aware (101 misses / 36%): Gate-1 _ADD_SUPPORT_CONTEXT_RE matches nearly every Qcom patch (of_device_id / descriptor / `.data =` / `compatible =`). On Phase-1 corpus sweep it fired on 82% of recent patches; surfacing it on every brief is noise, not signal. Re-add only with a tighter Gate-1.\n\nHistorical miss rates (full corpus, 2026-04-27 to 2026-06-06): see focus_list_gain_analysis.md.",
+  "rules": [
+    {
+      "validator_check": "touched_unsafe_pm_source_aware",
+      "headline": "Touched-but-unsafe runtime-PM call",
+      "ref_file": "refs/hardware-eng-pm-register-access.md",
+      "anchor": "pm_runtime bracket",
+      "why": "Patch touches a function that calls pm_runtime_get_sync()/get without a balanced put_noidle on the failure path; the review must confirm bracket integrity or file the unbalanced reference.",
+      "miss_rate_pct": 39
+    },
+    {
+      "validator_check": "old_dtb_compatibility_source_aware",
+      "headline": "Old DTB compatibility for new compatible/property",
+      "ref_file": "refs/dt-binding-yaml.md",
+      "anchor": "3d.1 Old-DTB compatibility audit",
+      "why": "New compatible/property added to a binding without explaining old-DTB / new-kernel behaviour; the review must show the legacy DTB still parses or document the break.",
+      "miss_rate_pct": 74
+    },
+    {
+      "validator_check": "binding_companion_dependency_source_aware",
+      "headline": "Binding companion-property dependency",
+      "ref_file": "refs/dt-binding-yaml.md",
+      "anchor": "3d.1 DT-binding schema",
+      "why": "New binding property requires (or invalidates) a sibling property; the review must surface the companion dependency or add a `dependencies:` / `if-then` block.",
+      "miss_rate_pct": 60
+    },
+    {
+      "validator_check": "aggregate_per_element_scale_source_aware",
+      "headline": "Aggregate-vs-per-element scale audit",
+      "ref_file": "refs/code-logic.md",
+      "anchor": "3c.2 Data-Flow Picture",
+      "why": "Per-element bandwidth/rate is divided by a container/fabric width while the element struct exposes its own same-dimension field; the review must compare per-element width or prove homogeneity.",
+      "miss_rate_pct": 100
+    },
+    {
+      "validator_check": "level_irq_reenable_without_clear_source_aware",
+      "headline": "Level-IRQ re-enable without clearing source",
+      "ref_file": "refs/hardware-eng-irq-dma-context.md",
+      "anchor": "3f.5 IRQ context",
+      "why": "Threaded IRQ exits with `enable_irq()` while the hardware source remains asserted; level-triggered IRQs will retrigger continuously.",
+      "miss_rate_pct": 100
+    },
+    {
+      "validator_check": "provider_cells_const_source_aware",
+      "headline": "Provider `#*-cells` `const:` requirement",
+      "ref_file": "refs/dt-binding-yaml.md",
+      "anchor": "3d.1 DT-binding schema",
+      "why": "New provider binding declares `#*-cells` without `const:` matching the driver xlate; permissive parent schemas allow consumers that the driver will reject at runtime.",
+      "miss_rate_pct": 100
+    },
+    {
+      "validator_check": "cross_instance_pointer_unbind_source_aware",
+      "headline": "Cross-instance raw pointer across independent unbind",
+      "ref_file": "refs/hardware-eng-resource-lifecycle.md",
+      "anchor": "3f.2 Lifecycle / cross-instance pointers",
+      "why": "Driver stores a raw pointer into a sibling instance that is independently sysfs-unbindable; needs a quoted lifetime guarantee (suppress_bind_attrs, refcount, device_link, or coordinated teardown).",
+      "miss_rate_pct": 50
+    },
+    {
+      "validator_check": "managed_device_link_manual_remove_source_aware",
+      "headline": "Managed device-link manual remove",
+      "ref_file": "refs/code-logic.md",
+      "anchor": "3c.1 Control-Flow Picture",
+      "why": "device_link_remove() called on a DL_FLAG_AUTOREMOVE_CONSUMER/SUPPLIER link; managed links are released by the driver core, not the driver.",
+      "miss_rate_pct": 0
+    },
+    {
+      "validator_check": "retained_dynamic_object_cleanup_source_aware",
+      "headline": "Retained dynamic-object cleanup must clear pointer",
+      "ref_file": "refs/code-logic.md",
+      "anchor": "3c.2 Data-Flow Picture (Shared template mutation)",
+      "why": "Static descriptor stores a dynamically-allocated framework object; every cleanup path that frees the object must also clear the retained pointer or probe-retry/rebind reuses freed state.",
+      "miss_rate_pct": 12
+    },
+    {
+      "validator_check": "alternate_path_state_reset_source_aware",
+      "headline": "Alternate-path state reset for mode-dependent field",
+      "ref_file": "refs/code-logic.md",
+      "anchor": "3c.3 State-Machine / Lifecycle Picture",
+      "why": "Patch assigns a mode/type/sel/config field on one operational path while an alternate path (TPG, loopback, internal source) can reach the consumer without resetting it; the review must prove the alternate path resets the field or the consumer is guarded.",
+      "miss_rate_pct": 100
+    },
+    {
+      "validator_check": "unvalidated_arithmetic_input_source_aware",
+      "headline": "Macro arithmetic on unvalidated zero-capable input",
+      "ref_file": "refs/code-logic.md",
+      "anchor": "3c.2 Data-Flow Picture (Register read)",
+      "why": "GENMASK(count-1, 0) or division/shift by a DT-parsed/variant-provided value that can be zero; the review must prove bounds validation or file the degenerate-input finding.",
+      "miss_rate_pct": 100
+    },
+    {
+      "validator_check": "branch_precedence_regression_source_aware",
+      "headline": "Branch-precedence / condition-widening diversion",
+      "ref_file": "refs/code-logic.md",
+      "anchor": "3c.1 Control-Flow Picture",
+      "why": "Patch widens an if/else-if guard with a new `||` disjunct and reorders the chain so an input that used to fall to a later side-effectful arm is now captured by an earlier arm; the review must trace which input changes arms and prove the bypassed arm's side effect (PHY/power init, lock, state flag, setup) is still performed.",
+      "miss_rate_pct": 100
+    },
+    {
+      "validator_check": "readpath_widening_writer_locked_source_aware",
+      "headline": "Read-path widening of a writer-locked pointer",
+      "ref_file": "refs/hardware-eng-resource-lifecycle.md",
+      "anchor": "3f.2 Hardware Resource Lifecycle Symmetry",
+      "why": "Patch widens an `if (ctx->ptr)` block to add new dereferences of the same field, while a sibling teardown function (HPD/work/IRQ/timer/disconnect) frees the field under a lock the read-path function does not hold; the review must name the writer's free site and the lock asymmetry, or quote a lifetime guarantee on the field — pattern-alignment / API-correctness arguments do not establish lifetime.",
+      "miss_rate_pct": 100
+    }
+  ],
+  "rule_cards": [
+    {
+      "id": "qcom-scm-vmid-memory-assignment",
+      "card": "refs/rule-cards/qcom-scm-vmid-memory-assignment.md",
+      "category": "hardware-security-memory",
+      "triggers": {
+        "paths_any": [
+          "sound/soc/qcom/",
+          "drivers/firmware/qcom/",
+          "drivers/soc/qcom/"
+        ],
+        "diff_regex_any": [
+          "\\bqcom_scm_assign_mem\\b",
+          "\\bQCOM_SCM_VMID_\\w+\\b",
+          "\\bqcom,vmid\\b",
+          "\\bVMID\\b",
+          "\\bdestination[-_ ]?domain\\b",
+          "\\bdomain[-_ ]?routing\\b",
+          "\\bqcom,destination-domain\\b"
+        ],
+        "message_regex_any": [
+          "\\bVMID\\b",
+          "\\bdestination[-_ ]?domain\\b",
+          "\\bsecure[-_ ]?DMA\\b",
+          "\\bdomain[-_ ]?routing\\b"
+        ],
+        "require_paths_any": [
+          "sound/soc/qcom/",
+          "drivers/firmware/qcom/",
+          "drivers/soc/qcom/"
+        ]
+      },
+      "requires_context": [
+        "allocation_site",
+        "assign_unassign_call_sites",
+        "free_or_unprepare_paths",
+        "per_instance_assignment_state",
+        "mode_specific_data_paths"
+      ]
+    },
+    {
+      "id": "dt-vmid-value-space",
+      "card": "refs/rule-cards/dt-vmid-value-space.md",
+      "category": "dt-binding-abi",
+      "triggers": {
+        "paths_any": [
+          "Documentation/devicetree/bindings/",
+          "include/dt-bindings/"
+        ],
+        "diff_regex_any": [
+          "\\bVMID\\b",
+          "\\bqcom,vmid\\b",
+          "\\bdestination[-_ ]?domain\\b",
+          "\\bdomain[-_ ]?routing\\b",
+          "\\bqcom,destination-domain\\b"
+        ],
+        "require_paths_any": [
+          "Documentation/devicetree/bindings/",
+          "include/dt-bindings/"
+        ],
+        "require_diff_regex_any": [
+          "\\bVMID\\b",
+          "\\bqcom,vmid\\b",
+          "\\bdestination[-_ ]?domain\\b",
+          "\\bdomain[-_ ]?routing\\b",
+          "\\bqcom,destination-domain\\b"
+        ]
+      },
+      "requires_context": [
+        "binding_property_definition",
+        "dts_or_example_values",
+        "driver_property_parser",
+        "firmware_or_scm_consumer",
+        "old_dtb_behavior"
+      ]
+    },
+    {
+      "id": "dt-old-dtb-compatibility",
+      "card": "refs/rule-cards/dt-old-dtb-compatibility.md",
+      "category": "dt-binding-abi",
+      "triggers": {
+        "paths_any": [
+          "Documentation/devicetree/bindings/"
+        ],
+        "diff_regex_any": [
+          "(?m)^\\s*required:\\s*$",
+          "(?m)^\\s*-\\s*(?:clocks|clock-names|resets|reset-names|interrupts|interrupt-names|dmas|dma-names|power-domains|iommus|interconnects|.*-supply)\\b",
+          "(?m)^\\s*(?:minItems|maxItems):\\s*[1-9]",
+          "(?m)^\\s*(?:const|enum):\\s*.*(?:qcom|arm|mediatek|rockchip|ti|nvidia|samsung|intel|amd|apple|brcm|nxp|renesas|st)",
+          "compatible"
+        ],
+        "require_paths_any": [
+          "Documentation/devicetree/bindings/"
+        ],
+        "require_diff_regex_any": [
+          "(?m)^\\s*required:\\s*$",
+          "(?m)^\\s*-\\s*(?:clocks|clock-names|resets|reset-names|interrupts|interrupt-names|dmas|dma-names|power-domains|iommus|interconnects|.*-supply)\\b",
+          "compatible"
+        ]
+      },
+      "requires_context": [
+        "binding_property_or_compatible_change",
+        "driver_probe_or_getter_path",
+        "old_dtb_resource_shape",
+        "fallback_or_breakage_documentation"
+      ]
+    },
+    {
+      "id": "dt-companion-property-dependency",
+      "card": "refs/rule-cards/dt-companion-property-dependency.md",
+      "category": "dt-binding-schema",
+      "triggers": {
+        "paths_any": [
+          "Documentation/devicetree/bindings/"
+        ],
+        "diff_regex_any": [
+          "(?s)\\bclocks:\\s*[\\s\\S]*\\bclock-names:|\\bclock-names:\\s*[\\s\\S]*\\bclocks:",
+          "(?s)\\bdmas:\\s*[\\s\\S]*\\bdma-names:|\\bdma-names:\\s*[\\s\\S]*\\bdmas:",
+          "(?s)\\binterrupts:\\s*[\\s\\S]*\\binterrupt-names:|\\binterrupt-names:\\s*[\\s\\S]*\\binterrupts:",
+          "(?s)\\bresets:\\s*[\\s\\S]*\\breset-names:|\\breset-names:\\s*[\\s\\S]*\\bresets:",
+          "(?s)\\breg:\\s*[\\s\\S]*\\breg-names:|\\breg-names:\\s*[\\s\\S]*\\breg:",
+          "(?s)\\binterconnects:\\s*[\\s\\S]*\\binterconnect-names:|\\binterconnect-names:\\s*[\\s\\S]*\\binterconnects:",
+          "(?s)#cooling-cells['\\\"]?\\s*:[\\s\\S]*?\\btmd-names\\s*:|\\btmd-names\\s*:[\\s\\S]*?#cooling-cells['\\\"]?\\s*:"
+        ],
+        "require_paths_any": [
+          "Documentation/devicetree/bindings/"
+        ]
+      },
+      "requires_context": [
+        "binding_property_pair",
+        "dependencies_or_if_then_block",
+        "driver_named_lookup_site",
+        "example_resource_usage"
+      ]
+    },
+    {
+      "id": "dt-provider-cells-const",
+      "card": "refs/rule-cards/dt-provider-cells-const.md",
+      "category": "dt-binding-schema",
+      "triggers": {
+        "paths_any": [
+          "Documentation/devicetree/bindings/"
+        ],
+        "diff_regex_any": [
+          "(?m)^\\s*#[a-z0-9,-]+-cells:\\s*$",
+          "(?m)^\\s*[\"\\']#[a-z0-9,-]+-cells[\"\\']:\\s*$"
+        ],
+        "require_paths_any": [
+          "Documentation/devicetree/bindings/"
+        ],
+        "require_diff_regex_any": [
+          "#[a-z0-9,-]+-cells"
+        ]
+      },
+      "requires_context": [
+        "provider_cells_property_definition",
+        "driver_xlate_or_provider_registration",
+        "example_and_consumer_cell_counts",
+        "compatible_specific_cell_counts"
+      ]
+    },
+    {
+      "id": "dt-compatible-fallback-contract",
+      "card": "refs/rule-cards/dt-compatible-fallback-contract.md",
+      "category": "dt-compatible-abi",
+      "triggers": {
+        "paths_regex_any": [
+          "(^|/)Documentation/devicetree/bindings/(?!vendor-prefixes\\.yaml$).*\\.ya?ml$|\\.(dts|dtsi)$|(^|/)(drivers|sound|arch|firmware|soc|include)/.*\\.[ch]$"
+        ],
+        "diff_regex_any": [
+          "(?m)^\\s*compatible\\s*:",
+          "(?m)^\\s*compatible\\s*=",
+          "\\bof_device_id\\b",
+          "\\bof_match_table\\b",
+          "\\bdevice_get_match_data\\b",
+          "\\bof_device_get_match_data\\b",
+          "\\.compatible\\s*=",
+          "(?m)^\\s*-?\\s*const:\\s*[\"\\']?[a-z0-9][\\w.+-]*,[\\w.+-]+",
+          "(?m)^\\s*-\\s*[\"\\']?[a-z0-9][\\w.+-]*,[\\w.+-]+",
+          "(?m)^\\s*(?:oneOf|anyOf|items|contains):\\s*$"
+        ],
+        "require_paths_regex_any": [
+          "(^|/)Documentation/devicetree/bindings/(?!vendor-prefixes\\.yaml$).*\\.ya?ml$|\\.(dts|dtsi)$|(^|/)(drivers|sound|arch|firmware|soc|include)/.*\\.[ch]$"
+        ],
+        "require_diff_regex_any": [
+          "(?m)^\\s*compatible\\s*:",
+          "(?m)^\\s*compatible\\s*=",
+          "\\bof_device_id\\b",
+          "\\bof_match_table\\b",
+          "\\bdevice_get_match_data\\b",
+          "\\bof_device_get_match_data\\b",
+          "\\.compatible\\s*=",
+          "(?m)^\\s*-?\\s*const:\\s*[\"\\']?[a-z0-9][\\w.+-]*,[\\w.+-]+",
+          "(?m)^\\s*-\\s*[\"\\']?[a-z0-9][\\w.+-]*,[\\w.+-]+"
+        ]
+      },
+      "requires_context": [
+        "binding_compatible_schema",
+        "parent_or_wrapper_schema",
+        "dts_compatible_users",
+        "driver_match_data",
+        "fallback_resource_differences"
+      ],
+      "trigger_obligations": [
+        {
+          "trigger_pattern": "compatible:",
+          "must_check_ref": "#concrete-compatible",
+          "obligation_text": "For each new compatible string, verify it is a concrete hardware identifier, not a wildcard/family placeholder (`x`, `xx`, `*`) or a bus/transport suffix masquerading as hardware identity. If it is generic, require a specific compatible plus proven fallback or file a finding."
+        },
+        {
+          "trigger_pattern": ".compatible",
+          "must_check_ref": "#driver-compatible",
+          "obligation_text": "For each new driver `.compatible`, verify a matching binding accepts the same concrete string and that any missing match data is intentional for this hardware variant."
+        },
+        {
+          "trigger_pattern": "qcom,wsa885x",
+          "must_check_ref": "#family-wildcard",
+          "obligation_text": "Treat `wsa885x`-style family/wildcard naming as suspect: prove it is an official exact part identifier or ask for specific part-number compatibles."
+        }
+      ]
+    },
+    {
+      "id": "dt-binding-schema-basics",
+      "card": "refs/rule-cards/dt-binding-schema-basics.md",
+      "category": "dt-binding-schema",
+      "triggers": {
+        "paths_regex_any": [
+          "(^|/)Documentation/devicetree/bindings/(?!vendor-prefixes\\.yaml$).*\\.ya?ml$"
+        ],
+        "diff_regex_any": [
+          "\\$id\\s*:",
+          "\\$schema\\s*:",
+          "\\bmaintainers\\s*:",
+          "\\btitle\\s*:",
+          "\\bproperties\\s*:",
+          "\\brequired\\s*:",
+          "\\badditionalProperties\\s*:",
+          "\\bunevaluatedProperties\\s*:",
+          "\\ballOf\\s*:",
+          "\\$ref\\s*:",
+          "(?m)^\\s+-\\s+['\\\"]?#[a-z][a-z0-9-]*-cells['\\\"]?\\s*$"
+        ],
+        "require_paths_regex_any": [
+          "(^|/)Documentation/devicetree/bindings/(?!vendor-prefixes\\.yaml$).*\\.ya?ml$"
+        ],
+        "require_diff_regex_any": [
+          "\\$id\\s*:",
+          "\\$schema\\s*:",
+          "\\bmaintainers\\s*:",
+          "\\bproperties\\s*:",
+          "\\brequired\\s*:",
+          "\\badditionalProperties\\s*:",
+          "\\bunevaluatedProperties\\s*:",
+          "\\ballOf\\s*:",
+          "\\$ref\\s*:",
+          "(?m)^\\s+-\\s+['\\\"]?#[a-z][a-z0-9-]*-cells['\\\"]?\\s*$"
+        ]
+      },
+      "requires_context": [
+        "binding_file_path",
+        "top_level_schema_fields",
+        "property_closure_mode",
+        "referenced_common_schema",
+        "required_property_per_compatible_capability",
+        "dt_bindings_headers_or_driver_provider_registration"
+      ],
+      "trigger_obligations": [
+        {
+          "trigger_pattern": "additionalProperties: false",
+          "must_check_ref": "#closure-ref",
+          "obligation_text": "If this binding also uses `allOf:`/`$ref:`, verify closure uses `unevaluatedProperties: false`; otherwise file a DT schema closure finding. Do not mark `$ref` plus `additionalProperties: false` SAFE unless you prove the referenced schema contributes no properties."
+        },
+        {
+          "trigger_pattern": "allOf:",
+          "must_check_ref": "#closure-ref",
+          "obligation_text": "For every referenced common schema in `allOf:`, name the referenced schema and verify the local property-closure mode does not reject properties evaluated by that schema."
+        },
+        {
+          "trigger_pattern": "$ref:",
+          "must_check_ref": "#closure-ref",
+          "obligation_text": "For every `$ref:`, state whether it contributes properties outside the local `properties:` block and whether `unevaluatedProperties: false` is required."
+        },
+        {
+          "trigger_pattern": "#",
+          "must_check_ref": "#required-cells",
+          "obligation_text": "For each newly required `#*-cells` property, audit every compatible in the binding's enum/oneOf and prove each compatible's driver/header actually provides that resource. If only some do, require an if/then carve-out or file [CONCERN]."
+        },
+        {
+          "trigger_pattern": "$ref:",
+          "must_check_ref": "#inherited-required-cells",
+          "obligation_text": "When a binding with multiple compatibles references a provider common schema such as qcom,gcc.yaml, audit inherited required/provider cells (for example `#reset-cells`) per compatible, not only cells added in the local `required:` list."
+        }
+      ]
+    },
+    {
+      "id": "dt-schema-conditional-composition",
+      "card": "refs/rule-cards/dt-schema-conditional-composition.md",
+      "category": "dt-binding-schema",
+      "triggers": {
+        "paths_regex_any": [
+          "(^|/)Documentation/devicetree/bindings/(?!vendor-prefixes\\.yaml$).*\\.ya?ml$"
+        ],
+        "diff_regex_any": [
+          "(?m)^\\s*(?:anyOf|oneOf|allOf|contains):\\s*$",
+          "\\$ref\\s*:\\s*/schemas/",
+          "\\$ref\\s*:\\s*[^\\n]+\\.ya?ml#?",
+          "\\badditionalProperties\\s*:\\s*true\\b",
+          "\\bunevaluatedProperties\\s*:\\s*false\\b"
+        ],
+        "require_paths_regex_any": [
+          "(^|/)Documentation/devicetree/bindings/(?!vendor-prefixes\\.yaml$).*\\.ya?ml$"
+        ],
+        "require_diff_regex_any": [
+          "\\$ref\\s*:"
+        ]
+      },
+      "requires_context": [
+        "parent_or_wrapper_schema",
+        "added_schema_branch",
+        "branch_compatible_gate",
+        "branch_closure_mode",
+        "sibling_schema_fallback_risk",
+        "composition_parent_context_around_added_ref"
+      ],
+      "trigger_obligations": [
+        {
+          "trigger_pattern": "anyOf:",
+          "must_check_ref": "#conditional-composition",
+          "obligation_text": "When adding a `$ref` branch under `anyOf`, prove the new branch is compatible-gated or otherwise cannot validate unrelated vendor nodes; if loose closure can mask a stricter sibling schema, file a finding."
+        },
+        {
+          "trigger_pattern": "oneOf:",
+          "must_check_ref": "#conditional-composition",
+          "obligation_text": "When adding a `$ref` branch under `oneOf`, verify the branch selection is mutually exclusive for compatible strings and cannot create ambiguous or fallback validation."
+        },
+        {
+          "trigger_pattern": "additionalProperties: true",
+          "must_check_ref": "#loose-branch",
+          "obligation_text": "If a newly referenced vendor branch has `additionalProperties: true`, check whether it annotates properties for unrelated compatibles and bypasses parent `unevaluatedProperties: false`."
+        }
+      ]
+    },
+    {
+      "id": "dt-resource-abi-matrix",
+      "card": "refs/rule-cards/dt-resource-abi-matrix.md",
+      "category": "dt-resource-abi",
+      "triggers": {
+        "paths_regex_any": [
+          "(^|/)Documentation/devicetree/bindings/(?!vendor-prefixes\\.yaml$).*\\.ya?ml$|(^|/)include/dt-bindings/.*\\.h$|(^|/)(drivers|sound|arch|firmware|soc|include)/.*\\.[ch]$"
+        ],
+        "diff_regex_any": [
+          "\\b(?:reg|reg-names|interrupts|interrupt-names|clocks|clock-names|resets|reset-names|dmas|dma-names|power-domains|iommus|interconnects|interconnect-names|[a-z0-9-]+-supply)\\b",
+          "\\b(?:minItems|maxItems|items)\\s*:",
+          "#[a-z0-9,-]+-cells\\b",
+          "\\binclude/dt-bindings/",
+          "\\b(?:of_property|device_property|fwnode_property|of_parse_phandle|platform_get_irq|devm_platform_ioremap|devm_clk|clk_bulk|devm_reset|devm_regulator|devm_gpiod|dma_request)\\w*"
+        ],
+        "require_paths_regex_any": [
+          "(^|/)Documentation/devicetree/bindings/(?!vendor-prefixes\\.yaml$).*\\.ya?ml$|(^|/)include/dt-bindings/.*\\.h$|(^|/)(drivers|sound|arch|firmware|soc|include)/.*\\.[ch]$"
+        ],
+        "require_diff_regex_any": [
+          "\\b(?:reg|reg-names|interrupts|interrupt-names|clocks|clock-names|resets|reset-names|dmas|dma-names|power-domains|iommus|interconnects|interconnect-names|[a-z0-9-]+-supply)\\b",
+          "#[a-z0-9,-]+-cells\\b",
+          "\\binclude/dt-bindings/",
+          "\\b(?:of_property|device_property|fwnode_property|of_parse_phandle|platform_get_irq|devm_platform_ioremap|devm_clk|clk_bulk|devm_reset|devm_regulator|devm_gpiod|dma_request)\\w*"
+        ]
+      },
+      "requires_context": [
+        "binding_resource_definition",
+        "dts_resource_instances",
+        "driver_resource_getters",
+        "dt_binding_header_values",
+        "resource_order_and_counts"
+      ],
+      "trigger_obligations": [
+        {
+          "trigger_pattern": "interrupt-gpios",
+          "must_check_ref": "#irq-as-gpio",
+          "obligation_text": "For an IRQ-like `*-gpios` property, verify whether the line is a hardware interrupt. If yes, require standard `interrupts`/`interrupts-extended` and IRQ consumer APIs; only mark SAFE if the line is genuinely used as GPIO state/control and that hardware reason is documented."
+        },
+        {
+          "trigger_pattern": "gpiod_to_irq",
+          "must_check_ref": "#irq-as-gpio",
+          "obligation_text": "A `gpiod_to_irq()` consumer is evidence that the binding may be modeling an interrupt as GPIO. Cross-check the binding property and file a finding unless a documented GPIO-control reason exists."
+        },
+        {
+          "trigger_pattern": "init-table",
+          "must_check_ref": "#raw-register-script",
+          "obligation_text": "For any DT `init-table`/register table property, verify whether cells are raw register addresses/values. Raw register scripts in DT are a finding unless the binding exposes semantic board parameters with units/ranges or proves the table is not hardware programming data."
+        },
+        {
+          "trigger_pattern": "register/value",
+          "must_check_ref": "#raw-register-script",
+          "obligation_text": "Text describing register/value pairs in DT is evidence of an opaque hardware script. Require semantic properties or driver-side tables keyed by compatible."
+        }
+      ]
+    },
+    {
+      "id": "dt-binding-example-completeness",
+      "card": "refs/rule-cards/dt-binding-example-completeness.md",
+      "category": "dt-binding-schema",
+      "triggers": {
+        "paths_regex_any": [
+          "(^|/)Documentation/devicetree/bindings/(?!vendor-prefixes\\.yaml$).*\\.ya?ml$"
+        ],
+        "diff_regex_any": [
+          "\\bexamples\\s*:",
+          "\\b(?:reg|interrupts|interrupts-extended|clocks|clock-names|resets|reset-names|dmas|dma-names|power-domains|iommus|interconnects|interconnect-names|[a-z0-9-]+-supply|gpios|[a-z0-9-]+-gpios)\\b",
+          "<&[A-Za-z0-9_]+",
+          "#[a-z0-9,-]+-cells\\b"
+        ],
+        "require_paths_regex_any": [
+          "(^|/)Documentation/devicetree/bindings/(?!vendor-prefixes\\.yaml$).*\\.ya?ml$"
+        ],
+        "require_diff_regex_any": [
+          "\\bexamples\\s*:",
+          "\\b(?:reg|interrupts|interrupts-extended|clocks|clock-names|resets|reset-names|dmas|dma-names|power-domains|iommus|interconnects|interconnect-names|[a-z0-9-]+-supply|gpios|[a-z0-9-]+-gpios)\\b",
+          "<&[A-Za-z0-9_]+",
+          "#[a-z0-9,-]+-cells\\b"
+        ]
+      },
+      "requires_context": [
+        "binding_required_properties",
+        "binding_examples",
+        "resource_provider_references",
+        "dt_binding_check_output"
+      ]
+    },
+    {
+      "id": "dt-dts-resource-shape",
+      "card": "refs/rule-cards/dt-dts-resource-shape.md",
+      "category": "dt-dts-contract",
+      "triggers": {
+        "paths_regex_any": [
+          "\\.(dts|dtsi)$"
+        ],
+        "diff_regex_any": [
+          "(?m)^\\s*(?:compatible|reg|interrupts|interrupts-extended|clocks|clock-names|resets|reset-names|dmas|dma-names|iommus|power-domains|interconnects|interconnect-names|pinctrl-[0-9]+|pinctrl-names|status|[a-z0-9-]+-supply|gpios|[a-z0-9-]+-gpios)\\s*=",
+          "<&[A-Za-z0-9_]+",
+          "GPIO_[A-Z0-9_]+",
+          "IRQ_TYPE_[A-Z0-9_]+"
+        ],
+        "require_paths_regex_any": [
+          "\\.(dts|dtsi)$"
+        ],
+        "require_diff_regex_any": [
+          "(?m)^\\s*(?:compatible|reg|interrupts|interrupts-extended|clocks|clock-names|resets|reset-names|dmas|dma-names|iommus|power-domains|interconnects|interconnect-names|pinctrl-[0-9]+|pinctrl-names|status|[a-z0-9-]+-supply|gpios|[a-z0-9-]+-gpios)\\s*=",
+          "<&[A-Za-z0-9_]+"
+        ]
+      },
+      "requires_context": [
+        "dts_node_hunk",
+        "binding_resource_order",
+        "provider_cell_count",
+        "shared_dtsi_vs_board_dts_scope"
+      ]
+    },
+    {
+      "id": "dt-dts-board-file-contract",
+      "card": "refs/rule-cards/dt-dts-board-file-contract.md",
+      "category": "dt-dts-contract",
+      "triggers": {
+        "paths_regex_any": [
+          "\\.(dts)$|(^|/)arch/.*/boot/dts/.*/Makefile$"
+        ],
+        "diff_regex_any": [
+          "(?m)^\\s*/\\s*\\{",
+          "(?m)^\\s*model\\s*=",
+          "(?m)^\\s*compatible\\s*=",
+          "(?m)^\\s*#include\\s+",
+          "(?m)^\\s*dtb-[^\\n]*\\+=",
+          "\\bpinctrl-[0-9]+\\s*=",
+          "\\bstatus\\s*=\\s*[\"\\']okay[\"\\']"
+        ],
+        "require_paths_regex_any": [
+          "\\.(dts)$|(^|/)arch/.*/boot/dts/.*/Makefile$"
+        ],
+        "require_diff_regex_any": [
+          "(?m)^\\s*/\\s*\\{",
+          "(?m)^\\s*model\\s*=",
+          "(?m)^\\s*compatible\\s*=",
+          "(?m)^\\s*#include\\s+",
+          "(?m)^\\s*dtb-[^\\n]*\\+=",
+          "\\bpinctrl-[0-9]+\\s*=",
+          "\\bstatus\\s*=\\s*[\"\\']okay[\"\\']"
+        ]
+      },
+      "requires_context": [
+        "board_root_node",
+        "included_soc_dtsi",
+        "arch_dts_makefile",
+        "enabled_nodes_and_pinctrl"
+      ]
+    },
+    {
+      "id": "dt-dts-ordering-indentation",
+      "card": "refs/rule-cards/dt-dts-ordering-indentation.md",
+      "category": "dt-dts-style",
+      "triggers": {
+        "paths_regex_any": [
+          "\\.(dts|dtsi)$"
+        ],
+        "diff_regex_any": [
+          "(?m)^\\s*(?:[A-Za-z_][A-Za-z0-9_]*:\\s*)?[A-Za-z0-9_,-]+@[0-9a-fA-F]+\\s*\\{",
+          "(?m)^\\s*(?:[A-Za-z_][A-Za-z0-9_]*:\\s*)?[A-Za-z0-9_,-]+\\s*\\{",
+          "(?m)^\\s*[A-Za-z0-9_,-]+\\s*="
+        ],
+        "require_paths_regex_any": [
+          "\\.(dts|dtsi)$"
+        ],
+        "require_diff_regex_any": [
+          "(?m)^\\s*(?:[A-Za-z_][A-Za-z0-9_]*:\\s*)?[A-Za-z0-9_,-]+@[0-9a-fA-F]+\\s*\\{",
+          "(?m)^\\s*(?:[A-Za-z_][A-Za-z0-9_]*:\\s*)?[A-Za-z0-9_,-]+\\s*\\{",
+          "(?m)^\\s*[A-Za-z0-9_,-]+\\s*="
+        ]
+      },
+      "requires_context": [
+        "same_parent_sibling_nodes",
+        "same_node_sibling_properties",
+        "new_node_reg_property",
+        "preceding_and_following_context_unit_addresses"
+      ],
+      "trigger_obligations": [
+        {
+          "trigger_pattern": "@",
+          "must_check_ref": "#1",
+          "obligation_text": "For every added DTS node with a unit-address (@hex), compare its unit address numerically against existing same-parent siblings before and after the insertion anchor. Unit-addresses must be strictly ascending within each parent node."
+        }
+      ]
+    },
+    {
+      "id": "dt-driver-of-match-contract",
+      "card": "refs/rule-cards/dt-driver-of-match-contract.md",
+      "category": "dt-driver-contract",
+      "triggers": {
+        "paths_regex_any": [
+          "(^|/)(drivers|sound|arch|firmware|soc|include)/.*\\.[ch]$"
+        ],
+        "diff_regex_any": [
+          "\\bof_device_id\\b",
+          "\\bof_match_table\\b",
+          "\\bof_match_ptr\\b",
+          "\\bMODULE_DEVICE_TABLE\\s*\\(\\s*of\\b",
+          "\\bdevice_get_match_data\\b",
+          "\\bof_device_get_match_data\\b",
+          "\\.compatible\\s*="
+        ],
+        "require_paths_regex_any": [
+          "(^|/)(drivers|sound|arch|firmware|soc|include)/.*\\.[ch]$"
+        ],
+        "require_diff_regex_any": [
+          "\\bof_device_id\\b",
+          "\\bof_match_table\\b",
+          "\\bof_match_ptr\\b",
+          "\\bMODULE_DEVICE_TABLE\\s*\\(\\s*of\\b",
+          "\\bdevice_get_match_data\\b",
+          "\\bof_device_get_match_data\\b",
+          "\\.compatible\\s*="
+        ]
+      },
+      "requires_context": [
+        "of_match_table",
+        "driver_registration",
+        "kconfig_module_context",
+        "binding_schema_path",
+        "match_data_dereference_sites"
+      ]
+    },
+    {
+      "id": "dt-driver-property-read-contract",
+      "card": "refs/rule-cards/dt-driver-property-read-contract.md",
+      "category": "dt-driver-contract",
+      "triggers": {
+        "paths_regex_any": [
+          "(^|/)(drivers|sound|arch|firmware|soc|include)/.*\\.[ch]$"
+        ],
+        "diff_regex_any": [
+          "\\bof_property_read_\\w+",
+          "\\bdevice_property_read_\\w+",
+          "\\bfwnode_property_read_\\w+",
+          "\\bof_property_count_\\w+",
+          "\\bof_find_\\w+",
+          "\\bof_get_\\w+",
+          "\\bof_node_put\\b",
+          "\\bof_parse_phandle\\w*\\b",
+          "\\bof_clk_get\\w*\\b",
+          "\\bof_reset_control_get\\w*\\b",
+          "\\bof_get_named_gpio\\w*\\b",
+          "\\bdevm_clk_bulk_get_all\\b",
+          "\\bdevm_clk_bulk_get_optional\\b",
+          "\\bdevm_gpiod_get\\w*\\b",
+          "\\bdevm_regulator_get\\w*\\b",
+          "\\bdevm_reset_control_get\\w*\\b"
+        ],
+        "require_paths_regex_any": [
+          "(^|/)(drivers|sound|arch|firmware|soc|include)/.*\\.[ch]$"
+        ],
+        "require_diff_regex_any": [
+          "\\bof_property_read_\\w+",
+          "\\bdevice_property_read_\\w+",
+          "\\bfwnode_property_read_\\w+",
+          "\\bof_property_count_\\w+",
+          "\\bof_find_\\w+",
+          "\\bof_get_\\w+",
+          "\\bof_parse_phandle\\w*\\b",
+          "\\bof_clk_get\\w*\\b",
+          "\\bof_reset_control_get\\w*\\b",
+          "\\bof_get_named_gpio\\w*\\b",
+          "\\bdevm_clk_bulk_get_all\\b",
+          "\\bdevm_clk_bulk_get_optional\\b"
+        ]
+      },
+      "requires_context": [
+        "property_getter_call",
+        "binding_required_or_optional_status",
+        "error_and_remove_paths",
+        "later_value_or_resource_consumer"
+      ]
+    },
+    {
+      "id": "runtime-pm-bracket-safety",
+      "card": "refs/rule-cards/runtime-pm-bracket-safety.md",
+      "category": "hardware-pm",
+      "triggers": {
+        "paths_regex_any": [
+          "(^|/)(drivers|sound|arch|firmware|soc|net|block|crypto|kernel|lib|mm|virt|include)/.*\\.[ch]$"
+        ],
+        "diff_regex_any": [
+          "\\bpm_runtime_get_sync\\s*\\(",
+          "\\bpm_runtime_resume_and_get\\s*\\(",
+          "\\bpm_runtime_put(?:_noidle|_sync|_autosuspend)?\\s*\\(",
+          "\\b(?:readl|readw|readb|writel|writew|writeb|regmap_(?:read|write|update_bits))\\s*\\(",
+          "\\b(?:runtime_suspend|runtime_resume|suspend|resume)\\b"
+        ],
+        "require_paths_regex_any": [
+          "(^|/)(drivers|sound|arch|firmware|soc|net|block|crypto|kernel|lib|mm|virt|include)/.*\\.[ch]$"
+        ],
+        "require_diff_regex_any": [
+          "\\bpm_runtime_(?:get_sync|resume_and_get|put(?:_noidle|_sync|_autosuspend)?)\\s*\\(",
+          "\\b(?:readl|readw|readb|writel|writew|writeb|regmap_(?:read|write|update_bits))\\s*\\("
+        ]
+      },
+      "requires_context": [
+        "pm_get_put_sites",
+        "register_access_entrypoint",
+        "error_paths",
+        "runtime_resume_restore_path"
+      ]
+    },
+    {
+      "id": "framework-status-callback-power-state",
+      "card": "refs/rule-cards/framework-status-callback-power-state.md",
+      "category": "hardware-pm",
+      "triggers": {
+        "paths_regex_any": [
+          "(^|/)(drivers|sound|arch|firmware|soc|net|block|crypto|kernel|lib|mm|virt|include)/.*\\.[ch]$"
+        ],
+        "diff_regex_any": [
+          "\\.(?:is_enabled|get_status)\\s*=",
+          "\\bregulator_is_enabled_regmap\\b",
+          "\\bregmap_read\\s*\\(",
+          "\\b(?:readl|readw|readb|readq|ioread(?:8|16|32|64))\\s*\\(",
+          "\\b(?:devm_)?regulator_register\\s*\\(",
+          "\\bclk_bulk_prepare_enable\\s*\\(",
+          "\\bclk_bulk_disable_unprepare\\s*\\(",
+          "\\bdevm_clk_bulk_get_all\\s*\\(",
+          "\\b(?:has_clocks|boot_on|always_on)\\b"
+        ],
+        "require_paths_regex_any": [
+          "(^|/)(drivers|sound|arch|firmware|soc|net|block|crypto|kernel|lib|mm|virt|include)/.*\\.[ch]$"
+        ],
+        "require_diff_regex_any": [
+          "\\.(?:is_enabled|get_status)\\s*=",
+          "\\bregulator_is_enabled_regmap\\b",
+          "\\bregmap_read\\s*\\(",
+          "\\b(?:readl|readw|readb|readq|ioread(?:8|16|32|64))\\s*\\("
+        ]
+      },
+      "requires_context": [
+        "status_callback_assignment",
+        "framework_pre_enable_call_path",
+        "register_read_helper_body",
+        "resource_enable_path",
+        "bootloader_state_sync"
+      ],
+      "trigger_obligations": [
+        {
+          "trigger_pattern": ".is_enabled",
+          "must_check_ref": "#pre-enable-status-callback",
+          "obligation_text": "For every new or changed .is_enabled callback, prove the framework cannot call it before/without .enable, or prove all resources needed for its register/MMIO reads are already active. Include bootloader-already-on count synchronization."
+        },
+        {
+          "trigger_pattern": "regulator_is_enabled_regmap",
+          "must_check_ref": "#generic-regmap-status-helper",
+          "obligation_text": "Expand regulator_is_enabled_regmap() to its regmap_read(); verify the register is accessible when the callback can run and that required clocks/domains are active."
+        },
+        {
+          "trigger_pattern": "clk_bulk_disable_unprepare",
+          "must_check_ref": "#bootloader-state-sync",
+          "obligation_text": "If status can report hardware already enabled, prove Linux-side clk prepare/enable counts were acquired before any disable_unprepare path can run."
+        }
+      ]
+    },
+    {
+      "id": "per-block-global-vote-scope",
+      "card": "refs/rule-cards/per-block-global-vote-scope.md",
+      "category": "hardware-pm",
+      "triggers": {
+        "paths_regex_any": [
+          "(^|/)(drivers|sound|arch|firmware|soc|net|block|crypto|kernel|lib|mm|virt|include)/.*\\.[ch]$"
+        ],
+        "diff_regex_any": [
+          "\\bdev_pm_opp_set_rate\\s*\\([^;]*,\\s*0\\s*\\)",
+          "\\bdev_pm_opp_set_opp\\s*\\([^;]*,\\s*NULL\\s*\\)",
+          "\\bdev_pm_genpd_set_performance_state\\s*\\([^;]*,\\s*0\\s*\\)",
+          "\\bicc_set_bw\\s*\\([^;]*,\\s*0\\s*,\\s*0\\s*\\)",
+          "\\bclk_set_rate\\s*\\([^;]*,\\s*0\\s*\\)"
+        ],
+        "require_paths_regex_any": [
+          "(^|/)(drivers|sound|arch|firmware|soc|net|block|crypto|kernel|lib|mm|virt|include)/.*\\.[ch]$"
+        ],
+        "require_diff_regex_any": [
+          "\\b(?:dev_pm_opp_set_rate|dev_pm_opp_set_opp|dev_pm_genpd_set_performance_state|icc_set_bw|clk_set_rate)\\s*\\("
+        ]
+      },
+      "requires_context": [
+        "global_vote_drop_site",
+        "per_block_disable_callers",
+        "sibling_activity_state",
+        "last_user_teardown_guard",
+        "matching_vote_raise_path"
+      ]
+    },
+    {
+      "id": "level-irq-reenable-without-clear",
+      "card": "refs/rule-cards/level-irq-reenable-without-clear.md",
+      "category": "hardware-irq",
+      "triggers": {
+        "paths_regex_any": [
+          "(^|/)(drivers|sound|arch|firmware|soc|net|block|crypto|kernel|lib|mm|virt|include)/.*\\.[ch]$"
+        ],
+        "diff_regex_any": [
+          "\\benable_irq(?:_wake)?\\s*\\(",
+          "\\brequest_threaded_irq\\s*\\(",
+          "\\bIRQ_TYPE_LEVEL_(?:HIGH|LOW)\\b",
+          "\\bIRQF_(?:TRIGGER_(?:HIGH|LOW)|ONESHOT)\\b",
+          "\\birqreturn_t\\b",
+          "\\b(?:clear|ack|mask|status|intr|irq)_?\\w*\\b"
+        ],
+        "require_paths_regex_any": [
+          "(^|/)(drivers|sound|arch|firmware|soc|net|block|crypto|kernel|lib|mm|virt|include)/.*\\.[ch]$"
+        ],
+        "require_diff_regex_any": [
+          "\\benable_irq(?:_wake)?\\s*\\(|\\brequest_threaded_irq\\s*\\(|\\birqreturn_t\\b|\\bIRQ_TYPE_LEVEL_(?:HIGH|LOW)\\b|\\bIRQF_TRIGGER_(?:HIGH|LOW)\\b"
+        ]
+      },
+      "requires_context": [
+        "irq_trigger_type",
+        "handler_or_thread_fn",
+        "source_clear_or_mask",
+        "reenable_or_return_path",
+        "source_signal_semantics",
+        "aggregate_status_drain_or_recheck"
+      ]
+    },
+    {
+      "id": "cross-instance-pointer-unbind",
+      "card": "refs/rule-cards/cross-instance-pointer-unbind.md",
+      "category": "hardware-lifecycle",
+      "triggers": {
+        "paths_regex_any": [
+          "(^|/)(drivers|sound|arch|firmware|soc|net|block|crypto|kernel|lib|mm|virt|include)/.*\\.[ch]$"
+        ],
+        "diff_regex_any": [
+          "\\b(?:dev_get_drvdata|platform_get_drvdata|i2c_get_clientdata|spi_get_drvdata)\\s*\\(",
+          "->\\w+\\s*=\\s*(?:&?\\w+|\\w+->\\w+)",
+          "\\b(?:component_(?:bind|unbind)(?:_all)?|device_link_add|suppress_bind_attrs|get_device|put_device|kref_|refcount_)\\b",
+          "\\b(?:remove|unbind|detach|disconnect|hotplug|bridge|encoder|connector)\\b"
+        ],
+        "require_paths_regex_any": [
+          "(^|/)(drivers|sound|arch|firmware|soc|net|block|crypto|kernel|lib|mm|virt|include)/.*\\.[ch]$"
+        ],
+        "require_diff_regex_all": [
+          "->\\w+\\s*=\\s*(?:&?\\w+|\\w+->\\w+)|\\b(?:dev_get_drvdata|platform_get_drvdata|i2c_get_clientdata|spi_get_drvdata)\\s*\\(",
+          "\\b(?:remove|unbind|detach|disconnect|hotplug|component_(?:bind|unbind)(?:_all)?|suppress_bind_attrs|get_device|kref_|refcount_)\\b"
+        ]
+      },
+      "requires_context": [
+        "stored_pointer_assignment",
+        "sibling_unbind_or_remove_path",
+        "lifetime_guard",
+        "dereference_sites"
+      ]
+    },
+    {
+      "id": "readpath-widening-writer-locked",
+      "card": "refs/rule-cards/readpath-widening-writer-locked.md",
+      "category": "hardware-lifecycle",
+      "triggers": {
+        "paths_regex_any": [
+          "(^|/)(drivers|sound|arch|firmware|soc|net|block|crypto|kernel|lib|mm|virt|include)/.*\\.[ch]$"
+        ],
+        "diff_regex_any": [
+          "\\bif\\s*\\([^\\n)]*->\\w+[^\\n)]*\\)",
+          "->\\w+->\\w+",
+          "\\b(?:mutex_lock|spin_lock|guard\\(|scoped_guard)\\b",
+          "\\b(?:kfree|devm_kfree|put_device|drm_.*_cleanup|cancel_work_sync|del_timer_sync)\\b",
+          "\\b(?:work|timer|hpd|disconnect|teardown|remove)\\b"
+        ],
+        "require_paths_regex_any": [
+          "(^|/)(drivers|sound|arch|firmware|soc|net|block|crypto|kernel|lib|mm|virt|include)/.*\\.[ch]$"
+        ],
+        "require_diff_regex_all": [
+          "\\bif\\s*\\([^\\n)]*->\\w+[^\\n)]*\\)|->\\w+->\\w+",
+          "\\b(?:mutex_lock|spin_lock|kfree|devm_kfree|put_device|work|timer|hpd|disconnect|teardown|remove)\\b"
+        ]
+      },
+      "requires_context": [
+        "new_read_dereference",
+        "writer_free_site",
+        "reader_writer_locking",
+        "async_teardown_entrypoints"
+      ]
+    },
+    {
+      "id": "unvalidated-arithmetic-input",
+      "card": "refs/rule-cards/unvalidated-arithmetic-input.md",
+      "category": "code-logic-arithmetic",
+      "triggers": {
+        "paths_regex_any": [
+          "(^|/)(drivers|sound|arch|firmware|soc|net|block|crypto|kernel|lib|mm|virt|include)/.*\\.[ch]$"
+        ],
+        "diff_regex_any": [
+          "\\b(?:GENMASK|BIT|FIELD_PREP|FIELD_GET)\\s*\\(",
+          "(?<!/)\\s/[=\\s]*\\s*[A-Za-z_][A-Za-z0-9_>.\\-]*|%\\s*[A-Za-z_][A-Za-z0-9_>.\\-]*|<<\\s*[A-Za-z_][A-Za-z0-9_>.\\-]*|>>\\s*[A-Za-z_][A-Za-z0-9_>.\\-]*",
+          "\\b(?:count|num|nr|n_|width|bits|lanes|ports|channels|rate|size|len|cells|div)\\b",
+          "\\b(?:of_property_read|device_property_read|fwnode_property_read|device_get_match_data|match_data|variant|desc|data)\\b"
+        ],
+        "require_paths_regex_any": [
+          "(^|/)(drivers|sound|arch|firmware|soc|net|block|crypto|kernel|lib|mm|virt|include)/.*\\.[ch]$"
+        ],
+        "require_diff_regex_all": [
+          "\\b(?:GENMASK|BIT|FIELD_PREP|FIELD_GET)\\s*\\(|(?<!/)\\s/[=\\s]*\\s*[A-Za-z_][A-Za-z0-9_>.\\-]*|%\\s*[A-Za-z_][A-Za-z0-9_>.\\-]*|<<\\s*[A-Za-z_][A-Za-z0-9_>.\\-]*|>>\\s*[A-Za-z_][A-Za-z0-9_>.\\-]*",
+          "\\b(?:count|num|nr|width|bits|lanes|ports|channels|rate|size|len|cells|div)\\b|\\b(?:of_property_read|device_property_read|fwnode_property_read|device_get_match_data|match_data|variant|desc)\\b"
+        ]
+      },
+      "requires_context": [
+        "input_source_range",
+        "arithmetic_site",
+        "bounds_validation",
+        "binding_or_descriptor_constraint"
+      ],
+      "trigger_obligations": [
+        {
+          "trigger_pattern": "GENMASK",
+          "must_check_ref": "#1",
+          "obligation_text": "For each GENMASK(n-1, 0) or BIT(n) where n comes from DT/firmware/match-data/variant, prove n is validated > 0 and within bounds before the macro call. Unguarded zero → undefined shift → file [BUG]."
+        },
+        {
+          "trigger_pattern": "<<",
+          "must_check_ref": "#1",
+          "obligation_text": "For each shift where the shift count comes from an external input (DT property, firmware, register read), prove it is range-checked. Unchecked → potential undefined behavior → file [CONCERN]."
+        },
+        {
+          "trigger_pattern": "count",
+          "must_check_ref": "#2",
+          "obligation_text": "For each division/modulo/array-index using a parsed count/width/rate, prove the value is validated non-zero before use. Zero divisor or OOB index → file [BUG]."
+        }
+      ]
+    },
+    {
+      "id": "alternate-path-state-reset",
+      "card": "refs/rule-cards/alternate-path-state-reset.md",
+      "category": "code-logic-state",
+      "triggers": {
+        "paths_regex_any": [
+          "(^|/)(drivers|sound|arch|firmware|soc|net|block|crypto|kernel|lib|mm|virt|include)/.*\\.[ch]$"
+        ],
+        "diff_regex_any": [
+          "->(?:mode|type|sel|src|source|cfg|config|format|state|route)\\s*=",
+          "\\b(?:TPG|tpg|test_pattern|loopback|internal|bypass|virtual|offline|source|pattern)\\b",
+          "\\b(?:start|stop|stream|enable|disable|reset|prepare|unprepare|set_fmt|s_stream)\\b"
+        ],
+        "require_paths_regex_any": [
+          "(^|/)(drivers|sound|arch|firmware|soc|net|block|crypto|kernel|lib|mm|virt|include)/.*\\.[ch]$"
+        ],
+        "require_diff_regex_all": [
+          "->(?:mode|type|sel|src|source|cfg|config|format|state|route)\\s*=",
+          "\\b(?:TPG|tpg|test_pattern|loopback|internal|bypass|virtual|offline|pattern)\\b"
+        ]
+      },
+      "requires_context": [
+        "state_assignment",
+        "alternate_entrypoints",
+        "consumers",
+        "reset_or_guard_paths"
+      ]
+    },
+    {
+      "id": "branch-precedence-regression",
+      "card": "refs/rule-cards/branch-precedence-regression.md",
+      "category": "code-logic-control-flow",
+      "triggers": {
+        "paths_regex_any": [
+          "(^|/)(drivers|sound|arch|firmware|soc|net|block|crypto|kernel|lib|mm|virt|include)/.*\\.[ch]$"
+        ],
+        "diff_regex_any": [
+          "\\b(?:if|else\\s+if)\\s*\\([^\\n]*\\|\\|[^\\n]*\\)",
+          "(?:init|enable|power|phy|clk|reset|setup|config|state|lock|prepare|start)\\w*",
+          "\\b(?:return|goto|else\\s+if)\\b"
+        ],
+        "require_paths_regex_any": [
+          "(^|/)(drivers|sound|arch|firmware|soc|net|block|crypto|kernel|lib|mm|virt|include)/.*\\.[ch]$"
+        ],
+        "require_diff_regex_all": [
+          "\\b(?:if|else\\s+if)\\s*\\([^\\n]*\\|\\|[^\\n]*\\)",
+          "(?:init|enable|power|phy|clk|reset|setup|config|state|lock|prepare|start)\\w*"
+        ]
+      },
+      "requires_context": [
+        "old_branch_order",
+        "new_branch_order",
+        "bypassed_side_effect",
+        "concrete_input_trace"
+      ]
+    },
+    {
+      "id": "aggregate-per-element-scale",
+      "card": "refs/rule-cards/aggregate-per-element-scale.md",
+      "category": "code-logic-data-flow",
+      "triggers": {
+        "paths_regex_any": [
+          "(^|/)(drivers|sound|arch|firmware|soc|net|block|crypto|kernel|lib|mm|virt|include)/.*\\.[ch]$"
+        ],
+        "diff_regex_any": [
+          "(?<!/)\\s/[=\\s]*\\s*(?:num|nr|count|lanes|ports|paths|channels|width|div|.*->(?:num|width|lanes|ports|channels))\\w*",
+          "\\b(?:bandwidth|bw|rate|clk|clock|icc|interconnect|opp|freq|aggregate|total|avg)\\b",
+          "\\b(?:lane|lanes|port|ports|path|paths|channel|channels|width|per_)\\b",
+          "->(?:width|rate|num_lanes|data_lanes|num_ports|num_paths|channels|avg_bw|peak_bw)\\b"
+        ],
+        "require_paths_regex_any": [
+          "(^|/)(drivers|sound|arch|firmware|soc|net|block|crypto|kernel|lib|mm|virt|include)/.*\\.[ch]$"
+        ],
+        "require_diff_regex_all": [
+          "(?<!/)\\s/[=\\s]*\\s*(?:num|nr|count|lanes|ports|paths|channels|width|div|[A-Za-z_][A-Za-z0-9_>.\\-]*)",
+          "(?:bandwidth|bw|icc|interconnect|aggregate|total|avg)",
+          "\\b(?:lane|lanes|port|ports|path|paths|channel|channels|width)\\b|->(?:width|rate|num_lanes|data_lanes|num_ports|num_paths|channels|avg_bw|peak_bw)\\b"
+        ]
+      },
+      "requires_context": [
+        "calculation_site",
+        "aggregate_value_source",
+        "per_element_descriptor_fields",
+        "binding_or_match_data_counts"
+      ]
+    },
+    {
+      "id": "retained-dynamic-object-cleanup",
+      "card": "refs/rule-cards/retained-dynamic-object-cleanup.md",
+      "category": "code-logic-lifecycle",
+      "triggers": {
+        "paths_regex_any": [
+          "(^|/)(drivers|sound|arch|firmware|soc|net|block|crypto|kernel|lib|mm|virt|include)/.*\\.[ch]$"
+        ],
+        "diff_regex_any": [
+          "\\b(?:static|global|template|desc|descriptor|ops)\\b",
+          "->\\w+\\s*=\\s*(?:devm_)?(?:kzalloc|kmalloc|kcalloc)|->\\w+\\s*=\\s*\\w+",
+          "\\b(?:kzalloc|kmalloc|kcalloc|devm_kzalloc|devm_kcalloc|drm_\\w+_create|media_\\w+_init|\\w+_alloc)\\s*\\(",
+          "\\b(?:kfree|devm_kfree|cleanup|destroy|unregister|release|remove|goto\\s+err|err_)\\b"
+        ],
+        "require_paths_regex_any": [
+          "(^|/)(drivers|sound|arch|firmware|soc|net|block|crypto|kernel|lib|mm|virt|include)/.*\\.[ch]$"
+        ],
+        "require_diff_regex_all": [
+          "\\b(?:static|global|template|desc|descriptor|ops)\\b|->\\w+\\s*=",
+          "\\b(?:kzalloc|kmalloc|kcalloc|devm_kzalloc|devm_kcalloc|\\w+_alloc|\\w+_create|\\w+_init)\\s*\\(",
+          "\\b(?:kfree|devm_kfree|cleanup|destroy|unregister|release|remove|goto\\s+err|err_)\\b"
+        ]
+      },
+      "requires_context": [
+        "allocation_site",
+        "retained_pointer_store",
+        "cleanup_and_error_paths",
+        "retry_or_rebind_path"
+      ]
+    },
+    {
+      "id": "managed-device-link-manual-remove",
+      "card": "refs/rule-cards/managed-device-link-manual-remove.md",
+      "category": "code-logic-lifecycle",
+      "triggers": {
+        "paths_regex_any": [
+          "(^|/)(drivers|sound|arch|firmware|soc|net|block|crypto|kernel|lib|mm|virt|include)/.*\\.[ch]$"
+        ],
+        "diff_regex_any": [
+          "\\bdevice_link_add\\s*\\(",
+          "\\bDL_FLAG_AUTOREMOVE_(?:CONSUMER|SUPPLIER)\\b",
+          "\\bdevice_link_(?:remove|del)\\s*\\("
+        ],
+        "require_paths_regex_any": [
+          "(^|/)(drivers|sound|arch|firmware|soc|net|block|crypto|kernel|lib|mm|virt|include)/.*\\.[ch]$"
+        ],
+        "require_diff_regex_any": [
+          "\\bdevice_link_(?:remove|del)\\s*\\(",
+          "\\bDL_FLAG_AUTOREMOVE_(?:CONSUMER|SUPPLIER)\\b"
+        ]
+      },
+      "requires_context": [
+        "device_link_add_flags",
+        "manual_remove_site",
+        "error_or_remove_path",
+        "link_lifetime_owner"
+      ]
+    },
+    {
+      "id": "registration-before-enable-ordering",
+      "card": "refs/rule-cards/registration-before-enable-ordering.md",
+      "category": "driver-init-ordering",
+      "triggers": {
+        "paths_regex_any": [
+          "(^|/)(drivers|sound|arch|firmware|soc|net|block|crypto|kernel|lib|mm|virt|include)/.*\\.[ch]$"
+        ],
+        "diff_regex_any": [
+          "\\b\\w+_register_and_init\\s*\\(",
+          "\\b\\w+_register\\s*\\(",
+          "\\b\\w+_enable\\s*\\(",
+          "\\b(?:pinctrl_enable|devm_pinctrl_register_and_init|devm_pinctrl_register|gpiochip_add|irq_domain_add|component_add)\\b",
+          "\\b(?:functions|groups|callbacks|lookup|state|map|table|init)\\b"
+        ],
+        "require_paths_regex_any": [
+          "(^|/)(drivers|sound|arch|firmware|soc|net|block|crypto|kernel|lib|mm|virt|include)/.*\\.[ch]$"
+        ],
+        "require_diff_regex_all": [
+          "\\b(?:devm_pinctrl_register_and_init|devm_pinctrl_register|pinctrl_enable|\\w+_register_and_init|\\w+_register|\\w+_enable)\\s*\\(",
+          "\\b(?:functions|groups|callbacks|lookup|state|map|table|init|enable)\\b"
+        ]
+      },
+      "requires_context": [
+        "old_new_init_register_enable_order",
+        "consumer_callback_path",
+        "partial_setup_error_unwind"
+      ]
+    },
+    {
+      "id": "platform-child-device-resource-lifecycle",
+      "card": "refs/rule-cards/platform-child-device-resource-lifecycle.md",
+      "category": "driver-resource-lifecycle",
+      "triggers": {
+        "paths_regex_any": [
+          "(^|/)(drivers|sound|arch|firmware|soc|net|block|crypto|kernel|lib|mm|virt|include)/.*\\.[ch]$"
+        ],
+        "diff_regex_any": [
+          "\\bplatform_device_register_full\\s*\\(",
+          "\\bplatform_device_unregister\\s*\\(",
+          "\\bplatform_device_info\\b",
+          "\\birq_create_fwspec_mapping\\s*\\(",
+          "\\birq_dispose_mapping\\s*\\(",
+          "\\bDEFINE_RES_(?:IRQ|MEM|IO|DMA)\\w*\\b",
+          "\\.of_node_reused\\s*=|\\.fwnode\\s*=|\\.parent\\s*=",
+          "\\bPLATFORM_DEVID_NONE\\b",
+          "\\.id\\s*=\\s*PLATFORM_DEVID_NONE",
+          "\\.name\\s*=\\s*[^;\\n]+",
+          "\\bdevm_devfreq_add_device\\s*\\(",
+          "\\bdevm_kzalloc\\s*\\(|\\bdevm_kcalloc\\s*\\("
+        ],
+        "require_paths_regex_any": [
+          "(^|/)(drivers|sound|arch|firmware|soc|net|block|crypto|kernel|lib|mm|virt|include)/.*\\.[ch]$"
+        ],
+        "require_diff_regex_any": [
+          "\\bplatform_device_register_full\\s*\\(",
+          "\\birq_create_fwspec_mapping\\s*\\(",
+          "\\bplatform_device_info\\b",
+          "\\bPLATFORM_DEVID_NONE\\b",
+          "\\.id\\s*=\\s*PLATFORM_DEVID_NONE",
+          "\\.name\\s*=\\s*[^;\\n]+",
+          "\\bdevm_devfreq_add_device\\s*\\(",
+          "\\bdevm_kzalloc\\s*\\(|\\bdevm_kcalloc\\s*\\("
+        ]
+      },
+      "requires_context": [
+        "child_registration_site",
+        "irq_mapping_site",
+        "error_unwind_labels",
+        "remove_cleanup_path",
+        "stored_child_fields",
+        "child_name_id_collision_risk",
+        "parent_child_devres_ownership",
+        "child_callback_data_lifetime"
+      ],
+      "trigger_obligations": [
+        {
+          "trigger_pattern": "PLATFORM_DEVID_NONE",
+          "must_check_ref": "#platform-devid-none-collision",
+          "obligation_text": "For child/dummy platform devices using `PLATFORM_DEVID_NONE`, prove the name is globally unique or require `PLATFORM_DEVID_AUTO`/driver-specific naming."
+        },
+        {
+          "trigger_pattern": "devm_devfreq_add_device",
+          "must_check_ref": "#parent-devres-child-callback",
+          "obligation_text": "If a child framework object callback uses memory allocated with parent devres, prove child teardown/drain happens before parent devres frees that memory; otherwise file a circular lifetime/UAF finding."
+        }
+      ]
+    },
+    {
+      "id": "platform-id-table-module-alias-contract",
+      "card": "refs/rule-cards/platform-id-table-module-alias-contract.md",
+      "category": "driver-match-contract",
+      "triggers": {
+        "paths_regex_any": [
+          "(^|/)(drivers|sound|arch|firmware|soc|net|block|crypto|kernel|lib|mm|virt|include)/.*\\.[ch]$"
+        ],
+        "diff_regex_any": [
+          "\\bstruct\\s+platform_device_id\\b",
+          "\\.id_table\\s*=",
+          "\\bMODULE_DEVICE_TABLE\\s*\\(\\s*platform\\b",
+          "\\bplatform_device_register(?:_full|_data|_simple)?\\s*\\(",
+          "\\.name\\s*=\\s*\"[^\"]+\""
+        ],
+        "require_paths_regex_any": [
+          "(^|/)(drivers|sound|arch|firmware|soc|net|block|crypto|kernel|lib|mm|virt|include)/.*\\.[ch]$"
+        ],
+        "require_diff_regex_any": [
+          "\\bstruct\\s+platform_device_id\\b",
+          "\\.id_table\\s*=",
+          "\\bMODULE_DEVICE_TABLE\\s*\\(\\s*platform\\b"
+        ]
+      },
+      "requires_context": [
+        "platform_device_name",
+        "platform_id_table",
+        "module_device_table",
+        "probe_match_data_path"
+      ]
+    },
+    {
+      "id": "errptr-guard-contract",
+      "card": "refs/rule-cards/errptr-guard-contract.md",
+      "category": "code-logic-pointer-api",
+      "triggers": {
+        "paths_regex_any": [
+          "(^|/)(drivers|sound|arch|firmware|soc|net|block|crypto|kernel|lib|mm|virt|include)/.*\\.[ch]$"
+        ],
+        "diff_regex_any": [
+          "\\bIS_ERR(?:_OR_NULL)?\\s*\\(",
+          "\\bERR_PTR\\s*\\(",
+          "\\bPTR_ERR\\s*\\(",
+          "\\bERR_CAST\\s*\\("
+        ],
+        "require_paths_regex_any": [
+          "(^|/)(drivers|sound|arch|firmware|soc|net|block|crypto|kernel|lib|mm|virt|include)/.*\\.[ch]$"
+        ],
+        "require_diff_regex_any": [
+          "\\bIS_ERR(?:_OR_NULL)?\\s*\\(|\\bERR_PTR\\s*\\(|\\bPTR_ERR\\s*\\(|\\bERR_CAST\\s*\\("
+        ]
+      },
+      "requires_context": [
+        "errptr_api_return_contract",
+        "guard_expression",
+        "first_dereference"
+      ]
+    },
+    {
+      "id": "atomic-context-sleep",
+      "card": "refs/rule-cards/atomic-context-sleep.md",
+      "category": "hardware-irq",
+      "triggers": {
+        "paths_regex_any": [
+          "(^|/)(drivers|sound|arch|firmware|soc|net|block|crypto|kernel|lib|mm|virt|include)/.*\\.[ch]$"
+        ],
+        "diff_regex_any": [
+          "\\brequest_threaded_irq\\s*\\(",
+          "\\bspin_lock_irqsave\\s*\\(",
+          "\\bin_(?:interrupt|atomic|irq|hardirq|softirq)\\s*\\(",
+          "\\bclk_ops\\b",
+          "\\.handler\\s*=",
+          "\\.thread_fn\\s*="
+        ],
+        "require_paths_regex_any": [
+          "(^|/)(drivers|sound|arch|firmware|soc|net|block|crypto|kernel|lib|mm|virt|include)/.*\\.[ch]$"
+        ],
+        "require_diff_regex_any": [
+          "\\brequest_threaded_irq\\s*\\(|\\bspin_lock_irqsave\\s*\\(|\\bin_(?:interrupt|atomic|irq|hardirq|softirq)\\s*\\(|\\bclk_ops\\b|\\.thread_fn\\s*=|\\.handler\\s*="
+        ]
+      },
+      "requires_context": [
+        "execution_context",
+        "sleeping_api_called",
+        "lock_held_across_call"
+      ]
+    },
+    {
+      "id": "dma-buffer-ownership",
+      "card": "refs/rule-cards/dma-buffer-ownership.md",
+      "category": "hardware-irq",
+      "triggers": {
+        "paths_regex_any": [
+          "(^|/)(drivers|sound|arch|firmware|soc|net|block|crypto|kernel|lib|mm|virt|include)/.*\\.[ch]$"
+        ],
+        "diff_regex_any": [
+          "\\bdma_map_(?:single|page|sg|resource)\\b",
+          "\\bdma_alloc_(?:coherent|noncoherent|attrs)\\b",
+          "\\bdma_mapping_error\\b",
+          "\\bSNDRV_DMA_TYPE_[A-Z_]+\\b",
+          "\\b(?:VB2_MEMORY_|V4L2_BUF_TYPE_)[A-Z_]+\\b",
+          "\\bDMA_(?:BIDIRECTIONAL|TO_DEVICE|FROM_DEVICE)\\b"
+        ],
+        "require_paths_regex_any": [
+          "(^|/)(drivers|sound|arch|firmware|soc|net|block|crypto|kernel|lib|mm|virt|include)/.*\\.[ch]$"
+        ],
+        "require_diff_regex_any": [
+          "\\bdma_map_(?:single|page|sg|resource)\\b|\\bdma_alloc_(?:coherent|noncoherent|attrs)\\b|\\bSNDRV_DMA_TYPE_[A-Z_]+\\b|\\b(?:VB2_MEMORY_|V4L2_BUF_TYPE_)[A-Z_]+\\b"
+        ]
+      },
+      "requires_context": [
+        "map_or_alloc_call",
+        "paired_unmap_or_free",
+        "type_tag_vs_api"
+      ]
+    },
+    {
+      "id": "stored-stack-address-escape",
+      "card": "refs/rule-cards/stored-stack-address-escape.md",
+      "category": "code-logic-lifecycle",
+      "triggers": {
+        "paths_regex_any": [
+          "(^|/)(drivers|sound|arch|firmware|soc|net|block|crypto|kernel|lib|mm|virt|include)/.*\\.[ch]$"
+        ],
+        "diff_regex_any": [
+          "\\b(?:INIT_WORK|INIT_DELAYED_WORK|setup_timer|hrtimer_init|init_completion)\\s*\\(",
+          "\\b(?:platform_set_drvdata|dev_set_drvdata)\\s*\\(",
+          "->\\w+\\s*=\\s*&\\w+",
+          "\\bcontainer_of\\s*\\("
+        ],
+        "require_paths_regex_any": [
+          "(^|/)(drivers|sound|arch|firmware|soc|net|block|crypto|kernel|lib|mm|virt|include)/.*\\.[ch]$"
+        ],
+        "require_diff_regex_any": [
+          "\\b(?:INIT_WORK|INIT_DELAYED_WORK|setup_timer|hrtimer_init)\\s*\\(|->\\w+\\s*=\\s*&\\w+"
+        ]
+      },
+      "requires_context": [
+        "stored_pointer_assignment",
+        "pointee_lifetime",
+        "earliest_consumer"
+      ]
+    },
+    {
+      "id": "rcu-refcount-release",
+      "card": "refs/rule-cards/rcu-refcount-release.md",
+      "category": "code-logic-lifecycle",
+      "triggers": {
+        "paths_regex_any": [
+          "(^|/)(drivers|sound|arch|firmware|soc|net|block|crypto|kernel|lib|mm|virt|include)/.*\\.[ch]$"
+        ],
+        "diff_regex_any": [
+          "\\brcu_dereference(?:_protected|_check|_raw)?\\s*\\(",
+          "\\brcu_assign_pointer\\s*\\(",
+          "\\b(?:kref_put|refcount_dec(?:_and_test)?|kobject_put|put_device)\\s*\\(",
+          "\\b(?:kfree_rcu|synchronize_rcu|call_rcu)\\s*\\("
+        ],
+        "require_paths_regex_any": [
+          "(^|/)(drivers|sound|arch|firmware|soc|net|block|crypto|kernel|lib|mm|virt|include)/.*\\.[ch]$"
+        ],
+        "require_diff_regex_any": [
+          "\\brcu_dereference(?:_protected|_check|_raw)?\\s*\\(|\\brcu_assign_pointer\\s*\\(|\\b(?:kref_put|refcount_dec(?:_and_test)?)\\s*\\("
+        ]
+      },
+      "requires_context": [
+        "rcu_read_lock_scope",
+        "release_callback",
+        "post_put_dereference"
+      ]
+    },
+    {
+      "id": "resource-acquire-release-symmetry",
+      "card": "refs/rule-cards/resource-acquire-release-symmetry.md",
+      "category": "driver-resource-lifecycle",
+      "triggers": {
+        "paths_regex_any": [
+          "(^|/)(drivers|sound|arch|firmware|soc|net|block|crypto|kernel|lib|mm|virt|include)/.*\\.[ch]$"
+        ],
+        "diff_regex_any": [
+          "\\b(?:request_irq|request_threaded_irq|free_irq)\\s*\\(",
+          "\\bdma_request_chan(?:nel)?\\s*\\(",
+          "\\bdma_release_channel\\s*\\(",
+          "\\b(?:clk_prepare_enable|clk_disable_unprepare|clk_get|clk_put)\\s*\\(",
+          "\\b(?:regulator_enable|regulator_disable|regulator_get)\\s*\\(",
+          "\\breset_control_get\\w*\\s*\\(",
+          "\\bregmap_(?:init|exit)\\w*\\s*\\(",
+          "\\bdevm_regmap_init\\w*\\s*\\(",
+          "\\bsnd_soc_component_(?:init|exit)_regmap\\s*\\(",
+          "\\bdevm_request_threaded_irq\\s*\\("
+        ],
+        "require_paths_regex_any": [
+          "(^|/)(drivers|sound|arch|firmware|soc|net|block|crypto|kernel|lib|mm|virt|include)/.*\\.[ch]$"
+        ],
+        "require_diff_regex_any": [
+          "\\b(?:request_irq|request_threaded_irq|devm_request_threaded_irq|free_irq)\\s*\\(|\\bdma_request_chan(?:nel)?\\s*\\(|\\b(?:clk_prepare_enable|clk_disable_unprepare)\\s*\\(|\\b(?:regulator_enable|regulator_disable)\\s*\\(|\\b(?:devm_)?regmap_(?:init|exit)\\w*\\s*\\(|\\bsnd_soc_component_(?:init|exit)_regmap\\s*\\("
+        ]
+      },
+      "requires_context": [
+        "acquire_call",
+        "release_paths",
+        "devm_or_manual"
+      ],
+      "trigger_obligations": [
+        {
+          "trigger_pattern": "devm_regmap_init",
+          "must_check_ref": "#devm-regmap-manual-exit",
+          "obligation_text": "For each `devm_regmap_init*()` regmap, search the same driver/component for `regmap_exit()` or `snd_soc_component_exit_regmap()`. If present, verify devres cleanup is cancelled; otherwise file a double-cleanup/UAF finding."
+        },
+        {
+          "trigger_pattern": "snd_soc_component_exit_regmap",
+          "must_check_ref": "#asoc-component-regmap-exit",
+          "obligation_text": "Read `snd_soc_component_exit_regmap()` semantics: it calls `regmap_exit()`. If the regmap came from `devm_regmap_init*()`, this is not symmetric cleanup; it is manual free plus later devres free. Also check IRQ/work/control callbacks that can reach the regmap between component remove and devres release."
+        },
+        {
+          "trigger_pattern": "devm_request_threaded_irq",
+          "must_check_ref": "#devm-cleanup-order",
+          "obligation_text": "Record devres registration order for IRQ, component registration, regmap, GPIO, and regulator actions. If a component remove callback frees a resource while an earlier devm IRQ remains registered, file a teardown-window UAF finding."
+        },
+        {
+          "trigger_pattern": "devm_snd_soc_register_component",
+          "must_check_ref": "#asoc-devm-component-order",
+          "obligation_text": "For devm ASoC component registration, verify component `.remove` does not manually release resources still owned by longer-lived devres actions such as IRQ or regmap cleanup."
+        }
+      ]
+    },
+    {
+      "id": "firmware-xfer-buffer-contract",
+      "card": "refs/rule-cards/firmware-xfer-buffer-contract.md",
+      "category": "driver-buffer-safety",
+      "triggers": {
+        "paths_regex_any": [
+          "(^|/)(drivers|include)/(firmware|soc|net|rpmsg|mailbox|remoteproc|misc|platform|scsi|usb|sound|devfreq|clk|power|thermal|hwmon)/.*\\.[ch]$",
+          "(^|/)include/linux/.*(?:scmi|qmi|rpmsg|mailbox|firmware|protocol).*\\.h$"
+        ],
+        "diff_regex_any": [
+          "\\bxfer_get_init\\s*\\(",
+          "\\bdo_xfer\\s*\\(",
+          "->rx\\.len\\b|\\bt->rx\\.len\\b",
+          "\\brx_size\\b|\\brx_len\\b|\\bresp(?:onse)?_len\\b",
+          "\\bmemcpy\\s*\\(",
+          "\\bstruct\\s+\\w+\\s*\\{[^}]*\\[\\]"
+        ],
+        "require_paths_regex_any": [
+          "(^|/)(drivers|include)/.*\\.[ch]$"
+        ],
+        "require_diff_regex_all": [
+          "\\b(?:xfer_get_init|do_xfer|scmi|SCMI|qmi|QMI|rpmsg|mailbox|firmware|protocol)\\b",
+          "\\b(?:memcpy|memmove|->rx\\.len|t->rx\\.len|rx_size|rx_len|resp(?:onse)?_len)\\b"
+        ]
+      },
+      "requires_context": [
+        "protocol_transfer_helper",
+        "tx_rx_size_expressions",
+        "firmware_controlled_rx_length",
+        "caller_buffer_size",
+        "zero_length_buffer_path"
+      ],
+      "trigger_obligations": [
+        {
+          "trigger_pattern": "t->rx.len",
+          "must_check_ref": "#rx-length-bounds",
+          "obligation_text": "For every copy from firmware/framework RX storage, prove the actual RX length is bounded by the caller destination and matches the typed expected size before fields are consumed."
+        },
+        {
+          "trigger_pattern": "memcpy",
+          "must_check_ref": "#zero-length-null-copy",
+          "obligation_text": "If protocol commands allow zero-length payloads, ensure `memcpy`/`memmove` is skipped when source or destination can be NULL even with length zero."
+        },
+        {
+          "trigger_pattern": "xfer_get_init",
+          "must_check_ref": "#tx-rx-contract",
+          "obligation_text": "State TX size, requested RX size, actual RX length source, and whether same-buffer TX/RX reuse can leave stale TX bytes on short replies."
+        }
+      ]
+    },
+    {
+      "id": "hw-programming-sequence",
+      "card": "refs/rule-cards/hw-programming-sequence.md",
+      "category": "hardware-pm",
+      "triggers": {
+        "paths_regex_any": [
+          "(^|/)(drivers|sound|arch|firmware|soc|net|block|crypto|kernel|lib|mm|virt|include)/.*\\.[ch]$"
+        ],
+        "diff_regex_any": [
+          "\\b(?:wmb|dma_wmb|smp_wmb|mb)\\s*\\(",
+          "\\breset_control_(?:assert|deassert|reset|rearm)\\s*\\(",
+          "\\b(?:doorbell|fence|complete_all)\\b",
+          "\\b(?:recover|recovery|quiesce|reinit_completion)\\b",
+          "\\b(?:writel|writeq|writew|writeb)_relaxed\\b"
+        ],
+        "require_paths_regex_any": [
+          "(^|/)(drivers|sound|arch|firmware|soc|net|block|crypto|kernel|lib|mm|virt|include)/.*\\.[ch]$"
+        ],
+        "require_diff_regex_any": [
+          "\\b(?:wmb|dma_wmb|smp_wmb)\\s*\\(|\\breset_control_(?:assert|deassert)\\s*\\(|\\b(?:doorbell|quiesce|recovery)\\b"
+        ]
+      },
+      "requires_context": [
+        "sequence_order",
+        "barrier_placement",
+        "quiesce_before_fence"
+      ]
+    },
+    {
+      "id": "percpu-hotplug-safety",
+      "card": "refs/rule-cards/percpu-hotplug-safety.md",
+      "category": "hardware-pm",
+      "triggers": {
+        "paths_regex_any": [
+          "(^|/)(drivers|sound|arch|firmware|soc|net|block|crypto|kernel|lib|mm|virt|include)/.*\\.[ch]$"
+        ],
+        "diff_regex_any": [
+          "\\b(?:smp_call_function(?:_single|_many)?|on_each_cpu(?:_mask|_cond)?)\\s*\\(",
+          "\\b(?:this_cpu_(?:read|write|inc|dec|add|ptr)|__this_cpu_\\w+|per_cpu)\\b",
+          "\\bcpuhp_\\w+\\s*\\(",
+          "\\bfor_each_(?:online|possible|present)_cpu\\b",
+          "\\bcpu_online\\s*\\(",
+          "\\bcpus_read_lock\\s*\\("
+        ],
+        "require_paths_regex_any": [
+          "(^|/)(drivers|sound|arch|firmware|soc|net|block|crypto|kernel|lib|mm|virt|include)/.*\\.[ch]$"
+        ],
+        "require_diff_regex_any": [
+          "\\b(?:smp_call_function(?:_single|_many)?|on_each_cpu(?:_mask|_cond)?)\\s*\\(|\\bcpuhp_\\w+\\s*\\(|\\bthis_cpu_(?:read|write|inc|dec|add|ptr)\\b|\\bcpu_online\\s*\\("
+        ]
+      },
+      "requires_context": [
+        "executing_cpu",
+        "cross_call_return_check",
+        "hotplug_lock_guard"
+      ]
+    },
+    {
+      "id": "register-field-access",
+      "card": "refs/rule-cards/register-field-access.md",
+      "category": "code-logic-arithmetic",
+      "triggers": {
+        "paths_regex_any": [
+          "(^|/)(drivers|sound|arch|firmware|soc|net|block|crypto|kernel|lib|mm|virt|include)/.*\\.[ch]$"
+        ],
+        "diff_regex_any": [
+          "\\b(?:FIELD_PREP|FIELD_GET)\\s*\\(",
+          "\\bregmap_update_bits\\s*\\(",
+          "\\bGENMASK\\s*\\(",
+          "\\b(?:readl|writel)(?:_relaxed)?\\s*\\("
+        ],
+        "require_paths_regex_any": [
+          "(^|/)(drivers|sound|arch|firmware|soc|net|block|crypto|kernel|lib|mm|virt|include)/.*\\.[ch]$"
+        ],
+        "require_diff_regex_any": [
+          "\\b(?:FIELD_PREP|FIELD_GET)\\s*\\(|\\bregmap_update_bits\\s*\\("
+        ]
+      },
+      "requires_context": [
+        "field_mask_and_width",
+        "register_layout",
+        "rmw_preserved_bits"
+      ]
+    },
+    {
+      "id": "uninit-struct-before-use",
+      "card": "refs/rule-cards/uninit-struct-before-use.md",
+      "category": "code-logic-data-flow",
+      "triggers": {
+        "paths_regex_any": [
+          "(^|/)(drivers|sound|arch|firmware|soc|net|block|crypto|kernel|lib|mm|virt|include)/.*\\.[ch]$"
+        ],
+        "diff_regex_any": [
+          "\\b__packed\\b",
+          "\\bstruct_size\\s*\\(",
+          "\\bsizeof\\(\\*[a-zA-Z_]\\w*\\)",
+          "\\b(?:cpu_to_(?:le|be)(?:16|32|64))\\s*\\(",
+          "\\bskb_put\\s*\\(",
+          "\\b(?:kmalloc|kmalloc_array)\\s*\\("
+        ],
+        "require_paths_regex_any": [
+          "(^|/)(drivers|sound|arch|firmware|soc|net|block|crypto|kernel|lib|mm|virt|include)/.*\\.[ch]$"
+        ],
+        "require_diff_regex_any": [
+          "\\b__packed\\b|\\bstruct_size\\s*\\(|\\b(?:cpu_to_(?:le|be)(?:16|32|64))\\s*\\(|\\bskb_put\\s*\\("
+        ]
+      },
+      "requires_context": [
+        "struct_declaration",
+        "init_before_use",
+        "alloc_size_vs_type"
+      ]
+    },
+    {
+      "id": "unchecked-setup-result",
+      "card": "refs/rule-cards/unchecked-setup-result.md",
+      "category": "driver-init-ordering",
+      "triggers": {
+        "paths_regex_any": [
+          "(^|/)(drivers|sound|arch|firmware|soc|net|block|crypto|kernel|lib|mm|virt|include)/.*\\.[ch]$"
+        ],
+        "diff_regex_any": [
+          "\\b[a-z_]+_(?:init|setup|prepare|configure|attach)\\s*\\(",
+          "\\b(?:device_register|device_add|cdev_add|component_add|drm_dev_register|v4l2_device_register|snd_card_register|of_platform_populate)\\s*\\(",
+          "\\bfor_each\\w*\\s*\\([^;]*\\)\\s*\\{?"
+        ],
+        "require_paths_regex_any": [
+          "(^|/)(drivers|sound|arch|firmware|soc|net|block|crypto|kernel|lib|mm|virt|include)/.*\\.[ch]$"
+        ],
+        "require_diff_regex_any": [
+          "\\b(?:device_register|device_add|cdev_add|component_add|drm_dev_register|v4l2_device_register|snd_card_register)\\s*\\("
+        ]
+      },
+      "requires_context": [
+        "setup_return_value",
+        "publication_point",
+        "failure_propagation"
+      ]
+    },
+    {
+      "id": "asoc-kcontrol-runtime-state",
+      "card": "refs/rule-cards/asoc-kcontrol-runtime-state.md",
+      "category": "subsystem-asoc-controls",
+      "triggers": {
+        "paths_regex_any": [
+          "(^|/)sound/soc/.*\\.[ch]$"
+        ],
+        "diff_regex_any": [
+          "\\bSOC_(?:SINGLE|DOUBLE|ENUM|VALUE|BYTES)\\w*_EXT\\s*\\(",
+          "\\bstruct snd_kcontrol\\b",
+          "\\bsnd_ctl_elem_value\\b",
+          "\\b\\w+_put\\s*\\(\\s*struct snd_kcontrol",
+          "->(?:stereo_vol_db|usage_mode|rx_slot_mask|volume|gain|mute|mode|slot_mask)\\s*=",
+          "\\bregmap_write\\s*\\([^;]*(?:volume|gain|mute|usage|slot|VOL|GAIN|MUTE|USAGE|SLOT)"
+        ],
+        "require_paths_regex_any": [
+          "(^|/)sound/soc/.*\\.[ch]$"
+        ],
+        "require_diff_regex_any": [
+          "\\bSOC_(?:SINGLE|DOUBLE|ENUM|VALUE|BYTES)\\w*_EXT\\s*\\(|\\bstruct snd_kcontrol\\b|\\bsnd_ctl_elem_value\\b|\\b\\w+_put\\s*\\(\\s*struct snd_kcontrol"
+        ]
+      },
+      "requires_context": [
+        "control_declaration",
+        "put_return_semantics",
+        "cached_field_consumers",
+        "stream_serialization_or_snapshot"
+      ],
+      "trigger_obligations": [
+        {
+          "trigger_pattern": "SOC_SINGLE_EXT",
+          "must_check_ref": "#asoc-put-semantics",
+          "obligation_text": "For each `SOC_*_EXT` control, inspect its `.put` callback: it must return 1 when the value changes and 0 only when unchanged. It must compare old vs new value before assignment."
+        },
+        {
+          "trigger_pattern": "struct snd_kcontrol",
+          "must_check_ref": "#asoc-put-semantics",
+          "obligation_text": "For each custom `struct snd_kcontrol` `.put`, verify return value semantics, range validation, and old-value comparison. A callback that always returns 0 after assignment is a finding."
+        },
+        {
+          "trigger_pattern": "stereo_vol_db",
+          "must_check_ref": "#asoc-live-cache",
+          "obligation_text": "For cached volume/gain state, list all writers and all hardware consumers. If active playback should update immediately, require `.put` to program hardware; if intentionally latched, require a documented latch point. Snapshot before multi-register writes."
+        },
+        {
+          "trigger_pattern": "usage_mode",
+          "must_check_ref": "#asoc-control-serialization",
+          "obligation_text": "For cached mode/slot state consumed by DAI callbacks, prove ASoC/core or driver locking serializes controls against stream callbacks, or file an unlocked cached-state concern."
+        },
+        {
+          "trigger_pattern": "rx_slot_mask",
+          "must_check_ref": "#asoc-control-serialization",
+          "obligation_text": "For cached slot-mask state consumed by DAI callbacks, prove serialization/snapshotting across control writes and stream reads; otherwise file a race or inconsistent-programming concern."
+        }
+      ]
+    },
+    {
+      "id": "lock-coverage-symmetry",
+      "card": "refs/rule-cards/lock-coverage-symmetry.md",
+      "category": "code-logic-state",
+      "triggers": {
+        "paths_regex_any": [
+          "(^|/)(drivers|sound|arch|firmware|soc|net|block|crypto|kernel|lib|mm|virt|include)/.*\\.[ch]$"
+        ],
+        "diff_regex_any": [
+          "\\b(?:mutex_lock|mutex_unlock)\\s*\\(",
+          "\\b(?:spin_lock|spin_unlock)(?:_irqsave|_irqrestore|_bh|_irq)?\\s*\\(",
+          "\\b(?:down_read|up_read|down_write|up_write)\\s*\\(",
+          "->\\w+\\s*="
+        ],
+        "require_paths_regex_any": [
+          "(^|/)(drivers|sound|arch|firmware|soc|net|block|crypto|kernel|lib|mm|virt|include)/.*\\.[ch]$"
+        ],
+        "require_diff_regex_any": [
+          "\\b(?:mutex_lock|spin_lock(?:_irqsave|_bh|_irq)?)\\s*\\("
+        ]
+      },
+      "requires_context": [
+        "shared_field",
+        "all_access_paths",
+        "lock_held_per_path"
+      ]
+    },
+    {
+      "id": "devfreq-governor-state-contract",
+      "card": "refs/rule-cards/devfreq-governor-state-contract.md",
+      "category": "devfreq-lifecycle",
+      "triggers": {
+        "paths_regex_any": [
+          "(^|/)drivers/devfreq/.*\\.[ch]$",
+          "(^|/)include/linux/devfreq(?:-governor)?\\.h$"
+        ],
+        "diff_regex_any": [
+          "\\bstruct\\s+devfreq_governor\\b",
+          "\\bDEVFREQ_GOV_FLAG_\\w+\\b",
+          "\\bDEVFREQ_GOV_ATTR_\\w+\\b",
+          "devfreq->governor|df->governor",
+          "\\bgovernor_(?:show|store)\\b",
+          "\\bdevfreq_(?:add|remove)_governor\\s*\\(",
+          "\\bget_target_freq\\b|\\bget_cur_freq\\b|profile->target",
+          "\\bprevious_freq\\b|\\bnew_freq\\b|\\bresume_freq\\b|\\bsuspend_freq\\b",
+          "\\bdevfreq_(?:notify_transition|update_status|update_target)\\b",
+          "\\bPM_QOS|\\bopp\\b|\\bOPP\\b|trace_devfreq_frequency"
+        ],
+        "require_paths_regex_any": [
+          "(^|/)drivers/devfreq/.*\\.[ch]$",
+          "(^|/)include/linux/devfreq(?:-governor)?\\.h$"
+        ],
+        "require_diff_regex_any": [
+          "\\bstruct\\s+devfreq_governor\\b",
+          "\\bDEVFREQ_GOV_FLAG_\\w+\\b",
+          "\\bDEVFREQ_GOV_ATTR_\\w+\\b",
+          "devfreq->governor|df->governor",
+          "\\bgovernor_(?:show|store)\\b",
+          "\\bdevfreq_(?:add|remove)_governor\\s*\\(",
+          "\\bget_target_freq\\b|\\bget_cur_freq\\b|profile->target",
+          "\\bprevious_freq\\b|\\bnew_freq\\b|\\bresume_freq\\b|\\bsuspend_freq\\b",
+          "\\bdevfreq_(?:notify_transition|update_status|update_target)\\b"
+        ]
+      },
+      "requires_context": [
+        "devfreq_governor_lifetime",
+        "sysfs_governor_attr_lock_order",
+        "module_unload_or_remove_path",
+        "opp_rounding_and_stats_path",
+        "suspend_resume_frequency_state"
+      ],
+      "trigger_obligations": [
+        {
+          "trigger_pattern": "DEVFREQ_GOV_FLAG_TRACK_REMOTE",
+          "must_check_ref": "#remote-tracking-invariants",
+          "obligation_text": "For remote-tracking governors, prove observed frequencies are not wrongly PM-QoS clamped, are rounded/validated against OPPs before stats/trace updates, and do not require `profile->target`."
+        },
+        {
+          "trigger_pattern": "devfreq->governor",
+          "must_check_ref": "#governor-lifetime-locking",
+          "obligation_text": "Map every new governor pointer read against governor_store/remove/module-unload writers and prove the reader holds the required lock/ref or file a race/UAF finding."
+        },
+        {
+          "trigger_pattern": "DEVFREQ_GOV_FLAG_IMMUTABLE",
+          "must_check_ref": "#immutable-unload",
+          "obligation_text": "Check whether governor removal/module unload can bypass immutable governor protection and allow rebinding to an incompatible governor."
+        },
+        {
+          "trigger_pattern": "get_cur_freq",
+          "must_check_ref": "#required-callback-start",
+          "obligation_text": "When polling depends on `get_cur_freq`, verify governor START rejects devices missing the callback instead of allowing repeated monitor failures."
+        }
+      ]
+    },
+    {
+      "id": "probe-defer-export-topology",
+      "card": "refs/rule-cards/probe-defer-export-topology.md",
+      "category": "hardware-lifecycle",
+      "triggers": {
+        "paths_regex_any": [
+          "(^|/)(drivers|sound|arch|firmware|soc|net|block|crypto|kernel|lib|mm|virt|include)/.*\\.[ch]$"
+        ],
+        "diff_regex_any": [
+          "\\bdev_err_probe\\b",
+          "-?\\bEPROBE_DEFER\\b",
+          "\\bEXPORT_SYMBOL(?:_GPL|_NS|_NS_GPL)?\\s*\\(",
+          "\\bMODULE_FIRMWARE\\s*\\(",
+          "\\bdebugfs_create_(?:bool|file|u32|x32)\\s*\\(",
+          "(?m)^[+-].*\\b(?:depends on|select)\\s+[A-Z_]+"
+        ],
+        "require_paths_regex_any": [
+          "(^|/)(drivers|sound|arch|firmware|soc|net|block|crypto|kernel|lib|mm|virt|include)/.*\\.[ch]$"
+        ],
+        "require_diff_regex_any": [
+          "\\bEXPORT_SYMBOL(?:_GPL|_NS|_NS_GPL)?\\s*\\(|-?\\bEPROBE_DEFER\\b|\\bMODULE_FIRMWARE\\s*\\(|\\bdebugfs_create_(?:bool|file|u32|x32)\\s*\\("
+        ]
+      },
+      "requires_context": [
+        "dependency_or_export",
+        "probe_error_path",
+        "restore_or_kconfig"
+      ]
+    },
+    {
+      "id": "cleanup-style-consistency",
+      "card": "refs/rule-cards/cleanup-style-consistency.md",
+      "category": "code-logic-lifecycle",
+      "triggers": {
+        "paths_regex_any": [
+          "(^|/)(drivers|sound|arch|firmware|soc|net|block|crypto|kernel|lib|mm|virt|include)/.*\\.[ch]$"
+        ],
+        "diff_regex_any": [
+          "\\b__free\\s*\\(",
+          "\\bscoped_guard\\s*\\(",
+          "\\bDEFINE_FREE\\s*\\(",
+          "\\bguard\\s*\\(\\s*(?:mutex|spinlock|rwlock)\\b",
+          "\\bgoto\\s+(?:err|out|fail|free|put|cleanup|disable|unwind)_?\\w*\\b"
+        ],
+        "require_paths_regex_any": [
+          "(^|/)(drivers|sound|arch|firmware|soc|net|block|crypto|kernel|lib|mm|virt|include)/.*\\.[ch]$"
+        ],
+        "require_diff_regex_all": [
+          "\\b(?:__free\\s*\\(|scoped_guard\\s*\\(|DEFINE_FREE\\s*\\(|guard\\s*\\(\\s*(?:mutex|spinlock|rwlock)\\b)",
+          "\\bgoto\\s+(?:err|out|fail|free|put|cleanup|disable|unwind)_?\\w*\\b"
+        ]
+      },
+      "requires_context": [
+        "scope_cleanup_decl",
+        "goto_unwind_targets",
+        "explicit_free_for_same_pointer"
+      ]
+    },
+    {
+      "id": "dt-vendor-prefix-discipline",
+      "card": "refs/rule-cards/dt-vendor-prefix-discipline.md",
+      "category": "dt-binding-schema",
+      "triggers": {
+        "paths_regex_any": [
+          "(^|/)Documentation/devicetree/bindings/(?!vendor-prefixes\\.yaml$).*\\.ya?ml$"
+        ],
+        "diff_regex_any": [
+          "(?m)^\\s*'?[a-z][a-z0-9]*-[a-z0-9-]+'?\\s*:\\s*$"
+        ],
+        "require_paths_regex_any": [
+          "(^|/)Documentation/devicetree/bindings/(?!vendor-prefixes\\.yaml$).*\\.ya?ml$"
+        ],
+        "require_diff_regex_any": [
+          "(?m)^\\s*'?[a-z][a-z0-9]*-[a-z0-9-]+'?\\s*:\\s*$"
+        ]
+      },
+      "requires_context": [
+        "added_property_line",
+        "schema_vendor_context",
+        "vendor_prefixes_yaml"
+      ]
+    },
+    {
+      "id": "qcom-clock-controller-framework",
+      "card": "refs/rule-cards/qcom-clock-controller-framework.md",
+      "category": "clock-driver-correctness",
+      "triggers": {
+        "paths_regex_any": [
+          "(^|/)drivers/clk/qcom/.*\\.[ch]$"
+        ],
+        "diff_regex_any": [
+          "(?:OUT_EVEN|OUT_ODD|OUT_AUX)",
+          "\\bstruct\\s+qcom_cc_desc\\b",
+          "\\.use_rpm\\s*=",
+          "\\.(?:gdscs|num_gdscs)\\s*=",
+          "\\.hw_clk_ctrl\\s*=",
+          "\\.parent_map\\s*=",
+          "\\bstruct\\s+freq_tbl\\b",
+          "\\bclk_rcg2(?:_shared)?_ops\\b",
+          "\\bclk_alpha_pll_(?:lucid|rivian|trion|regera|zonda|fabia)\\b",
+          "\\bqcom_cc_(?:desc|probe|really_probe)\\b"
+        ],
+        "require_paths_regex_any": [
+          "(^|/)drivers/clk/qcom/.*\\.[ch]$"
+        ],
+        "require_diff_regex_any": [
+          "\\bqcom_cc_(?:desc|probe|really_probe)\\b|\\bclk_rcg2(?:_shared)?_ops\\b|(?:OUT_EVEN|OUT_ODD|OUT_AUX)|\\bstruct\\s+(?:freq_tbl|qcom_cc_desc)\\b|\\.parent_map\\s*=|\\.hw_clk_ctrl\\s*=|\\.use_rpm\\s*=|\\.(?:gdscs|num_gdscs)\\s*="
+        ]
+      },
+      "requires_context": [
+        "parent_map_and_parent_data_arrays",
+        "qcom_cc_desc_initialization",
+        "sibling_driver_qcom_cc_desc",
+        "rcg_structs_with_hw_clk_ctrl",
+        "freq_tbl_entries_with_divided_parents"
+      ],
+      "trigger_obligations": [
+        {
+          "trigger_pattern": "hw_clk_ctrl",
+          "must_check_ref": "#3",
+          "obligation_text": "For every RCG with `.hw_clk_ctrl = true` in this hunk, name the RCG, classify as hardware-triggered or software-controlled, and cite sibling evidence. AHB/XO/software-controlled RCG → file [BUG]."
+        },
+        {
+          "trigger_pattern": "parent_data",
+          "must_check_ref": "#1",
+          "obligation_text": "For every parent_data[] entry in this hunk, verify each P_*_OUT_EVEN/OUT_ODD/OUT_AUX maps to a dedicated clk_alpha_pll_postdiv struct, NOT the main PLL .clkr.hw directly. Shared .hw = wrong rate → file [BUG]."
+        },
+        {
+          "trigger_pattern": "qcom_cc_desc",
+          "must_check_ref": "#2",
+          "obligation_text": "For each `qcom_cc_desc` in this hunk, compare .use_rpm against the nearest sibling desc (e.g. camcc-milos.c). If absent while sibling has it and this controller has GDSCs/PLL writes, file [BUG]: register access to unpowered block."
+        },
+        {
+          "trigger_pattern": "use_rpm",
+          "must_check_ref": "#2",
+          "obligation_text": "This hunk references .use_rpm. Verify it is present in the qcom_cc_desc. If the desc omits it, check sibling and file [BUG] if they all have it."
+        }
+      ]
+    },
+    {
+      "id": "shared-scratch-serialization",
+      "card": "refs/rule-cards/shared-scratch-serialization.md",
+      "category": "concurrency-correctness",
+      "triggers": {
+        "paths_regex_any": [
+          "(^|/)(drivers|sound|net|crypto)/.*\\.[ch]$"
+        ],
+        "diff_regex_any": [
+          "\\b(?:mutex_lock|spin_lock|guard)\\b.*(?:cmd|pkt|packet|desc|msg|buf|scratch|staging)",
+          "(?:cmd|pkt|packet|desc|msg|buf|scratch|staging).*\\b(?:mutex_lock|spin_lock|guard)\\b",
+          "->(?:cmd_buf|pkt_buf|desc_buf|msg_buf|scratch|staging|packet|cmd_pkt)\\b",
+          "\\b(?:doorbell|queue_write|submit|send_cmd|send_msg|transfer|xfer|kick|flush_cmd)\\s*\\(",
+          "\\b(?:construct|build|prepare|pack|encode|format|assemble)_(?:cmd|pkt|packet|desc|msg|request|command)\\s*\\("
+        ],
+        "require_paths_regex_any": [
+          "(^|/)(drivers|sound|net|crypto)/.*\\.[ch]$"
+        ]
+      },
+      "requires_context": [
+        "shared_buffer_struct_and_scope",
+        "construction_call_sites",
+        "submission_call_site",
+        "lock_held_during_construction",
+        "concurrent_reachability"
+      ]
+    }
+  ]
+}
