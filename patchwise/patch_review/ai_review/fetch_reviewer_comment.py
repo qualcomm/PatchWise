@@ -91,7 +91,11 @@ class LoreCrawler:
 
             if stripped.startswith(">"):
                 if current_comment:
-                    context_lines = context_buffer[-self.max_context_lines:] if len(context_buffer) > self.max_context_lines else context_buffer
+                    context_lines = (
+                        context_buffer[-self.max_context_lines :]
+                        if len(context_buffer) > self.max_context_lines
+                        else context_buffer
+                    )
                     context_lines = [line for line in context_lines if line.strip()]
                     context = "\n".join(context_lines).strip()
 
@@ -122,7 +126,11 @@ class LoreCrawler:
                 current_comment.append(stripped)
 
         if current_comment:
-            context_lines = context_buffer[-self.max_context_lines:] if len(context_buffer) > self.max_context_lines else context_buffer
+            context_lines = (
+                context_buffer[-self.max_context_lines :]
+                if len(context_buffer) > self.max_context_lines
+                else context_buffer
+            )
             context_lines = [line for line in context_lines if line.strip()]
             context = "\n".join(context_lines).strip()
 
@@ -171,7 +179,9 @@ class LoreCrawler:
             return True
 
         lines = context.split("\n")
-        indented_lines = sum(1 for line in lines if line.startswith("    ") or line.startswith("\t"))
+        indented_lines = sum(
+            1 for line in lines if line.startswith("    ") or line.startswith("\t")
+        )
         if lines and indented_lines / len(lines) > 0.3:
             return True
 
@@ -217,7 +227,11 @@ class LoreCrawler:
             return False
         if len(clean_text) < self.config["NOISE_LENGTH"]:
             for keyword in self.config["NOISE_KEYWORDS"]:
-                if (keyword in clean_text) and ("but" not in clean_text) and not self._has_code_snippet(clean_text):
+                if (
+                    (keyword in clean_text)
+                    and ("but" not in clean_text)
+                    and not self._has_code_snippet(clean_text)
+                ):
                     return False
 
         return True
@@ -236,10 +250,14 @@ class LoreCrawler:
 
             while True:
                 if limit > 0 and len(documents) >= limit:
-                    self.logger.debug(f"[*] Crawler: The valid comment limit ({limit}) has been reached. Stopping crawling.")
+                    self.logger.debug(
+                        f"[*] Crawler: The valid comment limit ({limit}) has been reached. Stopping crawling."
+                    )
                     break
 
-                self.logger.debug(f"[*] Crawler: Fetching page {page} (offset={offset})...")
+                self.logger.debug(
+                    f"[*] Crawler: Fetching page {page} (offset={offset})..."
+                )
 
                 try:
                     params = {"q": query, "x": "A", "o": offset}
@@ -251,14 +269,20 @@ class LoreCrawler:
                     entries = root.findall("atom:entry", ns)
 
                     if not entries:
-                        self.logger.debug(f"[*] Crawler: No results on page {page}; stopping crawl.")
+                        self.logger.debug(
+                            f"[*] Crawler: No results on page {page}; stopping crawl."
+                        )
                         break
 
-                    self.logger.debug(f"[*] Crawler: Page {page} returned {len(entries)} entries. Beginning processing...")
+                    self.logger.debug(
+                        f"[*] Crawler: Page {page} returned {len(entries)} entries. Beginning processing..."
+                    )
 
                     for i, entry in enumerate(entries):
                         if limit > 0 and len(documents) >= limit:
-                            self.logger.debug(f"[*] Crawler: The valid comment limit ({limit}) has been reached. Stopping processing.")
+                            self.logger.debug(
+                                f"[*] Crawler: The valid comment limit ({limit}) has been reached. Stopping processing."
+                            )
                             break
 
                         total_entries_processed += 1
@@ -269,10 +293,16 @@ class LoreCrawler:
                         if body:
                             segments = self._parse_email_segments(body)
                             valid_count = 0
-                            for seg_idx, (context, comment, file_path) in enumerate(segments):
+                            for seg_idx, (context, comment, file_path) in enumerate(
+                                segments
+                            ):
                                 if limit > 0 and len(documents) >= limit:
                                     break
-                                if comment and context and self._is_valid_comment(comment):
+                                if (
+                                    comment
+                                    and context
+                                    and self._is_valid_comment(comment)
+                                ):
                                     doc = {
                                         "content": context,
                                         "comment": comment,
@@ -285,12 +315,16 @@ class LoreCrawler:
                                     valid_count += 1
 
                             if valid_count > 0:
-                                self.logger.debug(f"[{total_entries_processed}] Kept as valid ({valid_count} comment segments) - Current total: {len(documents)}")
+                                self.logger.debug(
+                                    f"[{total_entries_processed}] Kept as valid ({valid_count} comment segments) - Current total: {len(documents)}"
+                                )
                                 self.logger.debug(f"Title: {title}")
                                 self.logger.debug(f"Link: {link}")
 
                             else:
-                                self.logger.debug(f"[{total_entries_processed}] - Filtered out")
+                                self.logger.debug(
+                                    f"[{total_entries_processed}] - Filtered out"
+                                )
                                 self.logger.debug(f"Title: {title}")
                                 self.logger.debug(f"Link: {link}")
                         time.sleep(0.5)
@@ -299,7 +333,9 @@ class LoreCrawler:
                         break
 
                     if len(entries) < 200:
-                        self.logger.debug("[*] Crawler: All available data has been processed")
+                        self.logger.debug(
+                            "[*] Crawler: All available data has been processed"
+                        )
                         break
 
                     offset += len(entries)
@@ -307,23 +343,33 @@ class LoreCrawler:
                     time.sleep(1)
 
                 except Exception as e:
-                    self.logger.debug(f"[!] Crawler: Error occurred while fetching page {page}: {e}")
+                    self.logger.debug(
+                        f"[!] Crawler: Error occurred while fetching page {page}: {e}"
+                    )
                     break
         except Exception as e:
             self.logger.error(f"[!] Crawler Error: {e}")
 
-        self.logger.debug(f"[*] Crawler: Task completed. Processed a total of {total_entries_processed} raw records and generated {len(documents)} valid comment documents.")
+        self.logger.debug(
+            f"[*] Crawler: Task completed. Processed a total of {total_entries_processed} raw records and generated {len(documents)} valid comment documents."
+        )
 
         if documents:
             try:
-                maintainer_name = self.config["MAINTAINER"].replace(" ", "_").replace("@", "_at_")
+                maintainer_name = (
+                    self.config["MAINTAINER"].replace(" ", "_").replace("@", "_at_")
+                )
                 os.makedirs(self.cache_dir, exist_ok=True)
-                json_filename = os.path.join(self.cache_dir, f"crawled_{maintainer_name}.json")
+                json_filename = os.path.join(
+                    self.cache_dir, f"crawled_{maintainer_name}.json"
+                )
 
                 with open(json_filename, "w", encoding="utf-8") as f:
                     json.dump(documents, f, ensure_ascii=False, indent=2)
                 self.logger.debug(f"[*] Saved JSON file: {json_filename}")
             except Exception as e:
-                self.logger.warning(f"[!] Crawler: Failed to write cache to {self.cache_dir}: {e}")
+                self.logger.warning(
+                    f"[!] Crawler: Failed to write cache to {self.cache_dir}: {e}"
+                )
 
         return documents

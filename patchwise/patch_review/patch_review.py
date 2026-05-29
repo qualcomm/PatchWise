@@ -29,6 +29,7 @@ class PatchReview(abc.ABC):
         repo_path: str,
         commit: Commit,
         additional_context: str = "",
+        enable_experimental_features: bool = False,
     ):
         self.logger = self.get_logger()
         self.repo = Repo(repo_path)
@@ -36,6 +37,7 @@ class PatchReview(abc.ABC):
         self.additional_context = additional_context
         self.build_dir = BUILD_DIR / str(self.commit.hexsha)
         self.build_dir.mkdir(parents=True, exist_ok=True)
+        self.enable_experimental_features = enable_experimental_features
 
         dockerfile_path = self.get_dockerfile_path()
         if dockerfile_path.name == "base.Dockerfile":

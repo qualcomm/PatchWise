@@ -45,6 +45,11 @@ def parse_args(config: dict) -> argparse.Namespace:
         default=str(Path.cwd()),
         help="Path to the kernel workspace containing the patch(es) to review. Uses CWD if not specified. (default: %(default)s)",
     )
+    review_group.add_argument(
+        "--enable-experimental-features",
+        action="store_true",
+        help="Enable experimental features across all reviews.",
+    )
 
     add_review_arguments(review_group)
 
@@ -113,8 +118,8 @@ def main():
 
     reviews = get_selected_reviews_from_args(args)
 
-    if "AiCodeReview" not in reviews and (
-        args.url is not None or args.cache_dir is not None
+    if (args.url is not None or args.cache_dir is not None) and not (
+        args.enable_experimental_features and "AiCodeReview" in reviews
     ):
         passed = [
             flag
@@ -122,7 +127,7 @@ def main():
             if val is not None
         ]
         sys.exit(
-            f"error: {' and '.join(passed)} only effective with --reviews aicodereview"
+            f"error: {' and '.join(passed)} only effective with --reviews aicodereview and --enable-experimental-features"
         )
 
     apply_aicodereview_args(args)
@@ -138,6 +143,7 @@ def main():
             commit,
             args.repo_path,
             additional_context=args.additional_context,
+            enable_experimental_features=args.enable_experimental_features,
         )
 
         fix_results = fix_reported_issues(results) if args.fix else {}
