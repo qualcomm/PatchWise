@@ -1604,26 +1604,6 @@ class Agent:
         return {"ok": True}
 
     # TODO: remove
-    def _tool_write_file(self, file: str, start: int, end: int, content: str) -> dict:
-        """Replace lines [start, end] (1-based, inclusive) in a container file."""
-        container_path = self._container_path(file)
-        lines = self._read(container_path).splitlines(keepends=True)
-
-        if start < 1:
-            return {"ok": False, "error": f"start ({start}) must be >= 1"}
-        if end < start:
-            return {"ok": False, "error": f"end ({end}) must be >= start ({start})"}
-        if end > len(lines):
-            return {
-                "ok": False,
-                "error": f"end ({end}) exceeds file length ({len(lines)} lines)",
-            }
-
-        new_lines = [l + "\n" for l in content.splitlines(keepends=False)]
-        lines[start - 1 : end] = new_lines
-        self._write(container_path, "".join(lines))
-        return {"ok": True}
-
     def dispatch_tool(self, name: str, args: dict) -> dict:
         """Dispatch an agent tool by name. Returns {ok, ...}."""
         read_tools = {
@@ -1642,7 +1622,6 @@ class Agent:
         if tool_fn is None:
             if self.enable_edit_tools:
                 write_tools = {
-                    "write_file": self._tool_write_file,
                     "write_file_str": self._tool_write_file_str,
                 }
                 tool_fn = write_tools.get(name)

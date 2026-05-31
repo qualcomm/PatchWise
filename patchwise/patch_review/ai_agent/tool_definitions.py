@@ -269,7 +269,7 @@ TOOLS = [
                 "Replace an exact snippet of text in a file. "
                 "Finds old_content verbatim and replaces it with "
                 "new_content. Fails if old_content is not found or "
-                "matches more than once. Prefer this over write_file."
+                "matches more than once."
             ),
             "parameters": {
                 "type": "object",
@@ -288,41 +288,6 @@ TOOLS = [
                     },
                 },
                 "required": ["file", "old_content", "new_content"],
-            },
-        },
-    },
-    # TODO: Remove write_file because write_file_str never failed
-    # and write_file was never used
-    {
-        "type": "function",
-        "function": {
-            "name": "write_file",
-            "description": (
-                "Replace a range of lines in a file inside the kernel "
-                "source tree. Lines are 1-based and inclusive. Use as a "
-                "fallback when write_file_str cannot be used."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "file": {
-                        "type": "string",
-                        "description": "Kernel-relative path, e.g. 'drivers/i2c/foo.c'.",
-                    },
-                    "start": {
-                        "type": "integer",
-                        "description": "First line to replace (1-based, inclusive).",
-                    },
-                    "end": {
-                        "type": "integer",
-                        "description": "Last line to replace (1-based, inclusive).",
-                    },
-                    "content": {
-                        "type": "string",
-                        "description": "Replacement text for the line range.",
-                    },
-                },
-                "required": ["file", "start", "end", "content"],
             },
         },
     },
