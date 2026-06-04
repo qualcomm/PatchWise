@@ -12,6 +12,7 @@ dependencies = [
     "Sphinx>=8.1.3",
     "litellm>=1.74",
     "cachetools>=5.5.2",
+    "chromadb>=0.4.0",
     # "dtschema>=2025.2",
     "yamllint>=1.26.3",
     "ply>=3.11",
