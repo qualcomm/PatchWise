@@ -1,0 +1,704 @@
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+# SPDX-License-Identifier: BSD-3-Clause
+
+"""Checkpatch error fixer using AI with targeted file edits.
+
+This fixer applies script-based fixes first, then uses AI with verification tools.
+Includes RAG-based retrieval of kernel documentation for enhanced context.
+"""
+
+import os
+import re
+import subprocess
+import tempfile
+from pathlib import Path
+from typing import List
+
+from patchwise.patch_review.ai_fix import AiFix
+from patchwise.patch_review.static_analysis.checkpatch import Checkpatch
+from patchwise.patch_review.decorators import register_fix
+
+try:
+    from patchwise.patch_review.ai_fix.kernel_docs_rag import KernelDocRAG
+    RAG_AVAILABLE = True
+except ImportError:
+    RAG_AVAILABLE = False
+    KernelDocRAG = None
+
+
+@register_fix(Checkpatch)
+class CheckpatchFixer(AiFix):
+    """AI-powered checkpatch fixer based on checkpatch findings.
+
+    This fixer uses a two-stage approach:
+    1. Apply script-based fixes for common issues (whitespace, SPDX, etc.)
+    2. Use AI with write_file_str/write_file tools AND verification tools
+    
+    The AI can run checkpatch to verify fixes, enabling self-correction.
+    
+    The AI edits files directly inside the Docker container. Those working-tree 
+    edits are then folded into HEAD via ``git commit --amend`` and emitted as 
+    an mbox patch via ``git format-patch``.
+
+    Returns patch fix output.
+    """
+
+    CHECKPATCH_FIX_PROMPT_TEMPLATE = """
+# User Prompt
+
+The following patch diff has checkpatch errors and warnings that need to be fixed.
+Script-based fixes have already been applied for simple issues.
+Use the write tools to apply fixes for the remaining checkpatch issues
+directly to the source files in the kernel tree.
+
+**IMPORTANT**: After making changes, use the `run_checkpatch` tool to verify 
+that the issues are fixed. If issues remain, iterate and fix them.
+
+## Commit text
+
+{commit_text}
+
+## Current patch diff (after script fixes)
+
+```diff
+{diff}
+```
+
+## Remaining checkpatch issues to fix
+
+{checkpatch_issues}
+
+## Available Tools
+
+1. **write_file_str** / **write_file**: Edit source files
+2. **run_checkpatch**: Verify your fixes by running checkpatch
+3. **read_file**: Read file contents to understand context
+
+## Workflow
+
+1. Make targeted edits to fix issues
+2. Run `run_checkpatch` to verify fixes
+3. If issues remain, iterate and fix them
+4. Continue until checkpatch passes or no more improvements possible
+
+## Note
+Simple whitespace and formatting issues have already been fixed by scripts.
+Focus on the remaining issues that require code understanding.
+"""
+
+    @classmethod
+    def get_checkpatch_fix_system_prompt(cls) -> str:
+        return """
+# System Prompt
+
+You will receive a patch diff, its commit text, and remaining checkpatch issues.
+Script-based fixes have already been applied for simple issues.
+
+Use the read-only tools to explore the kernel source as needed, then use
+write_file_str (preferred) or write_file to apply the corrections.
+
+**CRITICAL**: After making changes, use the `run_checkpatch` tool to verify 
+that your fixes actually resolved the issues. This is a self-correction loop.
+
+## Rules
+
+- Prefer write_file_str (exact-text match) over write_file (line range).
+- Make small, targeted changes — one logical fix per tool call.
+- **Always verify** your fixes with `run_checkpatch` after making changes.
+- If checkpatch still reports issues, analyze and fix them iteratively.
+- Only change lines necessary to address the checkpatch issues.
+- Do not redesign or extend the patch beyond what checkpatch requires.
+- Do not revert or remove the patch's primary contribution.
+- Follow Linux kernel coding style precisely (Documentation/process/coding-style.rst).
+- Use only ASCII characters.
+
+## Self-Correction Loop
+
+1. Make a fix using write_file_str/write_file
+2. Run `run_checkpatch` to verify
+3. If issues remain:
+   - Analyze the remaining issues
+   - Make additional fixes
+   - Verify again with `run_checkpatch`
+4. Repeat until checkpatch passes or no more improvements possible
+
+## Focus Areas (scripts already handled basic issues)
+
+- Complex line length issues requiring code restructuring
+- Function/macro refactoring for style compliance
+- Logic-dependent fixes (e.g., replacing hardcoded names with __func__)
+- Context-dependent formatting issues
+- Issues requiring understanding of surrounding code
+
+## Important
+
+- Make minimal changes to fix only the checkpatch issues
+- Preserve the patch's functionality and intent
+- Do not introduce new checkpatch errors
+- **Verify every fix** with the run_checkpatch tool
+- If unsure, make no changes to that specific issue
+"""
+
+    def __init__(self, patch_review, review_result: str):
+        """Initialize with custom tools for checkpatch verification and RAG."""
+        super().__init__(patch_review, review_result)
+        
+        # RAG will be initialized in context manager during run()
+        self.rag = None
+        
+        # Add checkpatch verification tool to the agent
+        self._add_checkpatch_tool()
+
+    def _add_checkpatch_tool(self):
+        """Add run_checkpatch tool to the agent's available tools."""
+        checkpatch_tool = {
+            "type": "function",
+            "function": {
+                "name": "run_checkpatch",
+                "description": "Run checkpatch.pl on the current changes to verify fixes. Returns checkpatch output showing remaining issues or success.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "file_path": {
+                            "type": "string",
+                            "description": "Optional: specific file to check. If not provided, checks all modified files.",
+                        }
+                    },
+                    "required": [],
+                },
+            },
+        }
+        
+        # Add the tool to agent's tools
+        if hasattr(self.agent, 'tools'):
+            self.agent.tools.append(checkpatch_tool)
+        
+        # Register the tool handler
+        if hasattr(self.agent, 'tool_handlers'):
+            self.agent.tool_handlers['run_checkpatch'] = self._handle_run_checkpatch
+
+    def _handle_run_checkpatch(self, file_path: str = None) -> str:
+        """Handle run_checkpatch tool call from the AI.
+        
+        Args:
+            file_path: Optional specific file to check
+            
+        Returns:
+            Checkpatch output or success message
+        """
+        kernel_dir = str(self.patch_review.docker_manager.kernel_dir)
+        
+        try:
+            # Generate a patch from current changes
+            proc = self.patch_review.docker_manager.run_command(
+                ["git", "diff", "HEAD"],
+                cwd=kernel_dir
+            )
+            diff_output, _ = proc.communicate()
+            
+            if proc.returncode != 0 or not diff_output:
+                return "No changes to check. Make some edits first."
+            
+            # Write diff to temporary file
+            with tempfile.NamedTemporaryFile(
+                mode='wb', suffix='.patch', delete=False, dir=kernel_dir
+            ) as f:
+                f.write(diff_output)
+                temp_patch = f.name
+            
+            # Run checkpatch
+            checkpatch_path = os.path.join(kernel_dir, 'scripts', 'checkpatch.pl')
+            if not os.path.exists(checkpatch_path):
+                os.unlink(temp_patch)
+                return "checkpatch.pl not found in kernel tree"
+            
+            proc = self.patch_review.docker_manager.run_command(
+                [checkpatch_path, temp_patch],
+                cwd=kernel_dir
+            )
+            stdout, _ = proc.communicate()
+            
+            # Cleanup
+            os.unlink(temp_patch)
+            
+            output = stdout if stdout else ""
+            
+            if "total: 0 errors, 0 warnings" in output:
+                return "✓ SUCCESS: All checkpatch issues fixed! No errors or warnings remain."
+            else:
+                return f"Checkpatch output:\n{output}\n\nIssues remain. Please fix them and run checkpatch again."
+                
+        except Exception as e:
+            self.logger.error(f"Error running checkpatch: {e}")
+            return f"Error running checkpatch: {str(e)}"
+
+    @classmethod
+    def _strip_trailers(cls, msg: str) -> str:
+        """Drop attribution and routing trailers from a commit message."""
+        stripped_trailers = (
+            "co-authored-by",
+            "signed-off-by",
+            "reviewed-by",
+            "acked-by",
+            "tested-by",
+            "cc",
+            "change-id",
+        )
+        kept = []
+        for line in msg.splitlines():
+            lower = line.strip().lower()
+            if any(lower.startswith(f"{t}:") for t in stripped_trailers):
+                continue
+            kept.append(line)
+        # Strip trailing new lines
+        while kept and not kept[-1].strip():
+            kept.pop()
+        return "\n".join(kept) + "\n"
+
+    def _apply_script_fixes(self) -> bool:
+        """Apply script-based fixes to the working tree before AI processing.
+        
+        This applies simple, deterministic fixes that don't require AI:
+        - Trailing whitespace removal
+        - DOS line ending conversion
+        - Space before tab fixes
+        - Basic SPDX license fixes
+        - checkpatch.pl --fix if available
+        
+        Returns:
+            True if any fixes were applied, False otherwise
+        """
+        kernel_dir = str(self.patch_review.docker_manager.kernel_dir)
+        changes_made = False
+
+        # Get list of modified files from the patch
+        proc = self.patch_review.docker_manager.run_command(
+            ["git", "diff", "--name-only", "HEAD~1"], cwd=kernel_dir
+        )
+        stdout, _ = proc.communicate()
+        if proc.returncode != 0:
+            self.logger.warning("Failed to get modified files")
+            return False
+
+        modified_files = [f.strip() for f in stdout.splitlines() if f.strip()]
+        
+        for file_path in modified_files:
+            full_path = os.path.join(kernel_dir, file_path)
+            if not os.path.exists(full_path):
+                continue
+                
+            try:
+                with open(full_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+                
+                original_content = content
+                
+                # Fix trailing whitespace
+                content = self._fix_trailing_whitespace(content)
+                
+                # Fix DOS line endings
+                content = content.replace('\r\n', '\n').replace('\r', '\n')
+                
+                # Fix space before tab
+                content = self._fix_space_before_tab(content)
+                
+                # Fix SPDX license (basic cases)
+                content = self._fix_spdx_license(content, file_path)
+                
+                if content != original_content:
+                    with open(full_path, 'w', encoding='utf-8') as f:
+                        f.write(content)
+                    changes_made = True
+                    self.logger.info(f"Applied script fixes to {file_path}")
+                    
+            except Exception as e:
+                self.logger.warning(f"Error applying script fixes to {file_path}: {e}")
+                continue
+
+        # Try checkpatch.pl --fix if available
+        if self._try_checkpatch_fix(kernel_dir):
+            changes_made = True
+
+        # Commit the script fixes if any were made
+        if changes_made:
+            proc = self.patch_review.docker_manager.run_command(
+                ["git", "add", "-u"], cwd=kernel_dir
+            )
+            proc.communicate()
+            
+            proc = self.patch_review.docker_manager.run_command(
+                ["git", "commit", "--amend", "--no-edit"], cwd=kernel_dir
+            )
+            proc.communicate()
+            
+            self.logger.info("Committed script-based fixes")
+
+        return changes_made
+
+    def _fix_trailing_whitespace(self, content: str) -> str:
+        """Remove trailing whitespace from all lines."""
+        lines = content.split('\n')
+        fixed_lines = [line.rstrip() for line in lines]
+        return '\n'.join(fixed_lines)
+
+    def _fix_space_before_tab(self, content: str) -> str:
+        """Fix space before tab issues."""
+        lines = content.split('\n')
+        fixed_lines = []
+        for line in lines:
+            while line.startswith(' \t'):
+                line = line.replace(' \t', '\t', 1)
+            fixed_lines.append(line)
+        return '\n'.join(fixed_lines)
+
+    def _fix_spdx_license(self, content: str, file_path: str) -> str:
+        """Fix SPDX license identifier format based on file type."""
+        lines = content.split('\n')
+        
+        for i, line in enumerate(lines):
+            if 'SPDX-License-Identifier' not in line:
+                continue
+                
+            if file_path.endswith('.c'):
+                if line.strip().startswith('/*') and 'SPDX-License-Identifier' in line:
+                    match = re.search(r'SPDX-License-Identifier:\s*([^*\s]+)', line)
+                    if match:
+                        license_id = match.group(1)
+                        lines[i] = f'// SPDX-License-Identifier: {license_id}'
+                        
+            elif file_path.endswith('.h'):
+                if line.strip().startswith('//') and 'SPDX-License-Identifier' in line:
+                    match = re.search(r'SPDX-License-Identifier:\s*(.+)', line)
+                    if match:
+                        license_id = match.group(1).strip()
+                        lines[i] = f'/* SPDX-License-Identifier: {license_id} */'
+        
+        return '\n'.join(lines)
+
+    def _try_checkpatch_fix(self, kernel_dir: str) -> bool:
+        """Try to apply checkpatch.pl --fix if available."""
+        checkpatch_path = os.path.join(kernel_dir, 'scripts', 'checkpatch.pl')
+        if not os.path.exists(checkpatch_path):
+            return False
+
+        try:
+            proc = self.patch_review.docker_manager.run_command(
+                ["git", "format-patch", "-1", "--stdout", "HEAD"],
+                cwd=kernel_dir
+            )
+            stdout, _ = proc.communicate()
+            if proc.returncode != 0:
+                return False
+
+            with tempfile.NamedTemporaryFile(
+                mode='w', suffix='.patch', delete=False, dir=kernel_dir
+            ) as f:
+                f.write(stdout)
+                temp_patch = f.name
+
+            proc = self.patch_review.docker_manager.run_command(
+                [checkpatch_path, '--fix-inplace', '--no-summary', temp_patch],
+                cwd=kernel_dir
+            )
+            proc.communicate()
+
+            fixed_file = temp_patch + '.EXPERIMENTAL-checkpatch-fixes'
+            if os.path.exists(fixed_file):
+                proc = self.patch_review.docker_manager.run_command(
+                    ['git', 'apply', fixed_file],
+                    cwd=kernel_dir
+                )
+                proc.communicate()
+                
+                os.unlink(fixed_file)
+                os.unlink(temp_patch)
+                
+                self.logger.info("Applied checkpatch.pl --fix")
+                return True
+            
+            os.unlink(temp_patch)
+            return False
+
+        except Exception as e:
+            self.logger.debug(f"checkpatch --fix not available or failed: {e}")
+            return False
+
+    def _generate_git_patch(self) -> str:
+        """Produce an mbox-format patch reflecting the AI's working-tree edits."""
+        kernel_dir = str(self.patch_review.docker_manager.kernel_dir)
+
+        proc = self.patch_review.docker_manager.run_command(
+            ["git", "diff", "--quiet", "HEAD"], cwd=kernel_dir
+        )
+        proc.communicate()
+        if proc.returncode == 0:
+            self.logger.debug("No working-tree changes from AI; no patch fix.")
+            return ""
+
+        proc = self.patch_review.docker_manager.run_command(
+            ["git", "log", "-1", "--format=%B"], cwd=kernel_dir
+        )
+        orig_msg, stderr = proc.communicate()
+        if proc.returncode != 0:
+            raise RuntimeError(f"git log failed: {stderr}")
+        new_msg = self._strip_trailers(orig_msg)
+
+        proc = self.patch_review.docker_manager.run_interactive_command(
+            ["git", "commit", "-a", "--amend", "-F", "-"],
+            cwd=kernel_dir,
+        )
+        _stdout, stderr = proc.communicate(input=new_msg)
+        if proc.returncode != 0:
+            raise RuntimeError(f"git commit --amend failed: {stderr}")
+
+        proc = self.patch_review.docker_manager.run_command(
+            [
+                "git",
+                "format-patch",
+                "HEAD~1",
+                "--stdout",
+            ],
+            cwd=kernel_dir,
+        )
+        stdout, stderr = proc.communicate()
+        if proc.returncode != 0:
+            raise RuntimeError(f"git format-patch failed: {stderr}")
+        return stdout.strip()
+
+    def _has_commit_message_issues(self, checkpatch_output: str) -> bool:
+        """Check if checkpatch output contains commit message warnings."""
+        return "COMMIT_MESSAGE" in checkpatch_output or "COMMIT_LOG" in checkpatch_output
+    
+    def _fix_commit_message(self, checkpatch_output: str) -> bool:
+        """Use LLM to fix commit message issues.
+        
+        Returns:
+            True if commit message was fixed, False otherwise
+        """
+        kernel_dir = str(self.patch_review.docker_manager.kernel_dir)
+        
+        # Get current commit message
+        proc = self.patch_review.docker_manager.run_command(
+            ["git", "log", "-1", "--format=%B"],
+            cwd=kernel_dir
+        )
+        current_message_bytes, _ = proc.communicate()
+        if proc.returncode != 0:
+            self.logger.warning("Failed to get current commit message")
+            return False
+        
+        # Decode to string
+        current_message = current_message_bytes.decode('utf-8') if isinstance(current_message_bytes, bytes) else current_message_bytes
+        
+        # Get the diff to provide context
+        proc = self.patch_review.docker_manager.run_command(
+            ["git", "show", "--format=", "HEAD"],
+            cwd=kernel_dir
+        )
+        diff_content_bytes, _ = proc.communicate()
+        
+        # Decode to string
+        diff_content = diff_content_bytes.decode('utf-8') if isinstance(diff_content_bytes, bytes) else diff_content_bytes
+        
+        # Create prompt for LLM to fix commit message
+        prompt = f"""Fix the following commit message to address checkpatch warnings.
+
+Current commit message:
+```
+{current_message}
+```
+
+Checkpatch warnings:
+```
+{checkpatch_output}
+```
+
+Patch diff (for context):
+```diff
+{diff_content[:2000]}  # First 2000 chars for context
+```
+
+Please provide a corrected commit message that:
+1. Follows Linux kernel commit message guidelines
+2. Addresses all checkpatch warnings
+3. Maintains the original intent and technical accuracy
+4. Uses proper imperative mood
+5. Includes appropriate subsystem prefix
+6. Has a clear, concise subject line (50-75 chars)
+7. Includes a detailed body explaining what and why (if needed)
+
+Provide ONLY the corrected commit message, nothing else."""
+
+        try:
+            # Use the agent's LLM to generate fixed commit message
+            import litellm
+            
+            self.logger.debug(f"Calling LLM with prompt length: {len(prompt)}")
+            response = litellm.completion(
+                model=self.agent.model,
+                messages=[
+                    {"role": "system", "content": "You are an expert in Linux kernel development and commit message formatting."},
+                    {"role": "user", "content": prompt}
+                ],
+                api_base=self.agent.api_base if hasattr(self.agent, 'api_base') else None,
+            )
+            
+            fixed_message = response.choices[0].message.content.strip()
+            self.logger.debug(f"LLM returned message type: {type(fixed_message)}, length: {len(fixed_message)}")
+            
+            # Remove markdown code blocks if present
+            if fixed_message.startswith("```"):
+                lines = fixed_message.split('\n')
+                fixed_message = '\n'.join(lines[1:-1]) if len(lines) > 2 else fixed_message
+                self.logger.debug("Removed markdown code blocks")
+            
+            # Ensure fixed_message is a string (subprocess will encode it)
+            self.logger.debug(f"Before passing to subprocess - type: {type(fixed_message)}")
+            if isinstance(fixed_message, bytes):
+                fixed_message = fixed_message.decode('utf-8')
+                self.logger.debug("Decoded bytes to string")
+            
+            # Update commit message (pass string, subprocess will encode it)
+            self.logger.debug("Running git commit --amend")
+            proc = self.patch_review.docker_manager.run_interactive_command(
+                ["git", "commit", "--amend", "-F", "-"],
+                cwd=kernel_dir,
+            )
+            _, stderr = proc.communicate(input=fixed_message)
+            
+            if proc.returncode == 0:
+                self.logger.info("Successfully fixed commit message")
+                return True
+            else:
+                self.logger.warning(f"Failed to update commit message: {stderr}")
+                return False
+                
+        except Exception as e:
+            import traceback
+            self.logger.error(f"Failed to fix commit message with LLM: {e}")
+            self.logger.error(f"Traceback: {traceback.format_exc()}")
+            return False
+
+    def run(self) -> str:
+        """Run the AI checkpatch fixer with verification loop."""
+        checkpatch_output = self.review_result
+
+        if not checkpatch_output or checkpatch_output.strip() == "No issues found.":
+            self.logger.debug(
+                "Checkpatch found no actionable issues; skipping patch fix."
+            )
+            return ""
+
+        # Stage 0: Fix commit message issues if present
+        if self._has_commit_message_issues(checkpatch_output):
+            self.logger.info("Stage 0: Fixing commit message issues...")
+            commit_msg_fixed = self._fix_commit_message(checkpatch_output)
+            if commit_msg_fixed:
+                self.logger.info("Commit message fixed successfully")
+
+        # Stage 1: Apply script-based fixes
+        self.logger.info("Stage 1: Applying script-based fixes...")
+        script_fixes_applied = self._apply_script_fixes()
+        
+        if script_fixes_applied:
+            self.logger.info("Script-based fixes applied successfully")
+            remaining_issues = checkpatch_output
+        else:
+            self.logger.info("No script-based fixes needed")
+            remaining_issues = checkpatch_output
+
+        # Get current diff after script fixes
+        kernel_dir = str(self.patch_review.docker_manager.kernel_dir)
+        proc = self.patch_review.docker_manager.run_command(
+            ["git", "format-patch", "-1", "--stdout", "HEAD"],
+            cwd=kernel_dir
+        )
+        current_diff, _ = proc.communicate()
+        if proc.returncode == 0:
+            current_diff = current_diff
+        else:
+            current_diff = self.patch_review.diff
+
+        # Stage 2: Use AI with verification loop and RAG context
+        self.logger.info("Stage 2: Using AI with verification loop and RAG context...")
+        
+        # Initialize RAG with context manager (if available)
+        rag_manager = None
+        if RAG_AVAILABLE and KernelDocRAG:
+            try:
+                rag_manager = KernelDocRAG(kernel_dir, logger=self.logger)
+                rag_manager.__enter__()
+            except Exception as e:
+                self.logger.warning(f"Failed to initialize RAG system: {e}")
+                rag_manager = None
+        else:
+            self.logger.warning("RAG system not available (missing chromadb or litellm)")
+        
+        try:
+            # Extract issue types from checkpatch output
+            issue_types = self._extract_checkpatch_issue_types(remaining_issues)
+            
+            # Get relevant documentation context using RAG
+            rag_context = ""
+            if rag_manager and issue_types:
+                rag_context = rag_manager.get_checkpatch_guidelines(issue_types)
+            
+            formatted_prompt = self.CHECKPATCH_FIX_PROMPT_TEMPLATE.format(
+                commit_text=self.patch_review.commit.message,
+                diff=current_diff,
+                checkpatch_issues=remaining_issues,
+            )
+            
+            # Append RAG context to prompt
+            if rag_context:
+                formatted_prompt += f"\n\n{rag_context}"
+
+            self.logger.debug(f"Formatted prompt for checkpatch fix:\n{formatted_prompt}")
+
+            messages = [
+                {"role": "system", "content": self.get_checkpatch_fix_system_prompt()},
+                {"role": "user", "content": formatted_prompt},
+            ]
+            final_response = self.agent.run_agent_loop(messages)
+            self.logger.debug(f"Checkpatch-fix agent final response: {final_response!r}")
+        finally:
+            if rag_manager:
+                rag_manager.__exit__(None, None, None)
+
+        try:
+            patch_fix = self._generate_git_patch()
+        except Exception as e:
+            self.logger.warning(f"Failed to generate checkpatch patch fix: {e}")
+            return ""
+
+        return patch_fix
+    
+    def _extract_checkpatch_issue_types(self, checkpatch_output: str) -> List[str]:
+        """
+        Extract issue types from checkpatch output.
+        
+        Args:
+            checkpatch_output: Checkpatch error/warning output
+            
+        Returns:
+            List of issue type strings
+        """
+        issue_types = []
+        
+        for line in checkpatch_output.split('\n'):
+            line_lower = line.lower()
+            if 'line' in line_lower and ('length' in line_lower or 'long' in line_lower):
+                issue_types.append('line length')
+            if 'spdx' in line_lower:
+                issue_types.append('SPDX license')
+            if 'whitespace' in line_lower or 'trailing' in line_lower:
+                issue_types.append('whitespace')
+            if 'brace' in line_lower:
+                issue_types.append('brace placement')
+            if 'macro' in line_lower:
+                issue_types.append('macro definition')
+            if 'signed-off-by' in line_lower:
+                issue_types.append('signed-off-by')
+        
+        # Return unique issue types
+        return list(set(issue_types))
