@@ -25,6 +25,19 @@ def read_from_config(path: Path) -> Dict[str, Any]:
     return cast(Dict[str, Any], config_dict)
 
 
+def _merge_overrides(base: Dict[str, Any], overrides: Dict[str, Any]) -> Dict[str, Any]:
+    """Return ``base`` with ``overrides`` layered on top, recursing into nested dicts."""
+    merged = dict(base)
+    for key, value in overrides.items():
+        if value is None:
+            continue
+        if key in merged and isinstance(merged[key], dict) and isinstance(value, dict):
+            merged[key] = _merge_overrides(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
 def parse_config() -> Dict[str, Any]:
     """
     Parses both user and default configuration files and returns the union of the two with user taking precedence.
@@ -38,12 +51,7 @@ def parse_config() -> Dict[str, Any]:
     if not user_options:
         return default_options
 
-    combined_options = {
-        **default_options,
-        **{k: v for k, v in user_options.items() if v is not None},
-    }
-
-    return combined_options
+    return _merge_overrides(default_options, user_options)
 
 
 def update_user_config(dict: Dict[str, Any]) -> None:

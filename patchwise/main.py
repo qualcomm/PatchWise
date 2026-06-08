@@ -12,6 +12,7 @@ from rich_argparse import RichHelpFormatter
 
 from patchwise import OUTPUT_PATH
 from .logger_setup import add_logging_arguments, setup_logger
+from .mail_handler.cli import add_mail_arguments, run_mail_mode
 from .patch_review import (
     add_review_arguments,
     fix_reported_issues,
@@ -32,18 +33,24 @@ logger = logging.getLogger(__name__)
 def parse_args(config: dict) -> argparse.Namespace:
     parser = argparse.ArgumentParser(formatter_class=RichHelpFormatter)
 
+    parser.add_argument(
+        "--mail",
+        action="store_true",
+        help="Run the mail-handler loop instead of reviewing local commits.",
+    )
+
     review_group = parser.add_argument_group("Patch Review Options")
 
     review_group.add_argument(
         "--commits",
         nargs="*",
-        default=["HEAD"],
-        help="Space separated list of commit SHAs/refs, or a single commit range in start..end format. (default: %(default)s)",
+        default=None,
+        help="Space separated list of commit SHAs/refs, or a single commit range in start..end format. (default: HEAD)",
     )
     review_group.add_argument(
         "--repo-path",
-        default=str(Path.cwd()),
-        help="Path to the kernel workspace containing the patch(es) to review. Uses CWD if not specified. (default: %(default)s)",
+        default=None,
+        help="Path to the kernel workspace containing the patch(es) to review. Uses CWD if not specified. (default: CWD)",
     )
     review_group.add_argument(
         "--enable-experimental-features",
@@ -53,8 +60,11 @@ def parse_args(config: dict) -> argparse.Namespace:
 
     add_review_arguments(review_group)
 
+    mail_group = parser.add_argument_group("Mail Options (require --mail)")
+    add_mail_arguments(mail_group)
+
     ai_group = parser.add_argument_group("AI Review Options")
-    add_ai_arguments(ai_group)
+    add_ai_arguments(ai_group, config)
 
     aicodereview_group = parser.add_argument_group("AiCodeReview Options")
     add_aicodereview_arguments(aicodereview_group)
@@ -69,7 +79,27 @@ def parse_args(config: dict) -> argparse.Namespace:
         help="Directory to save the review results. (default: %(default)s)",
     )
 
-    return parser.parse_args()
+    args = parser.parse_args()
+
+    used_mail_args = [
+        action.option_strings[0]
+        for action in mail_group._group_actions
+        if getattr(args, action.dest) != action.default
+    ]
+
+    if not args.mail and used_mail_args:
+        parser.error(f"{', '.join(used_mail_args)} may only be used with --mail")
+    if args.mail and args.commits is not None:
+        parser.error("--commits is not used in --mail mode")
+    if args.mail and args.repo_path is not None:
+        parser.error("--repo-path is not used in --mail mode")
+
+    if args.commits is None:
+        args.commits = ["HEAD"]
+    if args.repo_path is None:
+        args.repo_path = str(Path.cwd())
+
+    return args
 
 
 def get_commits(repo: Repo, commits: list[str]) -> list[Commit]:
@@ -95,27 +125,7 @@ def get_commits(repo: Repo, commits: list[str]) -> list[Commit]:
         return [repo.commit(ref) for ref in commits]
 
 
-def main():
-    config = parse_config()
-
-    api_key_conf = config["api_key_disclaimer"]
-
-    if not api_key_conf["no_reprompt"]:
-        selected_option = display_prompt_with_options(
-            api_key_conf["message"], api_key_conf["options"]
-        )
-        if selected_option == "Yes. Don't show again":
-            api_key_conf["no_reprompt"] = True
-            update_user_config(config)
-        elif selected_option != "Yes":
-            return
-
-    args = parse_args(config)
-
-    setup_logger(log_file=args.log_file, log_level=args.log_level)
-
-    apply_ai_args(args)
-
+def run_local_mode(args: argparse.Namespace) -> None:
     reviews = get_selected_reviews_from_args(args)
 
     if (args.url is not None or args.cache_dir is not None) and not (
@@ -166,6 +176,33 @@ def main():
             with open(output_file, "w", encoding="utf-8") as f:
                 f.write(fix_text)
             logger.info(f"Saved {fix_name} results to {output_file}")
+
+
+def main():
+    config = parse_config()
+
+    api_key_conf = config["api_key_disclaimer"]
+
+    if not api_key_conf["no_reprompt"]:
+        selected_option = display_prompt_with_options(
+            api_key_conf["message"], api_key_conf["options"]
+        )
+        if selected_option == "Yes. Don't show again":
+            api_key_conf["no_reprompt"] = True
+            update_user_config(config)
+        elif selected_option != "Yes":
+            return
+
+    args = parse_args(config)
+
+    setup_logger(log_file=args.log_file, log_level=args.log_level)
+
+    apply_ai_args(args)
+
+    if args.mail:
+        run_mail_mode(args)
+    else:
+        run_local_mode(args)
 
 
 if __name__ == "__main__":

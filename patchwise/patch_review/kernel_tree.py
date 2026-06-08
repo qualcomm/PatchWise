@@ -3,6 +3,7 @@
 
 import logging
 import shutil
+import subprocess
 from pathlib import Path
 
 from git import GitCommandError, RemoteProgress, Repo
@@ -81,6 +82,34 @@ def init_kernel_tree(path: Path = KERNEL_PATH) -> Repo:
     fetch_and_branch(repo)
 
     return repo
+
+
+def reset_to_commit(repo: Repo, sha: str) -> bool:
+    """Reset the working tree to *sha*, fetching it from the kernel tree's
+    remotes first. Returns ``True`` on success."""
+    for remote in repo.remotes:
+        try:
+            subprocess.run(
+                ["git", "fetch", remote.name, sha],
+                check=True,
+                capture_output=True,
+                cwd=repo.working_tree_dir,
+            )
+            break
+        except subprocess.CalledProcessError:
+            continue
+    else:
+        logger.warning(f"base-commit {sha} not reachable from any remote")
+        return False
+
+    try:
+        repo.git.reset("--hard", sha)
+    except Exception as e:
+        logger.warning(f"Failed to reset to base-commit {sha}: {e}")
+        return False
+
+    logger.info(f"Reset kernel tree to submitter base-commit {sha}")
+    return True
 
 
 def create_git_worktree(

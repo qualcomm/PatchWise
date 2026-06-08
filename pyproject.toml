@@ -24,7 +24,8 @@ dependencies = [
     "platformdirs>=4.3.8",
     "requests>=2.31.0",
     "sentence-transformers>=5.6.0",
-    "chromadb>=1.5.9"
+    "chromadb>=1.5.9",
+    "imapclient>=3.0.0"
 ]
 
 [project.scripts]
