@@ -3,7 +3,27 @@ log_level: "INFO"
 git_committer:
     name: "Patchwise"
     email: "patchwise@qualcomm.com"
+ai:
+    model: "openai/Pro"
+    provider: "https://api.openai.com/v1"
 api_key_disclaimer:
     message: "PatchWise uses LiteLLM to interact with your preferred model provider (default: OpenAI). LiteLLM will automatically retrieve the API key from your environment variables if it is set based on the API URL provided to LiteLLM (default: OpenAI). Please confirm that you acknowledge that your API key may be used, if set in your environment. Select 'Yes' to proceed, 'No' to abort, and 'Yes. Don't show again' to proceed and disable this prompt."
     options: ["Yes", "No", "Yes. Don't show again"]
     no_reprompt: false
+mail:
+    email: "patchwise@qualcomm.com"
+    password: ""
+    from_email: "Patchwise <patchwise@qualcomm.com>"
+    accepted_sender_domains: []
+    accepted_lists: []
+    deprecated_lists: {}
+    always_cc: []
+    send_mode: 2
+    imap:
+        server: "imap.gmail.com"
+        port: 993
+        ssl: true
+    smtp:
+        server: "smtp.gmail.com"
+        port: 465
+        ssl: true

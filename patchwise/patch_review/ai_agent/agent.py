@@ -23,7 +23,7 @@ from patchwise.utils.decorators import lru_cache_cb, retry
 
 urllib3.disable_warnings()
 
-DEFAULT_MODEL = "Pro"
+DEFAULT_MODEL = "openai/Pro"
 DEFAULT_API_BASE = "https://api.openai.com/v1"
 AGENT_MAX_ITERATIONS = 50
 

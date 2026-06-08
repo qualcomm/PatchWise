@@ -127,11 +127,61 @@ cd linux-next
 patchwise
 ```
 
+### Mail Mode
+
+Instead of reviewing local commits, PatchWise can watch a mailbox, review
+patches submitted to a mailing list, and reply with the review results. Enable
+this with `--mail`:
+
+```bash
+# Process unflagged mail once, printing the replies to stdout (does not send)
+patchwise --mail
+
+# Actually send the review replies (and flag processed mail)
+patchwise --mail --send
+
+# Keep watching the mailbox in a loop
+patchwise --mail --watch
+
+# Review a single message by its Message-ID
+patchwise --mail --message-id 20250408-example-v6-1-526c61a207f6@example.com
+```
+
+Mail mode is configured through the `mail:` block of your user config file
+(`~/.config/patchwise_config.yaml`), which is merged over the shipped defaults.
+At minimum, set the mailbox credentials and the senders/lists you accept:
+
+```yaml
+mail:
+    email: "you@example.com"
+    password: "<app-password>"
+    from_email: "PatchWise <you@example.com>"
+    accepted_sender_domains: ["example.com"]
+    accepted_lists: ["kernel@lists.example.com"]
+    always_cc: ["maintainers@example.com"]
+    send_mode: 2
+    imap:
+        server: "imap.gmail.com"
+        port: 993
+        ssl: true
+    smtp:
+        server: "smtp.gmail.com"
+        port: 465
+        ssl: true
+```
+
+`send_mode` controls who replies are addressed to:
+
+- `0`: reply only to the first `always_cc` entry (falls back to the sender if `always_cc` is empty)
+- `1`: reply to the sender, CC `always_cc`
+- `2`: reply to the sender, CC the original To/Cc recipients (filtered to `accepted_sender_domains`) plus `always_cc`
+
 ---
 
 ## Command-Line Options
 
 - `-h`, `--help`: Show help message and exit
+- `--mail`: Run the mail-handler loop instead of reviewing local commits. See [Mail Mode](#mail-mode).
 
 ### Patch Review Options
 
@@ -140,6 +190,16 @@ patchwise
 - `--reviews`: Space-separated list of reviews to run. (default: all available reviews)
 - `--short-reviews`: Run only short reviews. Overrides `--reviews`.
 - `--install`: Install missing dependencies for the specified reviews. This will not run any reviews, only install dependencies.
+- `--fix`: For each review, output a version of the commit that fixes the reported issues.
+
+### Mail Options (require `--mail`)
+
+- `--all`: Search all mail, not just unflagged mail. (default: unflagged only)
+- `--since`: Only process messages on or after this date (ISO 8601, e.g. `YYYY-MM-DD`).
+- `--before`: Only process messages before this date (ISO 8601, e.g. `YYYY-MM-DD`).
+- `--message-id`: Process only messages with the given Message-ID(s).
+- `-w`, `--watch`: Watch for new mail and process it in a loop.
+- `--send` / `--no-send`: Send the review replies, or print them to stdout instead. (default: `--no-send`)
 
 ### Ai Review Options
 

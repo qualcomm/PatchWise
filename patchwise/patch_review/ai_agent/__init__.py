@@ -8,15 +8,18 @@ from .agent import Agent
 
 def add_ai_arguments(
     parser_or_group: argparse.ArgumentParser | argparse._ArgumentGroup,
+    config: dict,
 ):
+    ai = config.get("ai", {})
+
     parser_or_group.add_argument(
         "--model",
-        default=f"openai/{Agent.model}",
+        default=ai.get("model") or Agent.model,
         help="The AI model to use for review. (default: %(default)s)",
     )
     parser_or_group.add_argument(
         "--provider",
-        default=Agent.api_base,
+        default=ai.get("provider") or Agent.api_base,
         help="The base URL for the AI model API. (default: %(default)s)",
     )
     parser_or_group.add_argument(
