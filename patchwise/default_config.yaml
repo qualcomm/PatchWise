@@ -18,6 +18,7 @@ mail:
     accepted_lists: []
     deprecated_lists: {}
     always_cc: []
+    additional_cc: []
     send_mode: 2
     imap:
         server: "imap.gmail.com"

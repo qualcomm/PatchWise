@@ -27,10 +27,10 @@ class MailClient:
 
     send_mode values
     ----------------
-    0 - Respond only to the first entry of MailConfig.always_cc.
+    0 - Respond only to MailConfig.always_cc.
     1 - Respond to From & MailConfig.always_cc.
-    2 - Respond to From, To, Cc (filtered to MailConfig.accepted_sender_domains)
-        & MailConfig.always_cc.
+    2 - Respond to From, To, Cc (filtered to MailConfig.accepted_sender_domains),
+        MailConfig.always_cc & MailConfig.additional_cc.
     """
 
     def __init__(self, config: MailConfig, send: bool = False) -> None:
@@ -104,13 +104,14 @@ class MailClient:
             send_mode = self._config.send_mode
 
         always_cc = self._config.always_cc
+        additional_cc = self._config.additional_cc
         accepted_domains = self._config.accepted_sender_domains
 
         if send_mode == 0:
             # Fall back to the sender when no fixed recipient is configured, so
             # error replies still go out instead of raising IndexError.
             out["To"] = (
-                always_cc[0] if always_cc else (message["Reply-To"] or message["From"])
+                ", ".join(always_cc) if always_cc else (message["Reply-To"] or message["From"])
             )
         elif send_mode == 1:
             out["To"] = message["Reply-To"] or message["From"]
@@ -127,7 +128,7 @@ class MailClient:
                     )
             cc_list: List[str] = list(orig_ccs)
             # Add required CCs if not already present (case-insensitive)
-            for req_cc in always_cc:
+            for req_cc in always_cc + additional_cc:
                 if not any(req_cc.lower() == addr.lower() for addr in cc_list):
                     cc_list.append(req_cc)
             out["Cc"] = ", ".join(addr for addr in cc_list if addr)
