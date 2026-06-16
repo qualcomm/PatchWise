@@ -4,7 +4,7 @@
 from email import utils
 from email.header import decode_header, make_header
 from email.message import EmailMessage
-from typing import Iterable, Optional
+from typing import Dict, Iterable, Optional
 import logging
 import re
 

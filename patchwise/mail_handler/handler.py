@@ -103,6 +103,15 @@ def should_ignore(msg: EmailMessage, config: MailConfig) -> bool:
         logger.info(f"Subject is a reply: {msg['Message-Id']}")
         return True
 
+    if msg.get("From"):
+        _, patchwise_from_email = utils.parseaddr(config.from_email)
+        _, from_email = utils.parseaddr(msg["From"])
+        if (
+            re.search(r"patchwise", msg["From"], re.IGNORECASE)
+            or patchwise_from_email.lower() == from_email.lower()
+        ):
+            return True
+
     return False
 
 

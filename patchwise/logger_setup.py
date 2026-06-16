@@ -4,6 +4,7 @@
 import argparse
 import logging
 import os
+from typing import Dict
 
 from patchwise import SANDBOX_PATH
 
@@ -67,7 +68,7 @@ def setup_logger(log_file: str = LOG_PATH, log_level: str = "INFO"):
 
 
 def add_logging_arguments(
-    parser_or_group: argparse.ArgumentParser | argparse._ArgumentGroup, config: dict
+    parser_or_group: argparse.ArgumentParser | argparse._ArgumentGroup, config: Dict
 ):
     parser_or_group.add_argument(
         "--log-level",

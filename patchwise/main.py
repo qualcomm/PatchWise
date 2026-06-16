@@ -5,6 +5,7 @@ import argparse
 import logging
 import sys
 from pathlib import Path
+from typing import Dict
 
 from git import Repo
 from git.objects.commit import Commit
@@ -30,7 +31,7 @@ from .utils.tui import display_prompt_with_options
 logger = logging.getLogger(__name__)
 
 
-def parse_args(config: dict) -> argparse.Namespace:
+def parse_args(config: Dict) -> argparse.Namespace:
     parser = argparse.ArgumentParser(formatter_class=RichHelpFormatter)
 
     parser.add_argument(

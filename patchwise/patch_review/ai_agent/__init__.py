@@ -2,13 +2,14 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import argparse
+from typing import Dict
 
 from .agent import Agent
 
 
 def add_ai_arguments(
     parser_or_group: argparse.ArgumentParser | argparse._ArgumentGroup,
-    config: dict,
+    config: Dict,
 ):
     ai = config.get("ai", {})
 
