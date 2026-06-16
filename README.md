@@ -133,6 +133,10 @@ Instead of reviewing local commits, PatchWise can watch a mailbox, review
 patches submitted to a mailing list, and reply with the review results. Enable
 this with `--mail`:
 
+> **Note:** Mail mode reviews patches against its own kernel tree in the sandbox
+> (default `/tmp/patchwise/sandbox`, override with `PATCHWISE_SANDBOX_PATH`). It
+> does not use `--repo-path`.
+
 ```bash
 # Process unflagged mail once, printing the replies to stdout (does not send)
 patchwise --mail
@@ -159,6 +163,7 @@ mail:
     accepted_sender_domains: ["example.com"]
     accepted_lists: ["kernel@lists.example.com"]
     always_cc: ["maintainers@example.com"]
+    additional_cc: ["kernel@lists.example.com"]
     send_mode: 2
     imap:
         server: "imap.gmail.com"
@@ -172,9 +177,9 @@ mail:
 
 `send_mode` controls who replies are addressed to:
 
-- `0`: reply only to the first `always_cc` entry (falls back to the sender if `always_cc` is empty)
+- `0`: reply only to `always_cc` entries (falls back to the sender if `always_cc` is empty)
 - `1`: reply to the sender, CC `always_cc`
-- `2`: reply to the sender, CC the original To/Cc recipients (filtered to `accepted_sender_domains`) plus `always_cc`
+- `2`: reply to the sender, CC the original To/Cc recipients (filtered to `accepted_sender_domains`) plus `always_cc` plus `additional_cc`
 
 ---
 

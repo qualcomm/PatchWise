@@ -38,6 +38,7 @@ class MailConfig:
     accepted_lists: List[str]
     deprecated_lists: Dict[str, DeprecatedList]
     always_cc: List[str]
+    additional_cc: List[str]
     send_mode: int
     imap: ImapConfig
     smtp: SmtpConfig
@@ -57,6 +58,7 @@ class MailConfig:
             accepted_lists=list(raw["accepted_lists"]),
             deprecated_lists=deprecated,
             always_cc=list(raw["always_cc"]),
+            additional_cc=list(raw["additional_cc"]),
             send_mode=int(raw["send_mode"]),
             imap=ImapConfig(**raw["imap"]),
             smtp=SmtpConfig(**raw["smtp"]),
