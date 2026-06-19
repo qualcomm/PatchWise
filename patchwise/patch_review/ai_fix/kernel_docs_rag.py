@@ -6,6 +6,11 @@ RAG (Retrieval-Augmented Generation) for Linux Kernel Documentation.
 
 This module provides runtime indexing and retrieval of Linux kernel documentation
 from Documentation/ directory to ensure 100% upstream compliance.
+
+Implementation notes:
+- Uses a local embedding model (sentence-transformers) for all embeddings.
+- Uses ChromaDB as the vector store.
+- No dependence on OpenAI / QGenie / external embedding APIs.
 """
 
 import logging
@@ -25,11 +30,11 @@ except ImportError:
     CHROMADB_AVAILABLE = False
 
 try:
-    import litellm
+    from sentence_transformers import SentenceTransformer
 
-    LITELLM_AVAILABLE = True
+    SENTENCE_TRANSFORMERS_AVAILABLE = True
 except ImportError:
-    LITELLM_AVAILABLE = False
+    SENTENCE_TRANSFORMERS_AVAILABLE = False
 
 
 class KernelDocRAG:
@@ -52,12 +57,15 @@ class KernelDocRAG:
         "process/kernel-docs.rst",
     ]
 
+    # Default local embedding model; can be changed if needed
+    DEFAULT_EMBED_MODEL = "all-MiniLM-L6-v2"
+
     def __init__(self, repo_path: str, logger: Optional[logging.Logger] = None):
         """
         Initialize RAG system.
 
         Args:
-            repo_path: Path to Linux kernel repository
+            repo_path: Path to Linux kernel repository (host-side checkout)
             logger: Optional logger instance
         """
         self.repo_path = Path(repo_path)
@@ -65,20 +73,27 @@ class KernelDocRAG:
         self.logger = logger or logging.getLogger(__name__)
 
         # Temporary directory for ChromaDB
-        self.temp_dir = None
+        self.temp_dir: Optional[str] = None
         self.collection = None
         self.client = None
 
+        # Embedding model
+        self.embed_model: Optional[SentenceTransformer] = None
+
         # Check dependencies
         if not CHROMADB_AVAILABLE:
-            self.logger.warning("ChromaDB not available. RAG will be disabled.")
-        if not LITELLM_AVAILABLE:
-            self.logger.warning("litellm not available. RAG will be disabled.")
+            self.logger.warning("ChromaDB not available. KernelDocRAG will be disabled.")
+        if not SENTENCE_TRANSFORMERS_AVAILABLE:
+            self.logger.warning(
+                "sentence-transformers not available. KernelDocRAG will be disabled."
+            )
 
     def __enter__(self):
         """Context manager entry - initialize RAG."""
-        if CHROMADB_AVAILABLE and LITELLM_AVAILABLE:
+        if CHROMADB_AVAILABLE and SENTENCE_TRANSFORMERS_AVAILABLE:
             self._initialize_rag()
+        else:
+            self.logger.debug("KernelDocRAG dependencies missing; skipping initialization.")
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -86,7 +101,7 @@ class KernelDocRAG:
         self._cleanup_rag()
 
     def _initialize_rag(self):
-        """Initialize RAG system with temporary ChromaDB."""
+        """Initialize RAG system with temporary ChromaDB and local embeddings."""
         try:
             self.logger.info("Initializing Kernel Documentation RAG...")
 
@@ -94,12 +109,12 @@ class KernelDocRAG:
             self.temp_dir = tempfile.mkdtemp(prefix="kernel_doc_rag_")
             self.logger.debug(f"Created temp RAG directory: {self.temp_dir}")
 
-            # Initialize ChromaDB client (new API)
+            # Initialize ChromaDB client
             self.client = chromadb.PersistentClient(
                 path=self.temp_dir,
                 settings=Settings(
                     anonymized_telemetry=False,
-                )
+                ),
             )
 
             # Create collection
@@ -107,6 +122,12 @@ class KernelDocRAG:
                 name="kernel_docs",
                 metadata={"description": "Linux kernel documentation"},
             )
+
+            # Initialize local embedding model
+            self.logger.debug(
+                f"Loading local embedding model: {self.DEFAULT_EMBED_MODEL}"
+            )
+            self.embed_model = SentenceTransformer(self.DEFAULT_EMBED_MODEL)
 
             # Index documentation
             self._index_documentation()
@@ -125,11 +146,24 @@ class KernelDocRAG:
                 self.logger.debug(f"Cleaned up RAG directory: {self.temp_dir}")
         except Exception as e:
             self.logger.warning(f"Failed to cleanup RAG: {e}")
+        finally:
+            self.temp_dir = None
+            self.collection = None
+            self.client = None
+            self.embed_model = None
+
+    # -------------------------------------------------------------------------
+    # Indexing
+    # -------------------------------------------------------------------------
 
     def _index_documentation(self):
         """Index kernel documentation into vector database."""
         if not self.doc_path.exists():
             self.logger.warning(f"Documentation path not found: {self.doc_path}")
+            return
+
+        if not self.collection or not self.embed_model:
+            self.logger.debug("RAG backend not initialized; skipping indexing.")
             return
 
         self.logger.info("Indexing kernel documentation...")
@@ -154,6 +188,9 @@ class KernelDocRAG:
         Returns:
             Number of chunks indexed
         """
+        if not self.collection or not self.embed_model:
+            return 0
+
         try:
             with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
                 content = f.read()
@@ -164,11 +201,10 @@ class KernelDocRAG:
             if not chunks:
                 return 0
 
-            # Prepare for indexing
-            ids = []
-            documents = []
-            metadatas = []
-            embeddings = []
+            ids: List[str] = []
+            documents: List[str] = []
+            metadatas: List[Dict] = []
+            embeddings: List[List[float]] = []
 
             for i, (chunk_text, chunk_meta) in enumerate(chunks):
                 chunk_id = f"{file_path.stem}_{i}"
@@ -182,20 +218,14 @@ class KernelDocRAG:
                 }
                 metadatas.append(metadata)
 
-                # Generate embedding using litellm
                 try:
-                    response = litellm.embedding(
-                        model="text-embedding-ada-002",  # Can be configured
-                        input=[chunk_text],
-                    )
-                    embedding = response.data[0]["embedding"]
-                    embeddings.append(embedding)
+                    emb = self.embed_model.encode(chunk_text).tolist()
+                    embeddings.append(emb)
                 except Exception as e:
-                    self.logger.warning(f"Failed to generate embedding: {e}")
+                    self.logger.warning(f"Failed to generate embedding for {file_path}: {e}")
                     continue
 
-            # Add to collection
-            if embeddings:  # Only add if we have embeddings
+            if embeddings:
                 self.collection.add(
                     ids=ids,
                     documents=documents,
@@ -222,7 +252,7 @@ class KernelDocRAG:
         Returns:
             List of (chunk_text, metadata) tuples
         """
-        chunks = []
+        chunks: List[Tuple[str, Dict]] = []
 
         # For RST files, split by sections
         if filename.endswith(".rst"):
@@ -265,6 +295,20 @@ class KernelDocRAG:
 
         return chunks
 
+    # -------------------------------------------------------------------------
+    # Retrieval
+    # -------------------------------------------------------------------------
+
+    def _embed_query(self, text: str) -> Optional[List[float]]:
+        """Embed a query string using the local embedding model."""
+        if not self.embed_model:
+            return None
+        try:
+            return self.embed_model.encode(text).tolist()
+        except Exception as e:
+            self.logger.error(f"Failed to embed query: {e}")
+            return None
+
     def retrieve_relevant_docs(
         self, query: str, issue_type: Optional[str] = None, top_k: int = 5
     ) -> List[Dict[str, str]]:
@@ -279,7 +323,7 @@ class KernelDocRAG:
         Returns:
             List of relevant documentation chunks with metadata
         """
-        if not self.collection:
+        if not self.collection or not self.embed_model:
             self.logger.warning("RAG not initialized, returning empty results")
             return []
 
@@ -289,14 +333,8 @@ class KernelDocRAG:
             if issue_type:
                 enhanced_query = f"{issue_type}: {query}"
 
-            # Generate query embedding using litellm
-            try:
-                response = litellm.embedding(
-                    model="text-embedding-ada-002", input=[enhanced_query]
-                )
-                query_embedding = response.data[0]["embedding"]
-            except Exception as e:
-                self.logger.error(f"Failed to generate query embedding: {e}")
+            query_embedding = self._embed_query(enhanced_query)
+            if query_embedding is None:
                 return []
 
             # Query collection
@@ -306,15 +344,15 @@ class KernelDocRAG:
                 include=["documents", "metadatas", "distances"],
             )
 
-            # Format results
-            docs = []
-            if results and results["documents"]:
+            docs: List[Dict[str, str]] = []
+            if results and results.get("documents"):
                 for i, doc in enumerate(results["documents"][0]):
                     metadata = (
-                        results["metadatas"][0][i] if results["metadatas"] else {}
+                        results["metadatas"][0][i] if results.get("metadatas") else {}
                     )
+                    distance_list = results.get("distances") or [[]]
                     distance = (
-                        results["distances"][0][i] if results["distances"] else 1.0
+                        distance_list[0][i] if distance_list[0] else 1.0
                     )
 
                     docs.append(
@@ -323,7 +361,7 @@ class KernelDocRAG:
                             "file": metadata.get("file", "unknown"),
                             "section": metadata.get("section", ""),
                             "title": metadata.get("title", ""),
-                            "relevance": 1.0 - distance,  # Convert distance to relevance
+                            "relevance": 1.0 - float(distance),  # Convert distance to relevance
                             "priority": metadata.get("priority", False),
                         }
                     )
@@ -333,6 +371,10 @@ class KernelDocRAG:
         except Exception as e:
             self.logger.error(f"Failed to retrieve docs: {e}")
             return []
+
+    # -------------------------------------------------------------------------
+    # Convenience helpers for fixers
+    # -------------------------------------------------------------------------
 
     def get_coding_style_guidelines(self) -> str:
         """Get general coding style guidelines."""
@@ -351,7 +393,7 @@ class KernelDocRAG:
         Returns:
             Formatted guidelines string
         """
-        all_docs = []
+        all_docs: List[Dict[str, str]] = []
 
         for issue_type in issue_types[:5]:  # Limit to 5 issue types
             docs = self.retrieve_relevant_docs(
@@ -361,7 +403,7 @@ class KernelDocRAG:
 
         # Deduplicate by file+section
         seen = set()
-        unique_docs = []
+        unique_docs: List[Dict[str, str]] = []
         for doc in all_docs:
             key = (doc["file"], doc["section"])
             if key not in seen:
@@ -380,7 +422,7 @@ class KernelDocRAG:
         Returns:
             Formatted guidelines string
         """
-        all_docs = []
+        all_docs: List[Dict[str, str]] = []
 
         for issue_type in issue_types[:5]:  # Limit to 5 issue types
             docs = self.retrieve_relevant_docs(
@@ -390,7 +432,7 @@ class KernelDocRAG:
 
         # Deduplicate by file+section
         seen = set()
-        unique_docs = []
+        unique_docs: List[Dict[str, str]] = []
         for doc in all_docs:
             key = (doc["file"], doc["section"])
             if key not in seen:
@@ -421,5 +463,7 @@ class KernelDocRAG:
     def is_available(self) -> bool:
         """Check if RAG is available and initialized."""
         return (
-            CHROMADB_AVAILABLE and LITELLM_AVAILABLE and self.collection is not None
+            CHROMADB_AVAILABLE
+            and SENTENCE_TRANSFORMERS_AVAILABLE
+            and self.collection is not None
         )
