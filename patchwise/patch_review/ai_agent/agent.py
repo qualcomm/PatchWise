@@ -1571,6 +1571,140 @@ class Agent:
             },
         }
 
+    def _tool_run_checkpatch(self, file_path: Optional[str] = None) -> Dict[str, Any]:
+        """Run scripts/checkpatch.pl on current changes to verify fixes."""
+        # Validate optional kernel-relative path (for future filtering)
+        if file_path:
+            try:
+                self._validate_existing_kernel_path(file_path)
+            except ValueError as e:
+                return {"ok": False, "error": str(e)}
+
+        kernel_dir = str(self.docker_manager.kernel_dir)
+
+        try:
+            # Ensure checkpatch.pl exists in the container kernel tree
+            checkpatch_path = os.path.join(kernel_dir, "scripts", "checkpatch.pl")
+            check_proc = self.docker_manager.run_command(
+                ["test", "-x", checkpatch_path],
+                cwd=None,
+            )
+            check_proc.communicate()
+            if check_proc.returncode != 0:
+                return {"ok": False, "error": "checkpatch.pl not found in kernel tree"}
+
+            # Pipe current diff directly into checkpatch.pl inside the container
+            proc = self.docker_manager.run_command(
+                ["sh", "-c", "git diff HEAD | scripts/checkpatch.pl -"],
+                cwd=kernel_dir,
+            )
+            stdout, _ = proc.communicate()
+
+            output = stdout if stdout else b""
+            if isinstance(output, bytes):
+                output_str = output.decode(errors="ignore")
+            else:
+                output_str = str(output)
+
+            if not output_str.strip():
+                return {
+                    "ok": True,
+                    "result": "No changes to check. Make some edits first.",
+                }
+
+            if "total: 0 errors, 0 warnings" in output_str:
+                return {
+                    "ok": True,
+                    "result": "✓ SUCCESS: All checkpatch issues fixed! No errors or warnings remain.",
+                }
+            return {
+                "ok": True,
+                "result": (
+                    f"Checkpatch output:\n{output_str}\n\n"
+                    "Issues remain. Please fix them and run checkpatch again."
+                ),
+            }
+        except Exception as e:
+            self.logger.error(f"Error running checkpatch: {e}")
+            return {"ok": False, "error": f"Error running checkpatch: {e}"}
+
+    def _tool_run_sparse(self, file_path: Optional[str] = None) -> Dict[str, Any]:
+        """Run sparse on modified C files to verify fixes."""
+        kernel_dir = str(self.docker_manager.kernel_dir)
+
+        # Validate optional kernel-relative path and normalize to a rel path
+        rel_file: Optional[str] = None
+        if file_path:
+            try:
+                rel_file = self._validate_existing_kernel_path(file_path)
+            except ValueError as e:
+                return {"ok": False, "error": str(e)}
+
+        try:
+            proc = self.docker_manager.run_command(
+                ["git", "diff", "--name-only", "HEAD~1"],
+                cwd=kernel_dir,
+            )
+            stdout, _ = proc.communicate()
+
+            if proc.returncode != 0:
+                return {"ok": False, "error": "Failed to get modified files"}
+
+            if isinstance(stdout, bytes):
+                lines = stdout.decode().splitlines()
+            else:
+                lines = str(stdout).splitlines()
+
+            modified_files = [f.strip() for f in lines if f.strip()]
+
+            if rel_file:
+                files_to_check = [rel_file] if rel_file in modified_files else []
+            else:
+                files_to_check = [
+                    f for f in modified_files if f.endswith((".c", ".h"))
+                ]
+
+            if not files_to_check:
+                return {"ok": True, "result": "No C files to check"}
+
+            all_output: List[str] = []
+            has_warnings = False
+
+            for file in files_to_check:
+                proc = self.docker_manager.run_command(
+                    ["make", "C=2", file.replace(".c", ".o")],
+                    cwd=kernel_dir,
+                )
+                stdout, stderr = proc.communicate()
+                out_bytes = b""
+                if stdout:
+                    out_bytes += stdout
+                if stderr:
+                    out_bytes += stderr
+                output = out_bytes.decode(errors="ignore")
+
+                if "warning:" in output or "error:" in output:
+                    has_warnings = True
+                    all_output.append(f"\n=== {file} ===\n{output}")
+
+            if not has_warnings:
+                return {
+                    "ok": True,
+                    "result": "✓ SUCCESS: All sparse issues fixed! No warnings or errors remain.",
+                }
+
+            combined_output = "\n".join(all_output)
+            return {
+                "ok": True,
+                "result": (
+                    f"Sparse output:\n{combined_output}\n\n"
+                    "Issues remain. Please fix them and run sparse again."
+                ),
+            }
+        except Exception as e:
+            self.logger.error(f"Error running sparse: {e}")
+            return {"ok": False, "error": f"Error running sparse: {e}"}
+
     def _container_path(self, file: str) -> str:
         return f"{self.docker_manager.kernel_dir}/{file}"
 
@@ -1616,6 +1750,8 @@ class Agent:
             "git_log": self._tool_git_log,
             "git_show": self._tool_git_show,
             "git_cat_file": self._tool_git_cat_file,
+            "run_checkpatch": self._tool_run_checkpatch,
+            "run_sparse": self._tool_run_sparse,
         }
         tool_fn = read_tools.get(name)
 
