@@ -145,115 +145,7 @@ that your fixes actually resolved the issues. This is a self-correction loop.
         
         # RAG will be initialized in context manager during run()
         self.rag = None
-        
-        # Add checkpatch verification tool to the agent
-        self._add_checkpatch_tool()
 
-    def _add_checkpatch_tool(self):
-        """Add run_checkpatch tool to the agent's available tools."""
-        checkpatch_tool = {
-            "type": "function",
-            "function": {
-                "name": "run_checkpatch",
-                "description": "Run checkpatch.pl on the current changes to verify fixes. Returns checkpatch output showing remaining issues or success.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "file_path": {
-                            "type": "string",
-                            "description": "Optional: specific file to check. If not provided, checks all modified files.",
-                        }
-                    },
-                    "required": [],
-                },
-            },
-        }
-        
-        # Add the tool to agent's tools
-        if hasattr(self.agent, 'tools'):
-            self.agent.tools.append(checkpatch_tool)
-        
-        # Register the tool handler
-        if hasattr(self.agent, 'tool_handlers'):
-            self.agent.tool_handlers['run_checkpatch'] = self._handle_run_checkpatch
-
-    def _handle_run_checkpatch(self, file_path: str = None) -> str:
-        """Handle run_checkpatch tool call from the AI.
-        
-        Args:
-            file_path: Optional specific file to check
-            
-        Returns:
-            Checkpatch output or success message
-        """
-        kernel_dir = str(self.patch_review.docker_manager.kernel_dir)
-        
-        try:
-            # Generate a patch from current changes
-            proc = self.patch_review.docker_manager.run_command(
-                ["git", "diff", "HEAD"],
-                cwd=kernel_dir
-            )
-            diff_output, _ = proc.communicate()
-            
-            if proc.returncode != 0 or not diff_output:
-                return "No changes to check. Make some edits first."
-            
-            # Write diff to temporary file
-            with tempfile.NamedTemporaryFile(
-                mode='wb', suffix='.patch', delete=False, dir=kernel_dir
-            ) as f:
-                f.write(diff_output)
-                temp_patch = f.name
-            
-            # Run checkpatch
-            checkpatch_path = os.path.join(kernel_dir, 'scripts', 'checkpatch.pl')
-            if not os.path.exists(checkpatch_path):
-                os.unlink(temp_patch)
-                return "checkpatch.pl not found in kernel tree"
-            
-            proc = self.patch_review.docker_manager.run_command(
-                [checkpatch_path, temp_patch],
-                cwd=kernel_dir
-            )
-            stdout, _ = proc.communicate()
-            
-            # Cleanup
-            os.unlink(temp_patch)
-            
-            output = stdout if stdout else ""
-            
-            if "total: 0 errors, 0 warnings" in output:
-                return "✓ SUCCESS: All checkpatch issues fixed! No errors or warnings remain."
-            else:
-                return f"Checkpatch output:\n{output}\n\nIssues remain. Please fix them and run checkpatch again."
-                
-        except Exception as e:
-            self.logger.error(f"Error running checkpatch: {e}")
-            return f"Error running checkpatch: {str(e)}"
-
-    @classmethod
-    def _strip_trailers(cls, msg: str) -> str:
-        """Drop attribution and routing trailers from a commit message."""
-        stripped_trailers = (
-            "co-authored-by",
-            "signed-off-by",
-            "reviewed-by",
-            "acked-by",
-            "tested-by",
-            "cc",
-            "change-id",
-        )
-        kept = []
-        for line in msg.splitlines():
-            lower = line.strip().lower()
-            if any(lower.startswith(f"{t}:") for t in stripped_trailers):
-                continue
-            kept.append(line)
-        # Strip trailing new lines
-        while kept and not kept[-1].strip():
-            kept.pop()
-        return "\n".join(kept) + "\n"
 
     def _apply_script_fixes(self) -> bool:
         """Apply script-based fixes to the working tree before AI processing.
@@ -423,48 +315,6 @@ that your fixes actually resolved the issues. This is a self-correction loop.
             self.logger.debug(f"checkpatch --fix not available or failed: {e}")
             return False
 
-    def _generate_git_patch(self) -> str:
-        """Produce an mbox-format patch reflecting the AI's working-tree edits."""
-        kernel_dir = str(self.patch_review.docker_manager.kernel_dir)
-
-        proc = self.patch_review.docker_manager.run_command(
-            ["git", "diff", "--quiet", "HEAD"], cwd=kernel_dir
-        )
-        proc.communicate()
-        if proc.returncode == 0:
-            self.logger.debug("No working-tree changes from AI; no patch fix.")
-            return ""
-
-        proc = self.patch_review.docker_manager.run_command(
-            ["git", "log", "-1", "--format=%B"], cwd=kernel_dir
-        )
-        orig_msg, stderr = proc.communicate()
-        if proc.returncode != 0:
-            raise RuntimeError(f"git log failed: {stderr}")
-        new_msg = self._strip_trailers(orig_msg)
-
-        proc = self.patch_review.docker_manager.run_interactive_command(
-            ["git", "commit", "-a", "--amend", "-F", "-"],
-            cwd=kernel_dir,
-        )
-        _stdout, stderr = proc.communicate(input=new_msg)
-        if proc.returncode != 0:
-            raise RuntimeError(f"git commit --amend failed: {stderr}")
-
-        proc = self.patch_review.docker_manager.run_command(
-            [
-                "git",
-                "format-patch",
-                "HEAD~1",
-                "--stdout",
-            ],
-            cwd=kernel_dir,
-        )
-        stdout, stderr = proc.communicate()
-        if proc.returncode != 0:
-            raise RuntimeError(f"git format-patch failed: {stderr}")
-        return stdout.strip()
-
     def _has_commit_message_issues(self, checkpatch_output: str) -> bool:
         """Check if checkpatch output contains commit message warnings."""
         return "COMMIT_MESSAGE" in checkpatch_output or "COMMIT_LOG" in checkpatch_output
@@ -626,7 +476,10 @@ Provide ONLY the corrected commit message, nothing else."""
         rag_manager = None
         if RAG_AVAILABLE and KernelDocRAG:
             try:
-                rag_manager = KernelDocRAG(kernel_dir, logger=self.logger)
+                # Use host-side repo working directory for documentation RAG,
+                # not the container kernel path.
+                host_repo_dir = str(self.patch_review.repo.working_dir)
+                rag_manager = KernelDocRAG(host_repo_dir, logger=self.logger)
                 rag_manager.__enter__()
             except Exception as e:
                 self.logger.warning(f"Failed to initialize RAG system: {e}")
