@@ -203,7 +203,13 @@ Add NULL checks before dereferencing pointers.
             self.logger.warning("Failed to get modified files")
             return False
 
-        modified_files = [f.strip() for f in stdout.decode().splitlines() if f.strip()]
+        # stdout may already be a str depending on DockerManager; handle both
+        if isinstance(stdout, bytes):
+            lines = stdout.decode().splitlines()
+        else:
+            lines = str(stdout).splitlines()
+
+        modified_files = [f.strip() for f in lines if f.strip()]
         
         for file_path in modified_files:
             if not file_path.endswith(('.c', '.h')):
