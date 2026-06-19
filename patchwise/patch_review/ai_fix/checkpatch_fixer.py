@@ -28,6 +28,15 @@ except ImportError:
 
 @register_fix(Checkpatch)
 class CheckpatchFixer(AiFix):
+    TRAILER_PREFIXES_TO_PRESERVE = (
+        "Signed-off-by:",
+        "Co-authored-by:",
+        "Reviewed-by:",
+        "Acked-by:",
+        "Tested-by:",
+        "Cc:",
+    )
+
     """AI-powered checkpatch fixer based on checkpatch findings.
 
     This fixer uses a two-stage approach:
@@ -318,7 +327,76 @@ that your fixes actually resolved the issues. This is a self-correction loop.
     def _has_commit_message_issues(self, checkpatch_output: str) -> bool:
         """Check if checkpatch output contains commit message warnings."""
         return "COMMIT_MESSAGE" in checkpatch_output or "COMMIT_LOG" in checkpatch_output
-    
+
+    def _extract_preserved_trailers(self, commit_msg: str) -> list[str]:
+        """Extract sign-off / attribution trailers we must preserve."""
+        trailers: list[str] = []
+        for line in commit_msg.splitlines():
+            stripped = line.strip()
+            if any(stripped.startswith(p) for p in self.TRAILER_PREFIXES_TO_PRESERVE):
+                trailers.append(line)
+        return trailers
+
+    def _restore_trailers_if_missing(self, preserved_trailers: list[str]) -> None:
+        """Ensure preserved trailers are present in the current commit message.
+
+        This compensates for base-class _strip_trailers() stripping trailers.
+        We re-attach any sign-off style lines that are missing, so we don't
+        lose Signed-off-by, Co-authored-by, etc.
+        """
+        if not preserved_trailers:
+            return
+
+        kernel_dir = str(self.patch_review.docker_manager.kernel_dir)
+
+        # Read current commit message
+        proc = self.patch_review.docker_manager.run_command(
+            ["git", "log", "-1", "--format=%B"],
+            cwd=kernel_dir,
+        )
+        current_msg_bytes, stderr = proc.communicate()
+        if proc.returncode != 0:
+            self.logger.warning(f"Failed to get current commit message for trailer restore: {stderr}")
+            return
+
+        current_msg = (
+            current_msg_bytes.decode("utf-8")
+            if isinstance(current_msg_bytes, bytes)
+            else current_msg_bytes
+        )
+
+        current_lines = current_msg.splitlines()
+        # Track which trailers are already present (string match)
+        existing = set(line.strip() for line in current_lines)
+
+        to_append: list[str] = []
+        for t in preserved_trailers:
+            if t.strip() not in existing:
+                to_append.append(t)
+
+        if not to_append:
+            # Nothing to restore
+            return
+
+        # Build new message: original current_msg (without extra trailing blank lines)
+        # plus missing trailers at the end.
+        while current_lines and not current_lines[-1].strip():
+            current_lines.pop()
+        new_lines = current_lines + to_append
+        new_msg = "\n".join(new_lines).rstrip() + "\n"
+
+        self.logger.debug(
+            f"Restoring {len(to_append)} preserved trailers into commit message"
+        )
+
+        proc = self.patch_review.docker_manager.run_interactive_command(
+            ["git", "commit", "--amend", "-F", "-"],
+            cwd=kernel_dir,
+        )
+        _stdout, stderr = proc.communicate(input=new_msg)
+        if proc.returncode != 0:
+            self.logger.warning(f"Failed to restore trailers on commit message: {stderr}")
+
     def _fix_commit_message(self, checkpatch_output: str) -> bool:
         """Use LLM to fix commit message issues.
         
@@ -432,6 +510,30 @@ Provide ONLY the corrected commit message, nothing else."""
     def run(self) -> str:
         """Run the AI checkpatch fixer with verification loop."""
         checkpatch_output = self.review_result
+
+        # Capture original commit message trailers up front so we can
+        # restore them after AI/script edits and before emitting the
+        # final patch. This avoids losing Signed-off-by, Co-authored-by,
+        # etc. even though the base AiFix._strip_trailers may strip them.
+        kernel_dir = str(self.patch_review.docker_manager.kernel_dir)
+        preserved_trailers: list[str] = []
+        try:
+            proc = self.patch_review.docker_manager.run_command(
+                ["git", "log", "-1", "--format=%B"],
+                cwd=kernel_dir,
+            )
+            orig_msg_bytes, stderr = proc.communicate()
+            if proc.returncode == 0:
+                orig_msg = (
+                    orig_msg_bytes.decode("utf-8")
+                    if isinstance(orig_msg_bytes, bytes)
+                    else orig_msg_bytes
+                )
+                preserved_trailers = self._extract_preserved_trailers(orig_msg)
+            else:
+                self.logger.warning(f"Failed to read original commit message for trailer capture: {stderr}")
+        except Exception as e:
+            self.logger.warning(f"Error capturing original commit trailers: {e}")
 
         if not checkpatch_output or checkpatch_output.strip() == "No issues found.":
             self.logger.debug(
