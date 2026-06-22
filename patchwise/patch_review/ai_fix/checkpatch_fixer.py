@@ -277,49 +277,48 @@ that your fixes actually resolved the issues. This is a self-correction loop.
         return '\n'.join(lines)
 
     def _try_checkpatch_fix(self, kernel_dir: str) -> bool:
-        """Try to apply checkpatch.pl --fix if available."""
-        checkpatch_path = os.path.join(kernel_dir, 'scripts', 'checkpatch.pl')
-        if not os.path.exists(checkpatch_path):
-            return False
+        """Try to apply checkpatch.pl --fix entirely inside the container.
 
+        This avoids creating host-side temporary files that are not visible
+        inside Docker. We run a shell pipeline that:
+        - Checks if scripts/checkpatch.pl exists and is executable
+        - Creates a temporary patch file inside the container
+        - Runs checkpatch.pl --fix-inplace on it
+        - Applies the generated .EXPERIMENTAL-checkpatch-fixes if present
+        - Cleans up temporary files
+        """
         try:
-            proc = self.patch_review.docker_manager.run_command(
-                ["git", "format-patch", "-1", "--stdout", "HEAD"],
-                cwd=kernel_dir
-            )
-            stdout, _ = proc.communicate()
+            cmd = [
+                "sh",
+                "-c",
+                (
+                    "set -e; "
+                    "CHECKPATCH=scripts/checkpatch.pl; "
+                    "if [ ! -x \"$CHECKPATCH\" ]; then exit 1; fi; "
+                    "TMP=$(mktemp /tmp/checkpatch.XXXXXX.patch); "
+                    "git format-patch -1 --stdout HEAD >\"$TMP\"; "
+                    "\"$CHECKPATCH\" --fix-inplace --no-summary \"$TMP\" || true; "
+                    "FIXED=\"$TMP.EXPERIMENTAL-checkpatch-fixes\"; "
+                    "if [ -f \"$FIXED\" ]; then "
+                    "git apply \"$FIXED\"; "
+                    "rm -f \"$FIXED\"; "
+                    "fi; "
+                    "rm -f \"$TMP\""
+                ),
+            ]
+            proc = self.patch_review.docker_manager.run_command(cmd, cwd=kernel_dir)
+            proc.communicate()
             if proc.returncode != 0:
+                # Either checkpatch.pl not found or format-patch/apply failed
+                self.logger.debug(
+                    f"checkpatch --fix-inplace pipeline failed with rc={proc.returncode}"
+                )
                 return False
 
-            with tempfile.NamedTemporaryFile(
-                mode='w', suffix='.patch', delete=False, dir=kernel_dir
-            ) as f:
-                f.write(stdout)
-                temp_patch = f.name
-
-            proc = self.patch_review.docker_manager.run_command(
-                [checkpatch_path, '--fix-inplace', '--no-summary', temp_patch],
-                cwd=kernel_dir
+            self.logger.info(
+                "Applied checkpatch.pl --fix inside container (if fixes were produced)"
             )
-            proc.communicate()
-
-            fixed_file = temp_patch + '.EXPERIMENTAL-checkpatch-fixes'
-            if os.path.exists(fixed_file):
-                proc = self.patch_review.docker_manager.run_command(
-                    ['git', 'apply', fixed_file],
-                    cwd=kernel_dir
-                )
-                proc.communicate()
-                
-                os.unlink(fixed_file)
-                os.unlink(temp_patch)
-                
-                self.logger.info("Applied checkpatch.pl --fix")
-                return True
-            
-            os.unlink(temp_patch)
-            return False
-
+            return True
         except Exception as e:
             self.logger.debug(f"checkpatch --fix not available or failed: {e}")
             return False
