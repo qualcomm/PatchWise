@@ -182,16 +182,26 @@ that your fixes actually resolved the issues. This is a self-correction loop.
             return False
 
         modified_files = [f.strip() for f in stdout.splitlines() if f.strip()]
+        self.logger.info(f"Found {len(modified_files)} modified files to process: {modified_files}")
         
         for file_path in modified_files:
-            full_path = os.path.join(kernel_dir, file_path)
-            if not os.path.exists(full_path):
-                continue
-                
             try:
-                with open(full_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    content = f.read()
+                self.logger.debug(f"Reading {file_path} from container...")
+                # Read file from container using docker_manager
+                proc = self.patch_review.docker_manager.run_command(
+                    ["cat", file_path],
+                    cwd=kernel_dir
+                )
+                content_bytes, stderr = proc.communicate()
                 
+                if proc.returncode != 0:
+                    self.logger.warning(f"Failed to read {file_path} from container (rc={proc.returncode}): {stderr}")
+                    continue
+                
+                self.logger.debug(f"Successfully read {file_path}, size: {len(content_bytes)} bytes")
+                
+                # Decode content
+                content = content_bytes.decode('utf-8', errors='ignore') if isinstance(content_bytes, bytes) else content_bytes
                 original_content = content
                 
                 # Fix trailing whitespace
@@ -207,32 +217,56 @@ that your fixes actually resolved the issues. This is a self-correction loop.
                 content = self._fix_spdx_license(content, file_path)
                 
                 if content != original_content:
-                    with open(full_path, 'w', encoding='utf-8') as f:
-                        f.write(content)
-                    changes_made = True
-                    self.logger.info(f"Applied script fixes to {file_path}")
+                    self.logger.debug(f"Content changed for {file_path}, writing back to container...")
+                    # Write file back to container using docker_manager
+                    proc = self.patch_review.docker_manager.run_interactive_command(
+                        ["tee", file_path],
+                        cwd=kernel_dir
+                    )
+                    stdout_write, stderr_write = proc.communicate(input=content)
+                    
+                    if proc.returncode == 0:
+                        changes_made = True
+                        self.logger.info(f"✓ Applied script fixes to {file_path} (wrote {len(content)} bytes)")
+                    else:
+                        self.logger.warning(f"✗ Failed to write {file_path} to container (rc={proc.returncode}): {stderr_write}")
+                else:
+                    self.logger.debug(f"No changes needed for {file_path}")
                     
             except Exception as e:
                 self.logger.warning(f"Error applying script fixes to {file_path}: {e}")
                 continue
 
         # Try checkpatch.pl --fix if available
+        self.logger.info("Attempting checkpatch.pl --fix-inplace...")
         if self._try_checkpatch_fix(kernel_dir):
             changes_made = True
+            self.logger.info("✓ checkpatch.pl --fix-inplace completed successfully")
+        else:
+            self.logger.debug("checkpatch.pl --fix-inplace not available or produced no fixes")
 
         # Commit the script fixes if any were made
         if changes_made:
+            self.logger.info("Committing script-based fixes...")
             proc = self.patch_review.docker_manager.run_command(
                 ["git", "add", "-u"], cwd=kernel_dir
             )
-            proc.communicate()
+            stdout_add, stderr_add = proc.communicate()
+            if proc.returncode != 0:
+                self.logger.warning(f"git add -u failed (rc={proc.returncode}): {stderr_add}")
+            else:
+                self.logger.debug("git add -u successful")
             
             proc = self.patch_review.docker_manager.run_command(
                 ["git", "commit", "--amend", "--no-edit"], cwd=kernel_dir
             )
-            proc.communicate()
-            
-            self.logger.info("Committed script-based fixes")
+            stdout_commit, stderr_commit = proc.communicate()
+            if proc.returncode != 0:
+                self.logger.warning(f"git commit --amend failed (rc={proc.returncode}): {stderr_commit}")
+            else:
+                self.logger.info("✓ Successfully committed script-based fixes")
+        else:
+            self.logger.info("No script-based changes to commit")
 
         return changes_made
 
