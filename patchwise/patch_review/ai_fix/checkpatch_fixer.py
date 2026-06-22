@@ -186,22 +186,18 @@ that your fixes actually resolved the issues. This is a self-correction loop.
         
         for file_path in modified_files:
             try:
-                self.logger.debug(f"Reading {file_path} from container...")
-                # Read file from container using docker_manager
-                proc = self.patch_review.docker_manager.run_command(
-                    ["cat", file_path],
-                    cwd=kernel_dir
-                )
-                content_bytes, stderr = proc.communicate()
+                # Construct full container path (absolute path inside container)
+                full_container_path = os.path.join(kernel_dir, file_path)
                 
-                if proc.returncode != 0:
-                    self.logger.warning(f"Failed to read {file_path} from container (rc={proc.returncode}): {stderr}")
+                self.logger.debug(f"Reading {file_path} from container (full path: {full_container_path})...")
+                # Read file from container using docker_manager.read_file() with absolute path
+                content = self.patch_review.docker_manager.read_file(full_container_path)
+                
+                if not content or not isinstance(content, str):
+                    self.logger.warning(f"Failed to read {file_path} from container (got {type(content).__name__})")
                     continue
                 
-                self.logger.debug(f"Successfully read {file_path}, size: {len(content_bytes)} bytes")
-                
-                # Decode content
-                content = content_bytes.decode('utf-8', errors='ignore') if isinstance(content_bytes, bytes) else content_bytes
+                self.logger.debug(f"Successfully read {file_path}, size: {len(content)} bytes")
                 original_content = content
                 
                 # Fix trailing whitespace
@@ -218,18 +214,14 @@ that your fixes actually resolved the issues. This is a self-correction loop.
                 
                 if content != original_content:
                     self.logger.debug(f"Content changed for {file_path}, writing back to container...")
-                    # Write file back to container using docker_manager
-                    proc = self.patch_review.docker_manager.run_interactive_command(
-                        ["tee", file_path],
-                        cwd=kernel_dir
-                    )
-                    stdout_write, stderr_write = proc.communicate(input=content)
+                    # Write file back to container using docker_manager.write_file() with absolute path
+                    success = self.patch_review.docker_manager.write_file(full_container_path, content)
                     
-                    if proc.returncode == 0:
+                    if success:
                         changes_made = True
                         self.logger.info(f"✓ Applied script fixes to {file_path} (wrote {len(content)} bytes)")
                     else:
-                        self.logger.warning(f"✗ Failed to write {file_path} to container (rc={proc.returncode}): {stderr_write}")
+                        self.logger.warning(f"✗ Failed to write {file_path} to container")
                 else:
                     self.logger.debug(f"No changes needed for {file_path}")
                     
