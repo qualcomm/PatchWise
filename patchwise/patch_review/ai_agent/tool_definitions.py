@@ -260,6 +260,30 @@ TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_checkpatch",
+            "description": (
+                "Run scripts/checkpatch.pl on the current uncommitted changes to verify "
+                "that checkpatch issues have been fixed. Returns human-readable output "
+                "summarizing remaining issues or a success message when none remain."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": (
+                            "Optional kernel-relative path to a specific file to focus on. "
+                            "If omitted, all modified files in the current diff are checked."
+                        ),
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
     # write tools
     {
         "type": "function",

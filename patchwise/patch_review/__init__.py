@@ -14,7 +14,7 @@ from .static_analysis import checkpatch, coccicheck, dt_check, dtbs_check, spars
 from .ai_review import ai_code_review, llm_commit_audit
 
 # Import each fix module so its @register_* decorators fire.
-from .ai_fix import ai_patch_fix
+from .ai_fix import ai_patch_fix, checkpatch_fixer
 
 from patchwise.patch_review.decorators import (
     AVAILABLE_PATCH_REVIEWS,

@@ -1571,6 +1571,63 @@ class Agent:
             },
         }
 
+    def _tool_run_checkpatch(self, file_path: Optional[str] = None) -> Dict[str, Any]:
+        """Run scripts/checkpatch.pl on current changes to verify fixes."""
+        # Validate optional kernel-relative path (for future filtering)
+        if file_path:
+            try:
+                self._validate_existing_kernel_path(file_path)
+            except ValueError as e:
+                return {"ok": False, "error": str(e)}
+
+        kernel_dir = str(self.docker_manager.kernel_dir)
+
+        try:
+            # Ensure checkpatch.pl exists in the container kernel tree
+            checkpatch_path = os.path.join(kernel_dir, "scripts", "checkpatch.pl")
+            check_proc = self.docker_manager.run_command(
+                ["test", "-x", checkpatch_path],
+                cwd=None,
+            )
+            check_proc.communicate()
+            if check_proc.returncode != 0:
+                return {"ok": False, "error": "checkpatch.pl not found in kernel tree"}
+
+            # Pipe current diff directly into checkpatch.pl inside the container
+            proc = self.docker_manager.run_command(
+                ["sh", "-c", "git diff HEAD | scripts/checkpatch.pl -"],
+                cwd=kernel_dir,
+            )
+            stdout, _ = proc.communicate()
+
+            output = stdout if stdout else b""
+            if isinstance(output, bytes):
+                output_str = output.decode(errors="ignore")
+            else:
+                output_str = str(output)
+
+            if not output_str.strip():
+                return {
+                    "ok": True,
+                    "result": "No changes to check. Make some edits first.",
+                }
+
+            if "total: 0 errors, 0 warnings" in output_str:
+                return {
+                    "ok": True,
+                    "result": "✓ SUCCESS: All checkpatch issues fixed! No errors or warnings remain.",
+                }
+            return {
+                "ok": True,
+                "result": (
+                    f"Checkpatch output:\n{output_str}\n\n"
+                    "Issues remain. Please fix them and run checkpatch again."
+                ),
+            }
+        except Exception as e:
+            self.logger.error(f"Error running checkpatch: {e}")
+            return {"ok": False, "error": f"Error running checkpatch: {e}"}
+
     def _container_path(self, file: str) -> str:
         return f"{self.docker_manager.kernel_dir}/{file}"
 
@@ -1616,6 +1673,7 @@ class Agent:
             "git_log": self._tool_git_log,
             "git_show": self._tool_git_show,
             "git_cat_file": self._tool_git_cat_file,
+            "run_checkpatch": self._tool_run_checkpatch,
         }
         tool_fn = read_tools.get(name)
 
