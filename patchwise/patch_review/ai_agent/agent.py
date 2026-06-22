@@ -1674,7 +1674,6 @@ class Agent:
             "git_show": self._tool_git_show,
             "git_cat_file": self._tool_git_cat_file,
             "run_checkpatch": self._tool_run_checkpatch,
-            "run_sparse": self._tool_run_sparse,
         }
         tool_fn = read_tools.get(name)
 
