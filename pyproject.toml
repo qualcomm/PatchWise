@@ -22,7 +22,9 @@ dependencies = [
     "rich-argparse>=1.7.0",
     "tqdm>=4.67.1",
     "platformdirs>=4.3.8",
-    "requests>=2.31.0"
+    "requests>=2.31.0",
+    "sentence-transformers>=5.6.0",
+    "chromadb>=1.5.9"
 ]
 
 [project.scripts]
