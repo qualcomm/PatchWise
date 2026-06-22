@@ -329,7 +329,10 @@ Add NULL checks before dereferencing pointers.
         rag_manager = None
         if RAG_AVAILABLE and KernelDocRAG:
             try:
-                rag_manager = KernelDocRAG(kernel_dir, logger=self.logger)
+                # Use host-side repo working directory for documentation RAG,
+                # not the container kernel path.
+                host_repo_dir = str(self.patch_review.repo.working_dir)
+                rag_manager = KernelDocRAG(host_repo_dir, logger=self.logger)
                 rag_manager.__enter__()
             except Exception as e:
                 self.logger.warning(f"Failed to initialize RAG system: {e}")
