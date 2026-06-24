@@ -53,6 +53,12 @@ def unsubscribe(fn: Listener) -> None:
         _listeners.remove(fn)
 
 
+def has_subscribers() -> bool:
+    """True when a UI is listening (e.g. the live dashboard is active). Producers
+    use this to suppress direct console writes that would corrupt the display."""
+    return bool(_listeners)
+
+
 def emit(kind: str, **fields: Any) -> None:
     """Publish an event to all subscribers. Returns immediately when there are
     none. Subscriber exceptions are contained so a review never fails on UI."""

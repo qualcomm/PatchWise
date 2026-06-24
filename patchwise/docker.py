@@ -200,12 +200,12 @@ class DockerManager:
         return list(mounts.items())
 
     def _stream_build_output(self, process: subprocess.Popen[str]) -> None:
+        """Drain the build's merged stdout/stderr through the logger at debug
+        level so the docker build progress is captured in the file log but never
+        written to the console (it would otherwise corrupt the live dashboard)."""
         if process.stdout:
-            for line in iter(process.stdout.readline, b""):
-                self.logger.info(line.strip())
-        if process.stderr:
-            for line in iter(process.stderr.readline, ""):
-                self.logger.error(line.strip())
+            for line in iter(process.stdout.readline, ""):
+                self.logger.debug(line.rstrip())
         process.wait()
         if process.returncode != 0:
             raise subprocess.CalledProcessError(process.returncode, process.args)
@@ -227,10 +227,10 @@ class DockerManager:
                 str(PACKAGE_PATH),
             ],
             text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
         )
-        process.wait()
-        if process.returncode != 0:
-            raise subprocess.CalledProcessError(process.returncode, process.args)
+        self._stream_build_output(process)
         self.logger.info(f"Base Docker image {base_image_tag} built successfully.")
 
         # Stage 2: Build tool-specific image (if not base)
@@ -247,10 +247,10 @@ class DockerManager:
                     str(PACKAGE_PATH),
                 ],
                 text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
             )
-            process.wait()
-            if process.returncode != 0:
-                raise subprocess.CalledProcessError(process.returncode, process.args)
+            self._stream_build_output(process)
             self.logger.info(
                 f"Tool-specific image {self.image_tag} built successfully."
             )
@@ -366,7 +366,11 @@ class DockerManager:
         Returns:
             str: Output of running the command (stdout + stderr).
         """
-        show_timer = self.logger.isEnabledFor(logging.INFO)
+        # Suppress the inline stdout timer while the live dashboard owns the
+        # terminal; its own activity spinner covers the work-in-progress feel.
+        from patchwise.ui import events
+
+        show_timer = self.logger.isEnabledFor(logging.INFO) and not events.has_subscribers()
         start = time.time()
 
         process = self.run_command(cmd, cwd=cwd, **kwargs)
