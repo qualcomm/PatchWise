@@ -24,6 +24,11 @@ from patchwise.utils.decorators import retry
 
 urllib3.disable_warnings()
 
+# Silence litellm's "Provider List: https://docs.litellm.ai/docs/providers"
+# banner (and the rest of its on-exception debug info) — it prints directly to
+# the console, repeatedly, and corrupts the live dashboard.
+litellm.suppress_debug_info = True
+
 DEFAULT_MODEL = "openai/Pro"
 DEFAULT_API_BASE = "https://api.openai.com/v1"
 AGENT_MAX_ITERATIONS = 50
