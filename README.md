@@ -30,6 +30,7 @@
 - **Rich Logging**: Colorized and file-based logging for easy debugging.
 - **LLM Integration**: Uses Artificial Intelligence for commit message analysis and suggestions.
 - **AI Code Review**: Leverages artificial intelligence to provide insights on code quality and potential issues. Integrated with Language Server Protocol (LSP) for context-aware code review. Support for multiple LLMs and providers, including OpenAI.
+- **Crashdump Root-Cause Analysis** (`--rca`): Given a kernel crashdump folder (dmesg + parser output) instead of a patch, an *engineer* agent investigates from the evidence and proposes a single root cause and a fix (as a kernel-source diff), and a *maintainer* agent adversarially reviews that conclusion until it holds. Seed it with known debugging via `--additional-context`.
 
 ---
 
@@ -104,6 +105,26 @@
    ```bash
    patchwise --help
    ```
+
+### Crashdump Root-Cause Analysis
+
+Root-cause a kernel crashdump instead of reviewing a patch. Point `--dump` at a
+folder containing the dmesg/console log (and any parser output), and `--repo-path`
+at the kernel source tree the crash came from:
+
+```bash
+patchwise --rca --dump <crashdump-folder> --repo-path <kernel-tree>
+```
+
+An *engineer* agent investigates from the evidence and proposes one root cause and
+one fix (as a diff); a *maintainer* agent then challenges that answer — surfacing
+unstated assumptions, symptom-only fixes, and incorrect causes — until it holds.
+Give the engineer a head start with any debugging you've already done:
+
+```bash
+patchwise --rca --dump <crashdump-folder> --repo-path <kernel-tree> \
+  --additional-context "perf_fuzzer + cpu-hotplug + stress-ng reproduces this"
+```
 
 ### Note: The default sandbox location is at /tmp/patchwise/sandbox. To override, set PATCHWISE_SANDBOX_PATH=<path/to/sandbox>
 
@@ -211,6 +232,14 @@ mail:
 - `--model`: Specify the AI model to use for code review. (default: `openai/Pro`).
 - `--provider`: The base URL for the AI model API. (default: `https://api.openai.com/v1`)
 - `--api-key`: The API key for the AI model API. If not provided, it will be read from the `OPENAI_API_KEY` environment variable.
+- `--additional-context`: Extra text injected into the review/analysis prompt (e.g. a known reproducer or debugging notes). Shared across review and `--rca` modes.
+
+### Crashdump RCA Options (require `--rca`)
+
+- `--rca`: Root-cause a kernel crashdump folder instead of reviewing commits.
+- `--dump`: Path to the crashdump folder (must contain a dmesg/console log).
+
+The kernel tree is given with `--repo-path`; `--model`, `--provider`, `--additional-context`, and `--output-dir` are shared with the other modes.
 
 ### Logging Options
 

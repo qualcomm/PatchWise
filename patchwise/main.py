@@ -13,6 +13,7 @@ from rich_argparse import RichHelpFormatter
 from patchwise import OUTPUT_PATH
 from .logger_setup import add_logging_arguments, setup_logger
 from .mail_handler.cli import add_mail_arguments, run_mail_mode
+from .patch_review.ai_review.root_cause_analysis import add_rca_arguments, run_rca_mode
 from .patch_review import (
     add_review_arguments,
     fix_reported_issues,
@@ -34,6 +35,11 @@ def parse_args(config: Dict) -> argparse.Namespace:
         action="store_true",
         help="Run the mail-handler loop instead of reviewing local commits.",
     )
+    parser.add_argument(
+        "--rca",
+        action="store_true",
+        help="Root-cause a kernel crashdump folder instead of reviewing commits.",
+    )
 
     review_group = parser.add_argument_group("Patch Review Options")
 
@@ -52,6 +58,9 @@ def parse_args(config: Dict) -> argparse.Namespace:
 
     mail_group = parser.add_argument_group("Mail Options (require --mail)")
     add_mail_arguments(mail_group)
+
+    rca_group = parser.add_argument_group("Crashdump RCA Options (require --rca)")
+    add_rca_arguments(rca_group)
 
     ai_group = parser.add_argument_group("AI Review Options")
     add_ai_arguments(ai_group, config)
@@ -73,13 +82,26 @@ def parse_args(config: Dict) -> argparse.Namespace:
         for action in mail_group._group_actions
         if getattr(args, action.dest) != action.default
     ]
+    used_rca_args = [
+        action.option_strings[0]
+        for action in rca_group._group_actions
+        if getattr(args, action.dest) != action.default
+    ]
 
+    if args.mail and args.rca:
+        parser.error("--mail and --rca are mutually exclusive")
     if not args.mail and used_mail_args:
         parser.error(f"{', '.join(used_mail_args)} may only be used with --mail")
-    if args.mail and args.commits is not None:
-        parser.error("--commits is not used in --mail mode")
     if args.mail and args.repo_path is not None:
         parser.error("--repo-path is not used in --mail mode")
+    if not args.rca and used_rca_args:
+        parser.error(f"{', '.join(used_rca_args)} may only be used with --rca")
+    if (args.mail or args.rca) and args.commits is not None:
+        mode = "--mail" if args.mail else "--rca"
+        parser.error(f"--commits is not used in {mode} mode")
+    if args.rca:
+        if not args.dump:
+            parser.error("--rca requires --dump <path>")
 
     if args.commits is None:
         args.commits = ["HEAD"]
@@ -171,7 +193,9 @@ def main():
 
     apply_ai_args(args)
 
-    if args.mail:
+    if args.rca:
+        run_rca_mode(args)
+    elif args.mail:
         run_mail_mode(args)
     else:
         run_local_mode(args)

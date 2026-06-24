@@ -966,6 +966,33 @@ record it with `record_finding`.
         return report
 
 
+def add_rca_arguments(group: argparse._ArgumentGroup) -> None:
+    """Crashdump RCA options (gated on `--rca` in the main CLI). The kernel tree
+    (`--repo-path`), `--model`/`--provider`, `--additional-context`, and
+    `--output-dir` are shared with the other modes."""
+    group.add_argument(
+        "--dump",
+        default="",
+        metavar="<path>",
+        help="Path to the crashdump folder (must contain a dmesg/console log).",
+    )
+
+
+def run_rca_mode(args: argparse.Namespace) -> None:
+    """Entry point for `patchwise --rca`: root-cause a crashdump folder and write
+    the report under --output-dir. The kernel tree is --repo-path."""
+    rca = RootCauseAnalysis(
+        crashdump_dir=args.dump or None,
+        additional_context=args.additional_context,
+        kernel_path=args.repo_path,
+    )
+    report = rca.run()
+    out_dir = Path(args.output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "rca_report.md").write_text(report)
+    print(report)
+
+
 # TODO: Remove
 def main() -> None:
     parser = argparse.ArgumentParser(
