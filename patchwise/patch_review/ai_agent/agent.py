@@ -340,7 +340,6 @@ class Agent:
         if any(c in rev for c in ("\x00", "\n", "\r")):
             raise ValueError(f"invalid rev: {rev}")
 
-        kernel_dir = str(self.docker_manager.kernel_dir)
         proc = self.docker_manager.run_command(
             [
                 "git",
@@ -349,7 +348,7 @@ class Agent:
                 "--end-of-options",
                 f"{rev}^{{commit}}",
             ],
-            cwd=kernel_dir,
+            cwd=self.docker_manager._git_workdir,
         )
         stdout, stderr = proc.communicate()
         if proc.returncode != 0:
@@ -361,6 +360,18 @@ class Agent:
         """Validate a kernel-relative path for git object access."""
         self._abs_in_kernel(path)
         return self._kernel_rel(path)
+
+    def _git_tree_rel(self, rel: str) -> str:
+        """Strip the kernel git subtree prefix from a mount-relative path so git
+        (which runs inside that subtree, `_git_workdir`) sees a tree-relative
+        path. The agent refers to files relative to the mounted root (matching
+        read/grep and the prefixed diff from `_files_in_diff`), e.g.
+        `msm-kernel/foo.c` when `--kernel-tree msm-kernel`; this is the inverse of
+        that prefixing. A no-op when the mount root is the git tree."""
+        subdir = self.docker_manager.git_subdir
+        if subdir and (rel == subdir or rel.startswith(subdir + "/")):
+            return rel[len(subdir):].lstrip("/")
+        return rel
 
     def _split_git_object_spec(self, rev: str) -> Tuple[str, Optional[str]]:
         """Split `rev[:path]` syntax into commit rev and optional kernel-relative path."""
@@ -385,7 +396,8 @@ class Agent:
         resolved_rev = self._resolve_git_commit(commit_rev)
         if rel_path is None:
             return resolved_rev, None, resolved_rev
-        return resolved_rev, rel_path, f"{resolved_rev}:{rel_path}"
+        git_rel = self._git_tree_rel(rel_path)
+        return resolved_rev, git_rel, f"{resolved_rev}:{git_rel}"
 
     def _git_command(self, *args: str) -> List[str]:
         """Run git with paging disabled so tool output is deterministic."""
@@ -1036,7 +1048,6 @@ class Agent:
         except ValueError as e:
             return {"ok": False, "error": str(e)}
 
-        kernel_dir = str(self.docker_manager.kernel_dir)
         log_cmd = [
             *self._git_command("log"),
             "--no-ext-diff",
@@ -1047,9 +1058,11 @@ class Agent:
             "--format=%H%x1f%an%x1f%ad%x1f%s",
             "--date=short",
             "--",
-            rel,
+            self._git_tree_rel(rel),
         ]
-        proc = self.docker_manager.run_command(log_cmd, cwd=kernel_dir)
+        proc = self.docker_manager.run_command(
+            log_cmd, cwd=self.docker_manager._git_workdir
+        )
         stdout, stderr = proc.communicate()
         if proc.returncode != 0:
             detail = stderr.strip() or "git log failed"
@@ -1090,7 +1103,6 @@ class Agent:
                 "error": "name_only is only supported for commit revisions, not rev:path",
             }
 
-        kernel_dir = str(self.docker_manager.kernel_dir)
         if name_only:
             show_cmd = [
                 *self._git_command("show"),
@@ -1112,14 +1124,22 @@ class Agent:
                 "--unified=3",
                 object_spec,
             ]
-        proc = self.docker_manager.run_command(show_cmd, cwd=kernel_dir)
+        proc = self.docker_manager.run_command(
+            show_cmd, cwd=self.docker_manager._git_workdir
+        )
         stdout, stderr = proc.communicate()
         if proc.returncode != 0:
             detail = stderr.strip() or "git show failed"
             return {"ok": False, "error": detail}
 
         if name_only:
-            paths = [line.strip() for line in stdout.splitlines() if line.strip()]
+            prefix = self.docker_manager.git_subdir
+            paths = [
+                f"{prefix}/{p}" if prefix else p
+                for p in (
+                    line.strip() for line in stdout.splitlines() if line.strip()
+                )
+            ]
             total = len(paths)
             return {
                 "ok": True,
@@ -1152,11 +1172,10 @@ class Agent:
         except ValueError as e:
             return {"ok": False, "error": str(e)}
 
-        kernel_dir = str(self.docker_manager.kernel_dir)
-        object_spec = f"{resolved_rev}:{rel}"
+        object_spec = f"{resolved_rev}:{self._git_tree_rel(rel)}"
         proc = self.docker_manager.run_command(
             self._git_command("cat-file", "-p", object_spec),
-            cwd=kernel_dir,
+            cwd=self.docker_manager._git_workdir,
         )
         stdout, stderr = proc.communicate()
         if proc.returncode != 0:
