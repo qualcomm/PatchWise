@@ -112,7 +112,11 @@ class AiReview(PatchReview):
         return "\n".join(wrapped_paragraphs)
 
     def setup(self):
-        self.agent = Agent(Path(self.repo.working_dir), self.docker_manager)
+        # The agent's host path base is the mounted root (which it navigates), not
+        # the git subtree: under --kernel-tree the patch's tree is a subdirectory,
+        # and the agent must still reach sibling projects (out-of-tree modules).
+        # When there is no subtree, the mount root is the kernel tree (unchanged).
+        self.agent = Agent(self.docker_manager.repo_path, self.docker_manager)
 
         self.diff = self.repo.git.diff(self.commit.parents[0], self.commit).strip()
         if not self.diff:

@@ -14,6 +14,7 @@ from git.objects.commit import Commit
 
 from patchwise import PACKAGE_NAME, PACKAGE_PATH, SANDBOX_PATH
 from patchwise.docker import DockerManager, CONTAINERS_BUILT
+from patchwise.utils.repo_workspace import resolve_git_tree
 
 DOCKERFILES_PATH = PACKAGE_PATH / "dockerfiles"
 BUILD_DIR = SANDBOX_PATH / "build"
@@ -29,9 +30,15 @@ class PatchReview(abc.ABC):
         repo_path: str,
         commit: Commit,
         additional_context: str = "",
+        kernel_tree: str = "",
     ):
         self.logger = self.get_logger()
-        self.repo = Repo(repo_path)
+        # The container mounts `repo_path` (what the agent navigates); the git tree
+        # holding the patch is `kernel_tree` — a subdirectory of it when reviewing
+        # inside a broader workspace, or the mount root itself when unset. `self.repo`
+        # is the git tree (diff/commit), `self.git_subdir` its path within the mount.
+        mount_root, git_tree, self.git_subdir = resolve_git_tree(repo_path, kernel_tree)
+        self.repo = Repo(str(git_tree))
         self.commit = commit
         self.additional_context = additional_context
         self.build_dir = BUILD_DIR / str(self.commit.hexsha)
@@ -47,8 +54,9 @@ class PatchReview(abc.ABC):
         self.docker_manager = DockerManager(
             image_tag=image_tag,
             container_name=container_name,
-            repo_path=Path(repo_path),
+            repo_path=mount_root,
             commit_sha=self.commit.hexsha,
+            git_subdir=self.git_subdir,
         )
 
         # Build the image if not already built
@@ -59,7 +67,7 @@ class PatchReview(abc.ABC):
         # Initialize shared build volume once using base container
         if not DockerManager.build_volume_initialized:
             DockerManager.initialize_shared_build_volume(
-                Path(repo_path), self.commit.hexsha
+                mount_root, self.commit.hexsha
             )
             DockerManager.build_volume_initialized = True
 

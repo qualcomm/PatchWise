@@ -1379,10 +1379,21 @@ class Agent:
         return result
 
     def _files_in_diff(self) -> Set[str]:
-        """Return the set of kernel-relative file paths touched by the commit."""
-        kernel_dir = str(self.docker_manager.kernel_dir)
+        """Return the set of mount-relative file paths touched by the commit.
+
+        Git runs in the kernel git tree (which may be a subdirectory of the
+        mounted root when reviewing inside a broader workspace), and the
+        tree-relative paths it reports are prefixed with that subdirectory so they
+        match the paths the agent's read/grep tools use (which are relative to the
+        mounted root). With no subdirectory this is exactly `git diff` at the
+        root."""
+        git_wd = self.docker_manager._git_workdir
         log_cmd = [*self._git_command("diff"), "--name-only", "HEAD^..HEAD"]
-        proc = self.docker_manager.run_command(log_cmd, cwd=kernel_dir)
+        proc = self.docker_manager.run_command(log_cmd, cwd=git_wd)
         stdout, _ = proc.communicate()
-        return set(stdout.strip().splitlines())
+        prefix = self.docker_manager.git_subdir
+        return {
+            f"{prefix}/{f}" if prefix else f
+            for f in stdout.strip().splitlines()
+        }
 

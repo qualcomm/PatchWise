@@ -19,6 +19,7 @@ from patchwise.patch_review.decorators import register_llm_review, register_long
 
 from patchwise.patch_review.ai_review.ai_review import AiReview
 from patchwise.ui import events
+from patchwise.utils.repo_workspace import project_layout_note
 
 
 @register_llm_review
@@ -1061,13 +1062,17 @@ finding with record_verdict as you work through them.
 
     def run(self) -> str:
         """Execute the multi-phase AI code review (plan -> execution -> filter)."""
-        additional_context = (
+        ctx_block = (
             self.ADDITIONAL_CONTEXT_TEMPLATE.format(
                 additional_context=self.additional_context
             )
             if self.additional_context
             else ""
         )
+        # When the patch's kernel tree sits under a subdirectory of the mounted
+        # root (--kernel-tree), tell the reviewer the path prefix so its read/grep
+        # calls resolve (the diff paths are relative to the kernel tree).
+        additional_context = project_layout_note(self.git_subdir) + ctx_block
         shared_user = self.PROMPT_TEMPLATE.format(
             diff=self.diff,
             commit_text=self.commit_message,
