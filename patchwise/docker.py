@@ -26,6 +26,7 @@ class DockerManager:
         container_name: str,
         repo_path: Path,
         commit_sha: str,
+        git_subdir: str = "",
     ):
         self.logger = logging.getLogger(
             f"{PACKAGE_NAME}.{self.__class__.__name__.lower()}"
@@ -34,11 +35,21 @@ class DockerManager:
         self.container_name = container_name
         self.repo_path = repo_path.resolve()
         self.commit_sha = commit_sha
+        # The mounted tree (`repo_path`) is what the agent navigates; the git tree
+        # the prep operates on may be a subdirectory of it (e.g. `--repo-path
+        # kernel_platform --project common`). Empty => the mount root is the git
+        # tree (the common case), so existing callers are unchanged.
+        self.git_subdir = (git_subdir or "").strip("/")
         self.sandbox_path = Path("/home") / PACKAGE_NAME
         self.build_dir = self.sandbox_path / "build"
         self.kernel_dir = self.sandbox_path / "kernel"
         self._kernel_overlay_volume: Optional[str] = None
         self._has_external_gitdir = False
+
+    @property
+    def _git_workdir(self) -> str:
+        """In-container path of the git tree (the mount root, or a subdir)."""
+        return "/".join(filter(None, [str(self.kernel_dir), self.git_subdir]))
 
     @property
     def _kernel_volume_name(self) -> str:
@@ -167,10 +178,12 @@ class DockerManager:
         resolves, giving the container a complete repository. Empty for a
         self-contained ``.git`` (e.g. a normal clone), so standalone kernels are
         unaffected."""
-        git_dir = self.repo_path / ".git"
+        git_dir = self.repo_path / self.git_subdir / ".git"
         if not git_dir.is_dir():
             return []
-        container_gitdir = f"{self.kernel_dir}/.git"
+        container_gitdir = "/".join(
+            filter(None, [str(self.kernel_dir), self.git_subdir, ".git"])
+        )
         repo_prefix = str(self.repo_path) + os.sep
         mounts: dict[str, str] = {}
         for entry in sorted(git_dir.iterdir()):
@@ -669,14 +682,14 @@ class DockerManager:
                 "--user",
                 "root",
                 "--workdir",
-                str(self.kernel_dir),
+                self._git_workdir,
                 self.container_name,
                 "git",
                 "config",
                 "--global",
                 "--add",
                 "safe.directory",
-                str(self.kernel_dir),
+                self._git_workdir,
             ],
             check=True,
             capture_output=True,
@@ -707,7 +720,7 @@ class DockerManager:
                 "--user",
                 "root",
                 "--workdir",
-                str(self.kernel_dir),
+                self._git_workdir,
                 self.container_name,
                 "git",
                 "reset",
@@ -724,7 +737,7 @@ class DockerManager:
                 "--user",
                 "root",
                 "--workdir",
-                str(self.kernel_dir),
+                self._git_workdir,
                 self.container_name,
                 "git",
                 "clean",
@@ -733,6 +746,11 @@ class DockerManager:
             check=True,
             capture_output=True,
         )
+        # Give the agent ownership of the git tree (where git wrote during reset).
+        # Only the project subtree is chown'd, not the whole mount: when repo_path
+        # is a broad workspace, recursively chowning every sibling project would be
+        # huge and pointless — kernel source is world-readable, so the agent reads
+        # siblings (e.g. out-of-tree modules) without owning them.
         subprocess.run(
             [
                 "docker",
@@ -743,7 +761,7 @@ class DockerManager:
                 "chown",
                 "-R",
                 "patchwise:patchwise",
-                str(self.kernel_dir),
+                self._git_workdir,
             ],
             check=True,
             capture_output=True,
