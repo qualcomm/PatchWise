@@ -50,6 +50,7 @@ from patchwise.patch_review.ai_agent.agent import (
     SUBSYSTEM_REVIEW_PROMPTS_PATH,
 )
 from patchwise.patch_review.ai_agent.crashdump_agent import CrashdumpAgent
+from patchwise.ui import events
 
 _DOCKERFILES_PATH = PACKAGE_PATH / "dockerfiles"
 
@@ -762,6 +763,7 @@ record it with `record_finding`.
 
         result = _run_engineer("engineer")
         answer = self._read_findings(findings_path, result)
+        events.emit(events.ENGINEER_ANSWER, label="engineer", text=answer)
 
         verdicts: List[Dict[str, Any]] = []
         vround = 0
@@ -806,6 +808,8 @@ record it with `record_finding`.
                 f"tools: {self._fmt_tool_counts(round_tools)}"
             )
             self.logger.info(f"[maintainer] round {vround}: reason: {verdict.get('reason')}")
+            events.emit(events.MAINTAINER, round=vround, refuted=refuted,
+                        questions=questions, reason=verdict.get("reason"))
             for qi, q in enumerate(questions, 1):
                 self.logger.info(
                     f"[maintainer] round {vround}: Q{qi}: {self._oneline(q, 300)}"
@@ -829,8 +833,11 @@ record it with `record_finding`.
             result = _run_engineer(f"engineer:resume{vround}")
             answer = self._read_findings(findings_path, result)
 
+            events.emit(events.ENGINEER_ANSWER, label=f"engineer:resume{vround}",
+                        text=answer)
+
             # Note: This is almost impossible and likely a RuntimeError
-            if remaining >= before:  # no iterations consumed -> no progress, stop
+            if remaining >= before:  # no iterations consumed → no progress, stop
                 break
 
         self._dump("maintainer_verdicts.json", json.dumps(verdicts, indent=2))
@@ -913,6 +920,9 @@ record it with `record_finding`.
         self._dump("prompt.md", shared_user)
         self._configure_budget()
 
+        events.emit(events.RUN_START, pipeline="rca",
+                    target=str(self.crashdump_dir), model=self.agent.model)
+
         # Engineer phase: one analyst root-causes from the evidence; then the
         # maintainer challenges its answer and (while it refutes) resumes the
         # engineer's same conversation with the questions, until it accepts or a
@@ -963,6 +973,11 @@ record it with `record_finding`.
             f"refuted={sum(1 for v in verdicts if v.get('refuted'))}; "
             f"tokens_used={self.agent.tokens_used}."
         )
+        events.emit(events.RUN_DONE, summary={
+            "maintainer_rounds": len(verdicts),
+            "refuted": sum(1 for v in verdicts if v.get("refuted")),
+            "tokens": self.agent.tokens_used,
+        })
         return report
 
 
@@ -990,7 +1005,11 @@ def run_rca_mode(args: argparse.Namespace) -> None:
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "rca_report.md").write_text(report)
-    print(report)
+    # The live dashboard renders the accepted root cause as a panel and the
+    # report is saved above, so only echo the raw markdown to stdout when no UI
+    # is consuming events (piped/--plain/DEBUG runs).
+    if not events.has_subscribers():
+        print(report)
 
 
 # TODO: Remove

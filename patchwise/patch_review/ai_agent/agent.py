@@ -19,6 +19,7 @@ from pathlib import Path
 from patchwise import PACKAGE_NAME, SANDBOX_PATH
 from patchwise.docker import DockerManager
 from patchwise.patch_review.ai_agent.tool_definitions import TOOLS
+from patchwise.ui import events
 from patchwise.utils.decorators import retry
 
 urllib3.disable_warnings()
@@ -177,6 +178,11 @@ class Agent:
         for iteration in range(1, max_iters + 1):
             self.current_iteration = iteration
             self.logger.debug(f"Agent iteration {iteration}/{max_iters}")
+            events.emit(
+                events.ITERATION, label=self.current_label, n=iteration,
+                cap=max_iters, tokens=self.tokens_used,
+                budget=self.token_budget, peak=self.peak_prompt_tokens,
+            )
 
             if not self.budget_remaining():
                 self.logger.warning(
@@ -1010,6 +1016,8 @@ class Agent:
         except Exception:
             args_json = str(args)
         ok = bool(result.get("ok"))
+        events.emit(events.TOOL_CALL, label=label, iter=iteration, name=name,
+                    args=args, ok=ok)
         line = f"{ts} | task={label} | iter={iteration} | call={name}({args_json}) | ok={ok}\n"
         try:
             with open(log_path, "a") as f:
@@ -1286,6 +1294,8 @@ class Agent:
         block = f"### {head}\n\n{finding}\n\n" if head else f"{finding}\n\n"
         with open(path, "a") as f:
             f.write(block)
+        events.emit(events.FINDING, label=self.current_label,
+                    dimension=dimension, location=location, text=finding)
         return {"ok": True, "recorded": location or dimension or "finding"}
 
     @staticmethod
@@ -1324,6 +1334,8 @@ class Agent:
         }
         with open(path, "a") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        events.emit(events.VERDICT, label=self.current_label, finding=finding,
+                    impact=impact, verdict=verdict, reason=reason)
         return {"ok": True, "recorded": verdict or "verdict"}
 
     def dispatch_tool(self, name: str, args: dict) -> dict:

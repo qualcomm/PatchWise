@@ -2,7 +2,9 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import argparse
+import contextlib
 import logging
+import sys
 from pathlib import Path
 from typing import Dict
 
@@ -15,6 +17,7 @@ from .logger_setup import add_logging_arguments, setup_logger
 from .mail_handler.cli import add_mail_arguments, run_mail_mode
 from .patch_review.ai_review.root_cause_analysis import add_rca_arguments, run_rca_mode
 from .patch_review import (
+    _cleanup_all_containers,
     add_review_arguments,
     fix_reported_issues,
     get_selected_reviews_from_args,
@@ -39,6 +42,11 @@ def parse_args(config: Dict) -> argparse.Namespace:
         "--rca",
         action="store_true",
         help="Root-cause a kernel crashdump folder instead of reviewing commits.",
+    )
+    parser.add_argument(
+        "--plain",
+        action="store_true",
+        help="Disable the live dashboard and use plain log output.",
     )
 
     review_group = parser.add_argument_group("Patch Review Options")
@@ -193,12 +201,47 @@ def main():
 
     apply_ai_args(args)
 
-    if args.rca:
-        run_rca_mode(args)
-    elif args.mail:
-        run_mail_mode(args)
+    # The live dashboard only knows the event stream from AiCodeReview and the
+    # crashdump RCA pipeline; checkpatch and the static-analysis reviews emit no
+    # events and would run invisibly behind the footer (their INFO logs are
+    # hidden). So the dashboard is limited to an --rca run or a local review
+    # whose sole selected review is AiCodeReview — anything else falls back to
+    # plain output. It also hides the INFO log stream, so it is suppressed when
+    # debugging (--log-level DEBUG), when output is not a terminal
+    # (piped/redirected), for --plain, and for the --mail daemon loop.
+    ui_supported = args.rca or (
+        not args.mail and get_selected_reviews_from_args(args) == {"AiCodeReview"}
+    )
+    use_ui = (
+        ui_supported
+        and sys.stdout.isatty()
+        and not args.plain
+        and args.log_level.upper() != "DEBUG"
+    )
+    if use_ui:
+        from patchwise.ui.dashboard import live_dashboard
+        dashboard_cm = live_dashboard(args)
     else:
-        run_local_mode(args)
+        dashboard_cm = contextlib.nullcontext()
+
+    with dashboard_cm as dashboard:
+        try:
+            if args.rca:
+                run_rca_mode(args)
+            elif args.mail:
+                run_mail_mode(args)
+            else:
+                run_local_mode(args)
+        except (KeyboardInterrupt, SystemExit):
+            # First Ctrl-C lands here (the signal handler raises SystemExit).
+            # begin_cleanup stops the live's refresh thread (so the static box
+            # can't stack into scrollback during teardown) and shows 'cleaning
+            # up…' in the box. Teardown commands run in their own process group,
+            # so further Ctrl-C cannot interrupt them.
+            if dashboard is not None:
+                dashboard.begin_cleanup()
+            _cleanup_all_containers()
+            raise
 
 
 if __name__ == "__main__":

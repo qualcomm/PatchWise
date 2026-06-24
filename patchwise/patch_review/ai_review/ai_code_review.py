@@ -18,6 +18,7 @@ from patchwise.patch_review.ai_agent.tool_definitions import NAVIGATION_TOOLS
 from patchwise.patch_review.decorators import register_llm_review, register_long_review
 
 from patchwise.patch_review.ai_review.ai_review import AiReview
+from patchwise.ui import events
 
 
 @register_llm_review
@@ -721,6 +722,7 @@ finding with record_verdict as you work through them.
         if not isinstance(tasks, list):
             tasks = []
         self.logger.info(f"[plan] planner proposed {len(tasks)} unit(s).")
+        events.emit(events.PLAN, tasks=tasks)
 
         # Record the plan's evolution (initial -> critic feedback -> revised ...)
         # for observability into how the planner↔critic loop shaped the units.
@@ -739,6 +741,7 @@ finding with record_verdict as you work through them.
             if not self.agent.budget_remaining():
                 break
             self.agent.current_label = f"critic:r{round_no}"
+            events.emit(events.PHASE, name="critique")
             verdict = self._critique_plan(critic_loaded, commit_text, tasks)
             material = bool(verdict.get("material"))
             feedback = verdict.get("feedback") or []
@@ -749,10 +752,13 @@ finding with record_verdict as you work through them.
                 f"[plan] critic round {round_no}: material={material}, "
                 f"{len(feedback)} point(s): {feedback}"
             )
+            events.emit(events.CRITIC, round=round_no, material=material,
+                        feedback=feedback)
             if not material or not feedback:
                 break
             # Planner revises its own work-list in light of the feedback.
             self.agent.current_label = f"planner:r{round_no}"
+            events.emit(events.PHASE, name="plan")
             before = len(tasks)
             revised = self._revise_plan(plan_messages, feedback)
             if revised:
@@ -767,6 +773,7 @@ finding with record_verdict as you work through them.
         final = self._normalize_tasks(tasks)
         evolution.append({"round": "final", "stage": "final", "tasks": final})
         self._dump("plan_evolution.json", json.dumps(evolution, indent=2))
+        events.emit(events.PLAN, tasks=final)
         return final
 
     # Phase 2: EXECUTION
@@ -1069,7 +1076,14 @@ finding with record_verdict as you work through them.
         self._dump("prompt.md", shared_user)
         self._configure_budget()
 
+        events.emit(
+            events.RUN_START, pipeline="review",
+            target=f"{str(self.commit.hexsha)[:12]} {self.commit.summary}",
+            model=self.agent.model,
+        )
+
         # Phase 1: PLAN (planner splits, critic refines with taxonomy + guides).
+        events.emit(events.PHASE, name="plan")
         tasks = self._plan_phase(shared_user, self.commit_message)
         self._dump("plan.json", json.dumps(tasks, indent=2))
         self.logger.info(f"[plan] final plan: {len(tasks)} unit(s).")
@@ -1103,6 +1117,7 @@ finding with record_verdict as you work through them.
             self.logger.info(f"[exec] worker context-window limit: {worker_ctx} prompt tokens.")
 
         # Phase 2: EXECUTION (single combined unit)
+        events.emit(events.PHASE, name="execute")
         findings = self._execution_phase(tasks, shared_user)
         if worker_budget and worker_budget.isdigit():
             self.agent.token_budget = prev_budget  # restore for the filter
@@ -1116,6 +1131,7 @@ finding with record_verdict as you work through them.
         )
 
         # Phase 3: FALSE-POSITIVE FILTER -> existing inline-review output.
+        events.emit(events.PHASE, name="filter")
         final, kept_blocks = self._fp_filter_phase(findings)
 
         # Observability: per-unit findings, filter result, tokens.
@@ -1143,4 +1159,8 @@ finding with record_verdict as you work through them.
             f"issues_kept={kept_blocks} (filter); "
             f"tokens_used={self.agent.tokens_used}."
         )
+        events.emit(events.RUN_DONE, summary={
+            "units": len(tasks), "with_findings": len(findings),
+            "issues": kept_blocks, "tokens": self.agent.tokens_used,
+        })
         return final
