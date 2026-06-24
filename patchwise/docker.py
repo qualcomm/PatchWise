@@ -82,7 +82,7 @@ class DockerManager:
         # Remove stale volumes with the same names (if any) so we always get
         # a fresh overlay.
         for vol in (volume_name, backing_volume):
-            subprocess.run(["docker", "volume", "rm", "-f", vol])
+            subprocess.run(["docker", "volume", "rm", "-f", vol], capture_output=True)
 
         # Create the backing volume that will hold upper/ and work/.
         self.logger.info(
@@ -161,8 +161,12 @@ class DockerManager:
     def _cleanup_kernel_overlay(self) -> None:
         """Remove the Docker overlay volume and backing volume for this container."""
         for vol in (self._kernel_volume_name, self._kernel_backing_volume_name):
-            subprocess.run(["docker", "volume", "rm", "-f", vol])
-        self.logger.info(f"Kernel overlay for {self.container_name} cleaned up.")
+            subprocess.run(
+                ["docker", "volume", "rm", "-f", vol],
+                capture_output=True,
+                start_new_session=True,
+            )
+        self.logger.debug(f"Kernel overlay for {self.container_name} cleaned up.")
 
     def _external_gitdir_mounts(self) -> List[tuple[str, str]]:
         """Bind mounts that make a repo(1)-managed kernel's .git resolve in the
@@ -450,19 +454,26 @@ class DockerManager:
         return True
 
     def stop_container(self) -> None:
-        self.logger.info(f"Stopping container {self.container_name}...")
+        self.logger.debug(f"Stopping container {self.container_name}...")
         try:
+            # start_new_session: run teardown in its own process group so a
+            # spammed Ctrl-C (delivered to the foreground group) cannot kill
+            # these docker commands mid-cleanup and leak the container/volumes.
+            # (subprocess restores SIGINT to SIG_DFL in children by default, so
+            # the parent's SIG_IGN alone does not protect them.)
             subprocess.run(
                 ["docker", "stop", self.container_name],
                 check=True,
                 capture_output=True,
+                start_new_session=True,
             )
             subprocess.run(
                 ["docker", "rm", self.container_name],
                 check=True,
                 capture_output=True,
+                start_new_session=True,
             )
-            self.logger.info(f"Container {self.container_name} stopped and removed.")
+            self.logger.debug(f"Container {self.container_name} stopped and removed.")
         except subprocess.CalledProcessError as e:
             self.logger.error(
                 f"Failed to stop container {self.container_name}: {e}\nstderr: {e.stderr}"

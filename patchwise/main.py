@@ -21,6 +21,7 @@ from .patch_review import (
     add_review_arguments,
     fix_reported_issues,
     get_selected_reviews_from_args,
+    register_containers_cleanup,
     review_commit,
 )
 from patchwise.patch_review.ai_agent import add_ai_arguments, apply_ai_args
@@ -218,6 +219,13 @@ def main():
     setup_logger(log_file=args.log_file, log_level=args.log_level)
 
     apply_ai_args(args)
+
+    # Install signal handling for every mode (not just review): the first Ctrl-C
+    # triggers a clean exit that runs container cleanup via atexit, and further
+    # Ctrl-C presses are ignored (SIG_IGN) so cleanup is never left half-done.
+    # Without this, --rca raised a bare KeyboardInterrupt traceback and a second
+    # Ctrl-C could interrupt docker teardown.
+    register_containers_cleanup()
 
     # The live dashboard only knows the event stream from AiCodeReview and the
     # crashdump RCA pipeline; checkpatch and the static-analysis reviews emit no
