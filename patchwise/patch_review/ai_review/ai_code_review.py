@@ -22,11 +22,15 @@ from patchwise.patch_review.ai_review.ai_review import AiReview
 @register_llm_review
 @register_long_review
 class AiCodeReview(AiReview):
-    """AI-powered code review for Linux kernel patches using LSP and clangd.
+    """AI-powered code review for Linux kernel patches.
 
-    The review runs as three phases on a *single* Agent (so the clangd LSP, the
-    tree-sitter daemon, the per-commit container and the `seen_files` ranking
-    state start up once and are shared):
+    Code navigation is pure tree-sitter + ripgrep — no clangd, no compilation
+    database — so the review never builds the kernel and is config/arch-agnostic
+    (it sees all #ifdef variants, not just what one defconfig compiles).
+
+    The review runs as three phases on a *single* Agent (so the tree-sitter
+    daemon, the per-commit container and the `seen_files` ranking state start up
+    once and are shared):
 
       1. PLAN  — a planner splits the diff into independent subtasks for
                  multi-dimensional analysis (the same change examined from
@@ -171,7 +175,7 @@ Code-navigation tools (all paths kernel-relative, e.g. `drivers/mtd/nand/raw/qco
 
 - `find_definition(name, file?)`
 - `find_callers(name, file?)`
-- `find_calls(name, file?)`
+- `find_callees(name, file?)`
 - `grep(pattern, file?)`
 - `read_doc(path)`
 - `read_file(path, start?, end?)`

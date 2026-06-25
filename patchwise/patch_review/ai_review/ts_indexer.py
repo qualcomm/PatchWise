@@ -76,6 +76,58 @@ _TS_QUERY_SRC = """
 
 _TS_QUERY = Query(_C_LANGUAGE, _TS_QUERY_SRC)
 
+# Callees: the functions a given function body invokes. A direct call is
+# `foo(...)` (function field is an identifier); an indirect call is
+# `ops->fn(...)` or `obj.fn(...)` (function field is a field_expression) — the
+# dominant call style in kernel code, which a semantic call-graph would miss.
+_CALL_QUERY_SRC = """
+(call_expression
+  function: (identifier) @call.direct)
+
+(call_expression
+  function: (field_expression
+    field: (field_identifier) @call.indirect))
+"""
+
+_CALL_QUERY = Query(_C_LANGUAGE, _CALL_QUERY_SRC)
+
+
+def _callees_in_range(
+    rel: str, start_line: int, end_line: int
+) -> List[Dict[str, Any]]:
+    """Return the calls made within [start_line, end_line] of file `rel`.
+
+    Re-parses the one file on demand (tree-sitter is cheap) and runs the
+    call-expression query, keeping captures whose call site falls inside the
+    requested function-body range. Each entry is {name, line, kind} where kind
+    is 'direct' (foo()) or 'indirect' (ops->fn()).
+    """
+    path = KERNEL / rel
+    try:
+        src = path.read_bytes()
+    except OSError:
+        return []
+    parser = Parser(_C_LANGUAGE)
+    tree = parser.parse(src)
+    cursor = QueryCursor(_CALL_QUERY)
+    out: List[Dict[str, Any]] = []
+    seen: set = set()
+    for _, captures in cursor.matches(tree.root_node):
+        for kind, key in (("direct", "call.direct"), ("indirect", "call.indirect")):
+            for node in captures.get(key, []):
+                row = node.start_point[0] + 1
+                if not (start_line <= row <= end_line):
+                    continue
+                name = src[node.start_byte : node.end_byte].decode(
+                    "utf-8", errors="replace"
+                )
+                if (name, row) in seen:
+                    continue
+                seen.add((name, row))
+                out.append({"name": name, "line": row, "kind": kind})
+    out.sort(key=lambda c: c["line"])
+    return out
+
 
 def _parse_one(path_str: str) -> Optional[Tuple[str, List[Dict[str, Any]]]]:
     """Parse one file in a worker. Returns (rel_path, capture_list) or None."""
@@ -207,6 +259,11 @@ def main() -> int:
         elif op == "funcs_in_file":
             path = req.get("path", "")
             _write({"funcs": funcs_by_file.get(path, [])})
+        elif op == "callees":
+            path = req.get("path", "")
+            start_line = int(req.get("start_line", 0))
+            end_line = int(req.get("end_line", 0))
+            _write({"callees": _callees_in_range(path, start_line, end_line)})
         elif op == "shutdown":
             break
         else:

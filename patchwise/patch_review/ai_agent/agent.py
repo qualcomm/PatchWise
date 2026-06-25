@@ -19,7 +19,7 @@ from pathlib import Path
 from patchwise import PACKAGE_NAME, SANDBOX_PATH
 from patchwise.docker import DockerManager
 from patchwise.patch_review.ai_agent.tool_definitions import TOOLS
-from patchwise.utils.decorators import lru_cache_cb, retry
+from patchwise.utils.decorators import retry
 
 urllib3.disable_warnings()
 
@@ -30,19 +30,11 @@ AGENT_MAX_ITERATIONS = 50
 # Container-side tree-sitter indexer path
 TS_INDEXER_PATH = "/home/patchwise/bin/ts_indexer.py"
 
-# Max open documents in clangd before LRU eviction
-_CLANGD_OPEN_FILE_CAPACITY = 32
-
 REVIEW_PROMPTS_PATH = (
     Path(__file__).resolve().parents[3] / "thirdparty" / "review-prompts"
 )
 KERNEL_REVIEW_PROMPTS_PATH = REVIEW_PROMPTS_PATH / "kernel"
 SUBSYSTEM_REVIEW_PROMPTS_PATH = KERNEL_REVIEW_PROMPTS_PATH / "subsystem"
-
-
-def path_to_uri(path: str) -> str:
-    """Convert a file path to a file:// URI."""
-    return Path(path).absolute().as_uri()
 
 
 def uri_to_path(uri: str) -> str:
@@ -53,16 +45,6 @@ def uri_to_path(uri: str) -> str:
 class Agent:
     model: str = DEFAULT_MODEL
     api_base: str = DEFAULT_API_BASE
-
-    # LSP message IDs
-    INIT_MSG_ID = 1
-    DEFINITION_MSG_ID = 2
-    SYMBOL_MSG_ID = 3
-    REFERENCE_MSG_ID = 4
-    DECLARATION_MSG_ID = 5
-    PREPARE_CALL_HIERARCHY_MSG_ID = 6
-    INCOMING_CALLS_MSG_ID = 7
-    OUTGOING_CALLS_MSG_ID = 8
 
     @classmethod
     def get_logger(cls) -> logging.Logger:
@@ -82,7 +64,6 @@ class Agent:
         self.docker_manager = docker_manager
         self.enable_edit_tools = enable_edit_tools
         self.ts_daemon: Optional[subprocess.Popen[Any]] = None
-        self.agent_lsp_proc: Optional[subprocess.Popen[Any]] = None
         self.seen_files: Set[str] = set()
 
         # Per-review token ceiling shared across every run_agent_loop call on this
@@ -297,516 +278,6 @@ class Agent:
         content = self._read_file_safely(file_path)
         return content.splitlines(keepends=True) if content else []
 
-    def _run_make_command(
-        self,
-        args: List[str],
-        capture_output: bool = True,
-        stdout_file: Optional[str] = None,
-    ) -> None:
-        """Run a make command with consistent arguments using Docker container."""
-        kernel_dir = self.docker_manager.sandbox_path / "kernel"
-        build_dir = self.docker_manager.build_dir
-
-        base_args = [
-            "make",
-            "-C",
-            str(kernel_dir),
-            f"O={build_dir}",
-            f"-j{os.cpu_count()}",
-            "ARCH=arm64",
-            "LLVM=1",
-        ]
-        full_args = base_args + args
-
-        desc = " ".join(args)
-
-        if capture_output:
-            self.docker_manager.run_cmd_with_timer(full_args, desc, cwd=str(build_dir))
-        elif stdout_file:
-            output = self.docker_manager.run_cmd_with_timer(
-                full_args,
-                desc,
-                cwd=str(build_dir),
-            )
-            # Write to container path, not host path
-            # TODO: Fix this mess - self.build_dir does not exist
-            container_stdout_file = stdout_file.replace(
-                str(self.build_dir), str(build_dir)
-            )
-            write_cmd = ["sh", "-c", f"cat > {container_stdout_file}"]
-            process = self.docker_manager.run_command(write_cmd, cwd=str(build_dir))
-            if process.stdin:
-                process.stdin.write(output)
-                process.stdin.close()
-            process.wait()
-        else:
-            self.docker_manager.run_cmd_with_timer(full_args, desc, cwd=str(build_dir))
-
-    def generate_compile_commands(self) -> None:
-        """Generate compile_commands.json for clangd."""
-        kernel_dir = self.docker_manager.sandbox_path / "kernel"
-        build_dir = self.docker_manager.build_dir
-
-        self.logger.debug("Running make defconfig")
-        self._run_make_command(["defconfig"])
-
-        self.logger.debug("Running make archprepare")
-        self._run_make_command(["archprepare"])
-
-        self.logger.debug("Generating compile commands using compiledb")
-        compile_commands_path = build_dir / "compile_commands.json"
-        pipeline = (
-            f"make -nwk -j{os.cpu_count() or 4} "
-            f"-C {kernel_dir} O={build_dir} ARCH=arm64 LLVM=1 "
-            f"| compiledb -o {compile_commands_path}"
-        )
-        self.docker_manager.run_cmd_with_timer(
-            ["sh", "-c", pipeline],
-            "genrating compile_commands.json...",
-            cwd=str(build_dir),
-        )
-        check = self.docker_manager.run_command(
-            ["test", "-s", str(compile_commands_path)], cwd=None
-        )
-        check.communicate()
-        if check.returncode != 0:
-            self.logger.warning(
-                f"compile_commands.json not produced at {compile_commands_path}"
-            )
-        else:
-            self.logger.debug("compile_commands.json generated")
-
-    def _create_lsp_message(
-        self, method: str, params: Dict[str, Any], msg_id: Optional[int] = None
-    ) -> Dict[str, Any]:
-        """Create a standardized LSP message."""
-        message = {"jsonrpc": "2.0", "method": method, "params": params}
-        if msg_id is not None:
-            message["id"] = msg_id
-        return message
-
-    def _make_message_string(self, msg: Dict[str, Any]) -> str:
-        """Convert LSP message to string with proper headers for text mode subprocess."""
-        msg_json = json.dumps(msg)
-        return f"Content-Length: {len(msg_json.encode('utf-8'))}\r\n\r\n{msg_json}"
-
-    def _read_lsp_response(
-        self,
-        proc: subprocess.Popen[Any],
-        expected_id: Optional[int] = None,
-        timeout: int = 30,
-    ) -> Dict[str, Any]:
-        """Read and parse LSP response from process with timeout."""
-        import select
-        import time
-
-        if proc.stdout is None:
-            raise RuntimeError("Process stdout is None")
-
-        start_time = time.time()
-
-        while True:
-            # Check if process is still alive
-            if proc.poll() is not None:
-                # Read any remaining stderr for debugging
-                if proc.stderr:
-                    stderr_output = proc.stderr.read()
-                    if stderr_output:
-                        self.logger.error(f"clangd stderr: {stderr_output}")
-                raise RuntimeError(
-                    f"clangd process died with return code {proc.returncode}"
-                )
-
-            # Check timeout
-            if time.time() - start_time > timeout:
-                raise RuntimeError(
-                    f"Timeout waiting for LSP response after {timeout} seconds"
-                )
-
-            # Use select to check if data is available with timeout
-            ready, _, _ = select.select([proc.stdout], [], [], 1.0)
-            if not ready:
-                # No data available, check if we should continue waiting
-                continue
-
-            # Read headers character by character until we find the end of headers
-            headers = ""
-            while True:
-                try:
-                    # Read one character at a time to avoid readline hanging
-                    char = proc.stdout.read(1)
-                    if not char:
-                        # Check if process died
-                        if proc.poll() is not None:
-                            raise RuntimeError(
-                                f"clangd process died with return code {proc.returncode}"
-                            )
-                        # Check timeout
-                        if time.time() - start_time > timeout:
-                            raise RuntimeError(
-                                f"Timeout reading LSP headers after {timeout} seconds"
-                            )
-                        time.sleep(0.01)  # Very short sleep
-                        continue
-                    headers += char
-
-                    # Reduce header logging noise - only log if there's an issue
-                    pass
-
-                    # Check for different possible header endings
-                    if "\r\n\r\n" in headers:
-                        self.logger.debug("Found \\r\\n\\r\\n header separator")
-                        break
-                    elif "\n\n" in headers:
-                        self.logger.debug("Found \\n\\n header separator")
-                        break
-                    elif headers.startswith('{"jsonrpc"'):
-                        # This means there are no headers, just JSON content
-                        self.logger.debug(
-                            "No LSP headers found, appears to be direct JSON response"
-                        )
-                        # Treat the entire thing as content, no headers
-                        content = headers
-                        # Continue reading until we have a complete JSON object
-                        brace_count = content.count("{") - content.count("}")
-                        while brace_count > 0:
-                            char = proc.stdout.read(1)
-                            if not char:
-                                break
-                            content += char
-                            if char == "{":
-                                brace_count += 1
-                            elif char == "}":
-                                brace_count -= 1
-
-                        self.logger.debug(
-                            f"Read complete JSON without headers: {content[:200]}..."
-                        )
-                        try:
-                            msg = json.loads(content)
-                            if expected_id is None or msg.get("id") == expected_id:
-                                return msg
-                            continue  # Continue to next message
-                        except json.JSONDecodeError as e:
-                            self.logger.error(f"Failed to parse JSON: {e}")
-                            raise RuntimeError(f"Invalid JSON in LSP response: {e}")
-
-                except Exception as e:
-                    # Check timeout on any exception
-                    if time.time() - start_time > timeout:
-                        raise RuntimeError(
-                            f"Timeout reading LSP headers after {timeout} seconds: {e}"
-                        )
-                    time.sleep(0.01)
-                    continue
-
-            # Parse content length
-            content_length = 0
-            for line in headers.split("\r\n"):
-                if line.lower().startswith("content-length:"):
-                    content_length = int(line.split(":")[1].strip())
-
-            if content_length == 0:
-                self.logger.warning("Received LSP message with no content length")
-                continue
-
-            # Read content
-            content = proc.stdout.read(content_length)
-            if content is None or len(content) != content_length:
-                raise RuntimeError(
-                    f"Failed to read complete content from process stdout. Expected {content_length}, got {len(content) if content else 0}"
-                )
-
-            try:
-                msg = json.loads(content)
-            except json.JSONDecodeError as e:
-                self.logger.error(f"Failed to parse LSP message: {content}")
-                raise RuntimeError(f"Invalid JSON in LSP response: {e}")
-
-            if expected_id is None or msg.get("id") == expected_id:
-                return msg
-
-            if msg.get("method") == "textDocument/publishDiagnostics":
-                continue
-
-            self.logger.debug(
-                f"Received LSP message with id {msg.get('id')}, expected {expected_id}: {json.dumps(msg, indent=2)}"
-            )
-
-    def _send_lsp_message(
-        self, proc: subprocess.Popen[Any], message: Dict[str, Any]
-    ) -> None:
-        """Send an LSP message to the process."""
-        if proc.stdin is None:
-            raise RuntimeError("Process stdin is None")
-        proc.stdin.write(self._make_message_string(message))
-        proc.stdin.flush()
-
-    def _initialize_lsp(
-        self, proc: subprocess.Popen[Any], project_root: os.PathLike[str]
-    ) -> None:
-        """Initialize LSP connection with enhanced error handling."""
-        self.logger.debug("Initializing LSP connection")
-
-        # Check if clangd process is still alive before sending messages
-        if proc.poll() is not None:
-            raise RuntimeError(
-                f"clangd process died before initialization with return code {proc.returncode}"
-            )
-
-        init_msg = self._create_lsp_message(
-            "initialize",
-            {
-                "rootUri": path_to_uri(project_root),
-                "capabilities": {
-                    "textDocument": {
-                        "declaration": {
-                            "dynamicRegistration": False,
-                            "linkSupport": True,
-                        },
-                        "callHierarchy": {
-                            "dynamicRegistration": False,
-                        },
-                        "references": {
-                            "container": True,
-                        },
-                    },
-                },
-                "initializationOptions": {
-                    "fallbackFlags": [],
-                },
-            },
-            self.INIT_MSG_ID,
-        )
-
-        self.logger.debug(
-            f"Sending LSP initialize message: {json.dumps(init_msg, indent=2)}"
-        )
-
-        try:
-            self._send_lsp_message(proc, init_msg)
-            self.logger.debug("Initialize message sent, waiting for response...")
-
-            # Test if clangd is responding at all by checking if there's any data available
-            import select
-
-            self.logger.debug("Checking if clangd has any response data available...")
-            ready, _, _ = select.select([proc.stdout], [], [], 2.0)  # Wait 2 seconds
-            if not ready:
-                self.logger.error(
-                    "No response from clangd after 2 seconds - clangd may not be processing LSP messages"
-                )
-                # Try to read stderr to see if there are any error messages
-                if proc.stderr:
-                    try:
-                        # Use non-blocking read to check stderr
-                        stderr_ready, _, _ = select.select([proc.stderr], [], [], 0.1)
-                        if stderr_ready:
-                            stderr_output = proc.stderr.read()
-                            if stderr_output:
-                                self.logger.error(f"clangd stderr: {stderr_output}")
-                    except Exception as e:
-                        self.logger.debug(f"Could not read stderr: {e}")
-
-                raise RuntimeError("clangd is not responding to LSP initialize message")
-
-            self.logger.debug("clangd has response data available, reading...")
-
-            # Use shorter timeout for initialization to fail fast if there's an issue
-            init_response = self._read_lsp_response(
-                proc, expected_id=self.INIT_MSG_ID, timeout=10
-            )
-            self.logger.debug(
-                f"Received initialize response: {json.dumps(init_response, indent=2)}"
-            )
-
-            initialized_msg = self._create_lsp_message("initialized", {})
-            self.logger.debug("Sending initialized notification...")
-            self._send_lsp_message(proc, initialized_msg)
-
-            self.logger.debug("LSP initialized successfully")
-
-        except Exception as e:
-            # If initialization fails, try to get stderr for debugging
-            if proc.stderr:
-                try:
-                    stderr_output = proc.stderr.read()
-                    if stderr_output:
-                        self.logger.error(
-                            f"clangd stderr during initialization: {stderr_output}"
-                        )
-                except Exception:
-                    pass
-
-            self.logger.error(f"LSP initialization failed: {e}")
-            raise RuntimeError(f"Failed to initialize LSP connection: {e}")
-
-    def _open_file_in_lsp(
-        self,
-        proc: subprocess.Popen[Any],
-        uri: str,
-        text: Optional[str] = None,
-        language: str = "c",
-    ) -> None:
-        """Open a file in the LSP server. If text is not provided, omit it from the message."""
-        self.logger.debug(f"Opening file in LSP: {uri}")
-        text_document = {"uri": uri, "languageId": language, "version": 1}
-        if text is not None:
-            text_document["text"] = text
-        didopen_msg = self._create_lsp_message(
-            "textDocument/didOpen", {"textDocument": text_document}
-        )
-        self._send_lsp_message(proc, didopen_msg)
-        time.sleep(0.1)  # Allow LSP to process
-
-    def _close_file_in_lsp(self, proc: subprocess.Popen[Any], uri: str) -> None:
-        """Close a file in the LSP server."""
-        self.logger.debug(f"Closing file in LSP: {uri}")
-        didclose_msg = self._create_lsp_message(
-            "textDocument/didClose", {"textDocument": {"uri": uri}}
-        )
-        self._send_lsp_message(proc, didclose_msg)
-
-    def _find_definition(
-        self, proc: subprocess.Popen[Any], uri: str, line: int, character: int
-    ) -> Dict[str, Any]:
-        """Find definition using LSP."""
-        self._open_document(uri)
-        def_msg = self._create_lsp_message(
-            "textDocument/definition",
-            {
-                "textDocument": {"uri": uri},
-                "position": {"line": line, "character": character},
-            },
-            self.DEFINITION_MSG_ID,
-        )
-        self.logger.debug(
-            f"Sending LSP definition request: {json.dumps(def_msg, indent=2)}"
-        )
-        self._send_lsp_message(proc, def_msg)
-        response = self._read_lsp_response(proc, expected_id=self.DEFINITION_MSG_ID)
-        self.logger.debug(
-            f"Received LSP definition response: {json.dumps(response, indent=2)}"
-        )
-        return response
-
-    def _find_declaration(
-        self, proc: subprocess.Popen[Any], uri: str, line: int, character: int
-    ) -> Dict[str, Any]:
-        """Find the declaration location."""
-        self._open_document(uri)
-        decl_msg = self._create_lsp_message(
-            "textDocument/declaration",
-            {
-                "textDocument": {"uri": uri},
-                "position": {"line": line, "character": character},
-            },
-            self.DECLARATION_MSG_ID,
-        )
-        self.logger.debug(f"Sending LSP declaration request: {json.dumps(decl_msg)}")
-        self._send_lsp_message(proc, decl_msg)
-        response = self._read_lsp_response(proc, expected_id=self.DECLARATION_MSG_ID)
-        self.logger.debug(f"Received LSP declaration response: {json.dumps(response)}")
-        return response
-
-    @staticmethod
-    def _lsp_error_message(response: Dict[str, Any]) -> Optional[str]:
-        err = response.get("error")
-        if not err:
-            return None
-        if isinstance(err, dict):
-            msg = err.get("message") or json.dumps(err)
-            code = err.get("code")
-            return (
-                f"LSP error {code}: {msg}" if code is not None else f"LSP error: {msg}"
-            )
-        return f"LSP error: {err}"
-
-    def _prepare_call_hierarchy(
-        self, proc: subprocess.Popen[Any], uri: str, line: int, character: int
-    ) -> Tuple[List[Dict[str, Any]], Optional[str]]:
-        """Resolve a CallHierarchyItem for the symbol at the position (file must be open)."""
-        prepare_msg = self._create_lsp_message(
-            "textDocument/prepareCallHierarchy",
-            {
-                "textDocument": {"uri": uri},
-                "position": {"line": line, "character": character},
-            },
-            self.PREPARE_CALL_HIERARCHY_MSG_ID,
-        )
-        self.logger.debug(f"Sending prepareCallHierarchy: {json.dumps(prepare_msg)}")
-        self._send_lsp_message(proc, prepare_msg)
-        response = self._read_lsp_response(
-            proc, expected_id=self.PREPARE_CALL_HIERARCHY_MSG_ID
-        )
-        error = self._lsp_error_message(response)
-        if error:
-            return [], error
-        result = response.get("result") or []
-        if isinstance(result, dict):
-            result = [result]
-        return result, None
-
-    def _get_callers(
-        self, proc: subprocess.Popen[Any], uri: str, line: int, character: int
-    ) -> Dict[str, Any]:
-        """Incoming call hierarchy."""
-        self._open_document(uri)
-        items, prep_error = self._prepare_call_hierarchy(proc, uri, line, character)
-        if prep_error:
-            return {"result": [], "error": prep_error}
-        if not items:
-            return {
-                "result": [],
-                "note": "No call hierarchy item found at this position",
-            }
-
-        incoming_msg = self._create_lsp_message(
-            "callHierarchy/incomingCalls",
-            {"item": items[0]},
-            self.INCOMING_CALLS_MSG_ID,
-        )
-        self.logger.debug(f"Sending incomingCalls: {json.dumps(incoming_msg)}")
-        self._send_lsp_message(proc, incoming_msg)
-        response = self._read_lsp_response(proc, expected_id=self.INCOMING_CALLS_MSG_ID)
-        error = self._lsp_error_message(response)
-        if error:
-            return {"result": [], "error": error}
-        calls = response.get("result") or []
-        if isinstance(calls, dict):
-            calls = [calls]
-        return {"result": calls}
-
-    def _get_callees(
-        self, proc: subprocess.Popen[Any], uri: str, line: int, character: int
-    ) -> Dict[str, Any]:
-        """Outgoing call hierarchy. Document lifetime is LRU-cached."""
-        self._open_document(uri)
-        items, prep_error = self._prepare_call_hierarchy(proc, uri, line, character)
-        if prep_error:
-            return {"result": [], "error": prep_error}
-        if not items:
-            return {
-                "result": [],
-                "note": "No call hierarchy item found at this position",
-            }
-
-        outgoing_msg = self._create_lsp_message(
-            "callHierarchy/outgoingCalls",
-            {"item": items[0]},
-            self.OUTGOING_CALLS_MSG_ID,
-        )
-        self.logger.debug(f"Sending outgoingCalls: {json.dumps(outgoing_msg)}")
-        self._send_lsp_message(proc, outgoing_msg)
-        response = self._read_lsp_response(proc, expected_id=self.OUTGOING_CALLS_MSG_ID)
-        error = self._lsp_error_message(response)
-        if error:
-            return {"result": [], "error": error}
-        calls = response.get("result") or []
-        if isinstance(calls, dict):
-            calls = [calls]
-        return {"result": calls}
-
     def _kernel_rel(self, path_or_uri: str) -> str:
         """Normalize any path/URI to a kernel-relative POSIX string."""
         s = path_or_uri
@@ -977,13 +448,9 @@ class Agent:
             raise RuntimeError("ts_indexer daemon closed stdout")
         return json.loads(line)
 
-    def _ensure_navigation_stack(
-        self, need_lsp: bool = False, need_ts: bool = False
-    ) -> None:
-        """Lazily start expensive code-navigation services on first use."""
-        if need_lsp and getattr(self, "agent_lsp_proc", None) is None:
-            self.generate_compile_commands()
-            self.agent_lsp_proc = self._setup_lsp_client()
+    # TODO: Do we need this now that LSP/clangd is removed?
+    def _ensure_navigation_stack(self, need_ts: bool = True) -> None:
+        """Lazily start the tree-sitter index daemon on first use."""
         if need_ts and getattr(self, "ts_daemon", None) is None:
             self._start_ts_daemon()
 
@@ -1011,62 +478,39 @@ class Agent:
             raise RuntimeError(f"ts_indexer error: {resp['error']}")
         return resp.get("funcs", [])
 
-    @lru_cache_cb(maxsize=_CLANGD_OPEN_FILE_CAPACITY, on_evict="_close_document")
-    def _open_document(self, uri: str) -> None:
-        """Send didOpen to clangd for `uri`. Cached per-instance, LRU-evicted.
+    def _ts_callees(
+        self, rel_path: str, start_line: int, end_line: int
+    ) -> List[Dict[str, Any]]:
+        """Return the calls made within [start_line, end_line] of a file."""
+        resp = self._ts_query(
+            op="callees", path=rel_path, start_line=start_line, end_line=end_line
+        )
+        if "error" in resp:
+            raise RuntimeError(f"ts_indexer error: {resp['error']}")
+        return resp.get("callees", [])
 
-        On eviction, `_close_document` sends the matching didClose. Callers
-        invoke this to kick off Clangd's dynamic indexing.
+    def _split_file_arg(self, file: Optional[str]) -> List[str]:
+        """Parse a `file` argument into normalized kernel-relative paths.
+
+        Like grep, the name-taking tools accept one OR several whitespace/comma-
+        separated paths in `file` (kernel paths never contain spaces). Used as a
+        ranking/disambiguation hint, so no existence check here.
         """
-        docker_path = uri_to_path(uri)
-        contents = self.docker_manager.read_file(docker_path)
-        if contents is False:
-            raise RuntimeError(f"Unable to read document for LSP: {uri}")
-        # Callers must not route non-C sources through this path.
-        self._open_file_in_lsp(self.agent_lsp_proc, uri, contents, language="c")
-
-    def _close_document(self, key: Tuple[str, ...], _: Any) -> None:
-        """Eviction callback for `_open_document`: send didClose to clangd."""
-        (uri,) = key
-        proc = getattr(self, "agent_lsp_proc", None)
-        if proc is None or proc.poll() is not None:
-            return
-        try:
-            self._close_file_in_lsp(proc, uri)
-        except Exception as e:
-            self.logger.debug(f"close failed for {uri}: {e}")
-
-    def _clangd_definition_once(
-        self, uri: str, line: int, col: int
-    ) -> Optional[Tuple[str, int, int]]:
-        """Single textDocument/definition call.
-
-        Returns (uri, line_0based, col_0based) or None.
-        """
-        try:
-            resp = self._find_definition(self.agent_lsp_proc, uri, line, col)
-        except Exception as e:
-            self.logger.debug(f"clangd definition call failed: {e}")
-            return None
-        result = resp.get("result") or []
-        if isinstance(result, dict):
-            result = [result]
-        if not result:
-            return None
-        loc = result[0]
-        loc_uri = loc.get("uri") or loc.get("targetUri") or ""
-        rng = loc.get("range") or loc.get("targetRange") or {}
-        start = rng.get("start") or {}
-        if not loc_uri or "line" not in start:
-            return None
-        return loc_uri, start["line"], start.get("character", 0)
+        if not file:
+            return []
+        return [self._kernel_rel(t) for t in re.split(r"[,\s]+", file.strip()) if t]
 
     def _rank_candidates(
-        self, candidates: List[Dict[str, Any]], file_hint: Optional[str]
+        self, candidates: List[Dict[str, Any]], file_hints: List[str]
     ) -> List[Dict[str, Any]]:
-        """Sort candidates by disambiguation tier (1 = best)."""
-        hint = self._kernel_rel(file_hint) if file_hint else None
-        seen = self.seen_files
+        """Sort candidates by disambiguation tier (1 = best).
+
+        file_hints are kernel-relative paths the caller passed (where the symbol
+        was seen); an exact hit on any of them is the strongest signal, and the
+        hints also feed the directory/subsystem proximity tiers.
+        """
+        hints = set(file_hints)
+        seen = self.seen_files | hints
 
         # TO-DO: add a tier for "#include files of a seen file
 
@@ -1083,7 +527,7 @@ class Agent:
 
         def tier(cand: Dict[str, Any]) -> int:
             cf = cand["file"]
-            if hint and cf == hint:
+            if cf in hints:
                 return 1
             if cf in seen:
                 return 2
@@ -1099,63 +543,6 @@ class Agent:
         )
 
     _TS_LOOKUP_LIMIT = 100
-    _RANKED_CANDIDATE_LIMIT = 10
-
-    def _resolve_name_to_locations(
-        self, name: str, file_hint: Optional[str]
-    ) -> Optional[List[Dict[str, Any]]]:
-        """Return up to _RANKED_CANDIDATE_LIMIT ranked ts candidates."""
-        candidates = self._ts_lookup(name, limit=self._TS_LOOKUP_LIMIT)
-        if not candidates:
-            return None
-        ranked = self._rank_candidates(candidates, file_hint)
-        return ranked[: self._RANKED_CANDIDATE_LIMIT]
-
-    def _is_active_definition(self, ts_def: Dict[str, Any]) -> bool:
-        """Two-hop textDocument/definition check.
-
-        clangd toggles between declaration and definition: on an active
-        definition it returns the declaration, and on a declaration it
-        returns the definition. Two hops from a candidate therefore reach
-        the active definition. If either hop lands back on our starting
-        position, this candidate IS the active definition.
-        """
-        uri = path_to_uri(str(self.docker_manager.kernel_dir / ts_def["file"]))
-        line = ts_def["name_line"] - 1
-        col = ts_def["name_col"]
-        self._open_document(uri)
-        hop1 = self._clangd_definition_once(uri, line, col)
-        if hop1 is None:
-            return False
-        if hop1[0] == uri and hop1[1] == line and hop1[2] == col:
-            return True
-        hop2 = self._clangd_definition_once(hop1[0], hop1[1], hop1[2])
-        if hop2 is None:
-            return False
-        if hop2[0] == uri and hop2[1] == line and hop2[2] == col:
-            return True
-        return False
-
-    def _find_active_definition(
-        self, name: str, file_hint: Optional[str]
-    ) -> Optional[Dict[str, Any]]:
-        """Return the ts candidate clangd confirms as the active definition, or None."""
-        if file_hint:
-            hint_uri = path_to_uri(
-                str(self.docker_manager.kernel_dir / self._kernel_rel(file_hint))
-            )
-            self._open_document(hint_uri)
-        candidates = self._resolve_name_to_locations(name, file_hint)
-        if candidates is None:
-            self.logger.debug(f"No candidates found in ts lookup for {name}")
-            return None
-        if len(candidates) == 1:
-            return candidates[0]
-        for cand in candidates:
-            if self._is_active_definition(cand):
-                return cand
-        self.logger.error(f"No active definition found for {name}")
-        return None
 
     def get_tools(
         self, allowed: Optional[List[str]] = None
@@ -1167,144 +554,156 @@ class Agent:
         filtered = [t for t in TOOLS if t.get("function", {}).get("name") in allowed_set]
         return filtered or None
 
-    def _format_call_hierarchy_results(
-        self, calls: List[Dict[str, Any]], item_key: str
-    ) -> List[Dict[str, Any]]:
-        formatted: List[Dict[str, Any]] = []
-        for c in calls:
-            item = c.get(item_key) or {}
-            u = item.get("uri", "")
-            rng = item.get("range") or item.get("selectionRange") or {}
-            start = rng.get("start") or {}
-            line_num = start.get("line", -1) + 1
-            rel = self._kernel_rel(u)
-            self.seen_files.add(rel)
-            formatted.append(
-                {
-                    "name": item.get("name"),
-                    "path": rel,
-                    "line": line_num,
-                    "snippet": self._snippet_for_range(rel, line_num, line_num, ctx=2),
-                }
-            )
-        return formatted
+    _DEFINITION_LIMIT = 50
+    _CALLEES_LIMIT = 200
+    _CALLERS_LIMIT = 100  # max caller entries and max file-scope references each
+    _GREP_LIMIT = 100  # max grep hits returned
 
     def _tool_find_definition(
         self, name: str, file: Optional[str] = None
     ) -> Dict[str, Any]:
-        self._ensure_navigation_stack(need_lsp=True, need_ts=True)
-        active_def = self._find_active_definition(name, file)
-        if active_def is None:
+        # Pure tree-sitter: return EVERY definition of `name` across the tree —
+        # all arch/#ifdef variants — ranked by proximity to files already seen.
+        # We deliberately do not collapse to the config-active variant: a kernel
+        # review must weigh all of them, not just what one defconfig compiles.
+        self._ensure_navigation_stack(need_ts=True)
+        name = self._strip_type_keyword(name)
+        candidates = self._ts_lookup(name, limit=self._TS_LOOKUP_LIMIT)
+        if not candidates:
             return {"ok": False, "error": f"symbol '{name}' not found in index"}
-
-        self.seen_files.add(active_def["file"])
-
-        definition = {
-            "path": active_def["file"],
-            "line": active_def["start_line"],
-            "snippet": self._snippet_for_range(
-                active_def["file"],
-                active_def["start_line"],
-                active_def["end_line"],
-                ctx=0,
-            ),
+        ranked = self._rank_candidates(candidates, self._split_file_arg(file))
+        total = len(ranked)
+        definitions: List[Dict[str, Any]] = []
+        for c in ranked[: self._DEFINITION_LIMIT]:
+            self.seen_files.add(c["file"])
+            definitions.append(
+                {
+                    "name": c["name"],
+                    "kind": c["kind"],
+                    "path": c["file"],
+                    "line": c["start_line"],
+                    "snippet": self._snippet_for_range(
+                        c["file"], c["start_line"], c["end_line"], ctx=0
+                    ),
+                }
+            )
+        return {
+            "ok": True,
+            "result": definitions,
+            "total": total,
+            "truncated": total > self._DEFINITION_LIMIT,
         }
 
-        declaration: Optional[Dict[str, Any]] = None
-        try:
-            docker_uri = path_to_uri(
-                str(self.docker_manager.kernel_dir / active_def["file"])
-            )
-            decl_response = self._find_declaration(
-                self.agent_lsp_proc,
-                docker_uri,
-                active_def["name_line"] - 1,
-                active_def["name_col"],
-            )
-            decl_result = decl_response.get("result") or []
-            if isinstance(decl_result, dict):
-                decl_result = [decl_result]
-            if decl_result:
-                loc = decl_result[0]
-                loc_uri = loc.get("uri") or loc.get("targetUri") or ""
-                rng = loc.get("range") or loc.get("targetRange") or {}
-                start = rng.get("start") or {}
-                if loc_uri and "line" in start:
-                    decl_rel = self._kernel_rel(loc_uri)
-                    decl_line = start["line"] + 1
-                    if (
-                        decl_rel != active_def["file"]
-                        or decl_line != active_def["start_line"]
-                    ):
-                        declaration = {
-                            "path": decl_rel,
-                            "line": decl_line,
-                            "snippet": self._snippet_for_range(
-                                decl_rel, decl_line, decl_line, ctx=2
-                            ),
-                        }
-                        self.seen_files.add(decl_rel)
-        except Exception as e:
-            self.logger.debug(f"declaration lookup failed for {name}: {e}")
-
-        result: Dict[str, Any] = {
-            "declaration": declaration,
-            "definition": definition,
-        }
-
-        return {"ok": True, **result}
-
+    # TODO: This is almost the same as grep(), remove if models don't call this often
     def _tool_find_callers(
         self, name: str, file: Optional[str] = None
     ) -> Dict[str, Any]:
-        self._ensure_navigation_stack(need_lsp=True, need_ts=True)
-        active_def = self._find_active_definition(name, file)
-        if active_def is None:
-            return {"ok": False, "error": f"symbol '{name}' not found in index"}
-        uri = path_to_uri(str(self.docker_manager.kernel_dir / active_def["file"]))
-        line = active_def["name_line"] - 1
-        col = active_def["name_col"]
-        if active_def["kind"] != "function":
-            return {
-                "ok": False,
-                "error": (
-                    f"'{name}' is not a function; clangd's call hierarchy "
-                    f"only covers callables. Use grep for non-function symbols."
-                ),
-            }
-        self.seen_files.add(active_def["file"])
-
-        response = self._get_callers(self.agent_lsp_proc, uri, line, col)
-        if response.get("error"):
-            return {"ok": False, "error": response["error"]}
-        calls = response.get("result") or []
-        if isinstance(calls, dict):
-            calls = [calls]
-
-        total = len(calls)
-        truncated = total > 100
-        formatted = self._format_call_hierarchy_results(calls[:100], "from")
+        # Callers = every function whose body references `name`. ripgrep the bare
+        # identifier tree-wide (or within `file`) and attribute each hit to its
+        # enclosing function via the tree-sitter index, grouping multiple call
+        # sites in the same function. Hits at file scope (function-pointer wiring
+        # like `.release = name`, macro bodies, ops tables) have no enclosing
+        # function — kept as `references`, since that wiring is often how `name`
+        # actually gets invoked.
+        self._ensure_navigation_stack(need_ts=True)
+        name = self._strip_type_keyword(name)
+        pattern = rf"\b{re.escape(name)}\b"
+        hits, error = self._rg_search(pattern, file, glob=None)
+        if error is not None:
+            return {"ok": False, "error": error}
+        callers: Dict[Tuple[str, str], Dict[str, Any]] = {}
+        references: List[Dict[str, Any]] = []
+        for h in hits:
+            fn = h["enclosing_function"]
+            if fn is None:
+                references.append(
+                    {"path": h["path"], "line": h["line"], "snippet": h["snippet"]}
+                )
+                continue
+            # Key on the definition line too: #ifdef/#else variants share a name
+            # in one file but are distinct functions — keep them as separate
+            # callers rather than merging their call sites.
+            key = (h["path"], fn, h["enclosing_function_line"])
+            entry = callers.get(key)
+            if entry is None:
+                entry = {
+                    "function": fn,
+                    "path": h["path"],
+                    "function_line": h["enclosing_function_line"],
+                    "lines": [],
+                    "snippet": h["snippet"],
+                }
+                callers[key] = entry
+            entry["lines"].append(h["line"])
+        caller_list = list(callers.values())
+        limit = self._CALLERS_LIMIT
+        for c in caller_list[:limit]:
+            self.seen_files.add(c["path"])
         return {
             "ok": True,
-            "result": formatted,
-            "total": total,
-            "truncated": truncated,
+            "result": {
+                "callers": caller_list[:limit],
+                "references": references[:limit],
+            },
+            "total_callers": len(caller_list),
+            "total_references": len(references),
+            "truncated": len(caller_list) > limit or len(references) > limit,
         }
 
-    def _tool_find_calls(self, name: str, file: Optional[str] = None) -> Dict[str, Any]:
-        # TO-DO: implement outgoing-call discovery via tree-sitter  or by
-        # upgrading the container's clangd to a version (>= 20) that has a
-        # working callHierarchy/outgoingCalls implementation.
-        del name, file
-        return {"ok": False, "error": "find_calls not implemented"}
+    # TODO: Do models prefer reading the whole function with read_file()?
+    def _tool_find_callees(
+        self, name: str, file: Optional[str] = None
+    ) -> Dict[str, Any]:
+        # Callees = the calls made inside `name`'s own body. Local and purely
+        # syntactic: locate the function definition(s) in the tree-sitter index
+        # and extract their call expressions — direct `foo()` and indirect
+        # `ops->fn()` alike (the latter is the dominant kernel call style, which
+        # a semantic call graph would miss).
+        self._ensure_navigation_stack(need_ts=True)
+        name = self._strip_type_keyword(name)
+        candidates = self._ts_lookup(name, limit=self._TS_LOOKUP_LIMIT)
+        funcs = [c for c in candidates if c.get("kind") == "function"]
+        hints = self._split_file_arg(file)
+        if hints:
+            scoped = [c for c in funcs if c["file"] in set(hints)]
+            funcs = scoped or funcs
+        if not funcs:
+            return {
+                "ok": False,
+                "error": f"no function definition named '{name}' in index",
+            }
+        ranked = self._rank_candidates(funcs, hints)
+        definitions: List[Dict[str, Any]] = []
+        for c in ranked[:10]:
+            callees = self._ts_callees(c["file"], c["start_line"], c["end_line"])
+            self.seen_files.add(c["file"])
+            definitions.append(
+                {
+                    "path": c["file"],
+                    "line": c["start_line"],
+                    "callees": callees[: self._CALLEES_LIMIT],
+                    "truncated": len(callees) > self._CALLEES_LIMIT,
+                }
+            )
+        return {
+            "ok": True,
+            "result": definitions,
+            "total_definitions": len(ranked),
+        }
 
-    def _tool_grep(
+    def _rg_search(
         self,
         pattern: str,
         file: Optional[str] = None,
         glob: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        self._ensure_navigation_stack(need_ts=True)
+    ) -> Tuple[Optional[List[Dict[str, Any]]], Optional[str]]:
+        """Run ripgrep and attribute each hit to its enclosing function.
+
+        Returns (hits, None) on success or (None, error_message). Each hit is
+        {path, enclosing_function, line, snippet}, deduped by (path, line);
+        enclosing_function is None for hits outside any function body. No result
+        cap — callers truncate as they see fit.
+        """
         # ripgrep validates the pattern itself (Rust regex dialect). We do NOT
         # pre-validate with Python's `re`: its dialect differs (lookaround and
         # backrefs compile in Python but ripgrep rejects them, and vice versa),
@@ -1322,7 +721,7 @@ class Agent:
                 try:
                     self._abs_in_kernel(tok)
                 except ValueError as e:
-                    return {"ok": False, "error": str(e)}
+                    return None, str(e)
                 rel = self._kernel_rel(tok)
                 container_path = str(self.docker_manager.kernel_dir / rel)
                 check = self.docker_manager.run_command(
@@ -1342,7 +741,7 @@ class Agent:
                 stdout, _ = check.communicate()
                 kind = stdout.strip()
                 if kind == "missing":
-                    return {"ok": False, "error": f"file not found: {rel}"}
+                    return None, f"file not found: {rel}"
                 if kind == "dir":
                     any_dir = True
                 file_paths.append(rel)
@@ -1370,12 +769,14 @@ class Agent:
         else:
             rg_cmd.append(str(kernel_dir))
 
-        try:
-            output = self.docker_manager.run_cmd_with_timer(
-                rg_cmd, f"grep '{pattern}'", cwd=str(kernel_dir)
-            )
-        except Exception as e:
-            return {"ok": False, "error": f"ripgrep failed: {e}"}
+        proc = self.docker_manager.run_command(rg_cmd, cwd=str(kernel_dir))
+        output, err = proc.communicate()
+        # rg exit codes: 0 = matches, 1 = no matches, 2 = error (e.g. bad regex).
+        # Surface a real error rather than silently returning zero hits — a
+        # silent 0 on a malformed pattern reads as "nothing found".
+        if proc.returncode == 2:
+            detail = (err or "").strip().splitlines()
+            return None, f"invalid regex or search error: {detail[0] if detail else ''}"
 
         file_to_funcs: Dict[str, List[Tuple[int, int, str]]] = {}
 
@@ -1387,7 +788,7 @@ class Agent:
                 ]
             return file_to_funcs[rel_path]
 
-        results: List[Dict[str, Any]] = []
+        hits: List[Dict[str, Any]] = []
         seen_hits: Set[Tuple[str, int]] = set()
         for raw in output.splitlines():
             parts = raw.split(":", 2)
@@ -1404,30 +805,56 @@ class Agent:
             seen_hits.add((rel, hit_line))
 
             enclosing: Optional[str] = None
+            enclosing_line: Optional[int] = None
             for s, e, fname in funcs_for(rel):
                 if s <= hit_line <= e:
                     enclosing = fname
+                    enclosing_line = s
                     break
 
-            results.append(
+            hits.append(
                 {
                     "path": rel,
                     "enclosing_function": enclosing,
+                    # Definition line of the enclosing function. Two #ifdef/#else
+                    # variants share a name in one file but have distinct lines —
+                    # this keeps them apart.
+                    "enclosing_function_line": enclosing_line,
                     "line": hit_line,
                     "snippet": text.strip()[:240],
                 }
             )
+        return hits, None
 
-        total = len(results)
-        truncated = total > 100
-        results = results[:100]
+    def _tool_grep(
+        self,
+        pattern: str,
+        file: Optional[str] = None,
+        glob: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        self._ensure_navigation_stack(need_ts=True)
+        hits, error = self._rg_search(pattern, file, glob)
+        if error is not None:
+            return {"ok": False, "error": error}
+        total = len(hits)
+        # Project to grep's documented schema (the enclosing-function definition
+        # line that _rg_search also carries is only needed by find_callers).
+        results = [
+            {
+                "path": h["path"],
+                "enclosing_function": h["enclosing_function"],
+                "line": h["line"],
+                "snippet": h["snippet"],
+            }
+            for h in hits[: self._GREP_LIMIT]
+        ]
         for r in results:
             self.seen_files.add(r["path"])
         return {
             "ok": True,
             "result": results,
             "total": total,
-            "truncated": truncated,
+            "truncated": total > self._GREP_LIMIT,
         }
 
     # TODO: mark "truncated" only when we do not give what the AI wants (within bounds)
@@ -1472,14 +899,11 @@ class Agent:
         except ValueError as e:
             return {"ok": False, "error": str(e)}
         rel = self._kernel_rel(path)
+        # The model often drops the Documentation/ prefix (e.g. "filesystems/
+        # locking.rst"). Prepend it rather than failing — the escape check above
+        # already ran on the original path, so this can't widen scope.
         if not (rel == "Documentation" or rel.startswith("Documentation/")):
-            return {
-                "ok": False,
-                "error": (
-                    f"read_doc only reads files under Documentation/ (got {rel!r}); "
-                    "use it to check documented contracts/ABI."
-                ),
-            }
+            rel = "Documentation/" + rel
         container_path = str(self.docker_manager.kernel_dir / rel)
         content = self.docker_manager.read_file(container_path)
         if content is False:
@@ -1542,13 +966,16 @@ class Agent:
 
     def _tool_get_subsystem_review_guide(self, subsystem_file: str) -> Dict[str, Any]:
         """Load a subsystem review guide from thirdparty/review-prompts/kernel/subsystem/."""
+        available = sorted(p.name for p in SUBSYSTEM_REVIEW_PROMPTS_PATH.glob("*.md"))
+        avail_str = ", ".join(available)
         safe_name = os.path.basename(subsystem_file)
         if safe_name != subsystem_file or not safe_name.endswith(".md"):
             return {
                 "ok": False,
                 "error": (
                     f"subsystem_file must be a bare .md filename from the "
-                    f"Subsystem Review Guide Index (got {subsystem_file!r})"
+                    f"Subsystem Review Guide Index (got {subsystem_file!r}); "
+                    f"available: {avail_str}"
                 ),
             }
         guide_path = SUBSYSTEM_REVIEW_PROMPTS_PATH / safe_name
@@ -1556,7 +983,13 @@ class Agent:
             with open(guide_path, "r") as f:
                 content = f.read()
         except FileNotFoundError:
-            return {"ok": False, "error": f"subsystem guide not found: {safe_name}"}
+            return {
+                "ok": False,
+                "error": (
+                    f"no subsystem guide named {safe_name!r}; "
+                    f"available: {avail_str}"
+                ),
+            }
         return {
             "ok": True,
             "result": {"name": safe_name, "content": content},
@@ -1898,7 +1331,7 @@ class Agent:
         read_tools = {
             "find_definition": self._tool_find_definition,
             "find_callers": self._tool_find_callers,
-            "find_calls": self._tool_find_calls,
+            "find_callees": self._tool_find_callees,
             "grep": self._tool_grep,
             "read_file": self._tool_read_file,
             "read_doc": self._tool_read_doc,
@@ -1941,166 +1374,3 @@ class Agent:
         stdout, _ = proc.communicate()
         return set(stdout.strip().splitlines())
 
-    def _setup_lsp_client(self) -> subprocess.Popen[Any]:
-        """Set up and initialize the LSP client using Docker exec."""
-        kernel_dir = self.docker_manager.sandbox_path / "kernel"
-        build_dir = self.docker_manager.build_dir
-
-        # First, test if the container is still running
-        self.logger.debug("Checking if container is still running...")
-        try:
-            # Simple test to see if container is alive
-            test_proc = self.docker_manager.run_command(
-                ["echo", "container_alive"],
-                cwd=str(kernel_dir),
-            )
-            test_proc.wait()
-            if test_proc.returncode != 0:
-                raise RuntimeError("Docker container is not responding")
-        except Exception as e:
-            raise RuntimeError(
-                f"Docker container appears to have died during build process: {e}"
-            )
-
-        # Now test if clangd is available in the container
-        self.logger.debug("Testing clangd availability in container...")
-        try:
-            test_proc = self.docker_manager.run_command(
-                ["which", "clangd"],
-                cwd=str(kernel_dir),
-            )
-            test_proc.wait()
-            if test_proc.returncode != 0:
-                # Try to get more information about what's available
-                self.logger.debug("clangd not found, checking what's installed...")
-                ls_proc = self.docker_manager.run_command(
-                    ["ls", "-la", "/usr/bin/clang*"],
-                    cwd=str(kernel_dir),
-                )
-                ls_proc.wait()
-                if ls_proc.stdout:
-                    stdout_output = ls_proc.stdout.read()
-                    self.logger.debug(f"Available clang tools: {stdout_output}")
-
-                raise RuntimeError(
-                    "clangd not found in Docker container - container may have crashed during build"
-                )
-        except Exception as e:
-            raise RuntimeError(f"Failed to test clangd availability: {e}")
-
-        # Comprehensive compile_commands.json debugging
-        compile_commands_path = build_dir / "compile_commands.json"
-        self.logger.info(f"=== COMPILE_COMMANDS.JSON DEBUGGING ===")
-        self.logger.info(f"Expected path: {compile_commands_path}")
-        self.logger.info(
-            f"clangd will be started with --compile-commands-dir={build_dir}"
-        )
-
-        # Check if file exists
-        check_proc = self.docker_manager.run_command(
-            ["test", "-f", str(compile_commands_path)],
-            cwd=str(kernel_dir),
-        )
-        check_proc.wait()
-
-        if check_proc.returncode != 0:
-            self.logger.error(
-                f"compile_commands.json NOT FOUND at {compile_commands_path}"
-            )
-            # List what files are actually in the build directory
-            ls_proc = self.docker_manager.run_command(
-                ["ls", "-la", str(build_dir)],
-                cwd=str(kernel_dir),
-            )
-            ls_proc.wait()
-            if ls_proc.stdout:
-                ls_output = ls_proc.stdout.read()
-                self.logger.info(f"Build directory contents: {ls_output}")
-        else:
-            self.logger.info(f"compile_commands.json EXISTS at {compile_commands_path}")
-
-            # Get file stats
-            stat_proc = self.docker_manager.run_command(
-                ["stat", str(compile_commands_path)],
-                cwd=str(kernel_dir),
-            )
-            stat_proc.wait()
-            if stat_proc.stdout:
-                stat_output = stat_proc.stdout.read()
-                self.logger.info(f"File stats: {stat_output}")
-
-            # Get file size and first few lines
-            wc_proc = self.docker_manager.run_command(
-                ["wc", "-l", str(compile_commands_path)],
-                cwd=str(kernel_dir),
-            )
-            wc_proc.wait()
-            if wc_proc.stdout:
-                wc_output = wc_proc.stdout.read()
-                self.logger.info(f"File line count: {wc_output}")
-
-            # Show first few entries
-            head_proc = self.docker_manager.run_command(
-                ["head", "-20", str(compile_commands_path)],
-                cwd=str(kernel_dir),
-            )
-            head_proc.wait()
-            if head_proc.stdout:
-                head_output = head_proc.stdout.read()
-                self.logger.info(f"First 20 lines: {head_output}")
-
-            # Check if qcom_eud.c is in the compile commands
-            grep_proc = self.docker_manager.run_command(
-                ["grep", "-n", "qcom_eud.c", str(compile_commands_path)],
-                cwd=str(kernel_dir),
-            )
-            grep_proc.wait()
-            if grep_proc.stdout:
-                grep_output = grep_proc.stdout.read()
-                if grep_output:
-                    self.logger.info(f"qcom_eud.c entries found: {grep_output}")
-                else:
-                    self.logger.warning("qcom_eud.c NOT found in compile_commands.json")
-            else:
-                self.logger.warning(
-                    "Could not search for qcom_eud.c in compile_commands.json"
-                )
-
-        self.logger.info(f"=== END COMPILE_COMMANDS.JSON DEBUGGING ===")
-
-        # Clean up any existing clangd processes
-        self.docker_manager.cleanup_clangd()
-
-        # Configure clangd with persistent index in build directory
-        index_dir = build_dir / ".clangd"
-        clangd_args = [
-            "clangd",
-            "--header-insertion=never",
-            "--pretty",
-            f"--compile-commands-dir={build_dir}",
-            "--background-index",
-            f"--index-file={index_dir}/index.idx",
-            "--log=error",
-            f"--j={os.cpu_count() or 4}",  # Parallel indexing
-        ]
-
-        self.logger.debug(
-            f"Starting clangd LSP server with args: {' '.join(clangd_args)}"
-        )
-
-        return self._start_and_init_lsp(clangd_args, kernel_dir)
-
-    def _cleanup_clangd_on_retry(self, *_args: Any, **_kwargs: Any) -> None:
-        self.docker_manager.cleanup_clangd()
-
-    @retry(
-        max_retries=3,
-        exceptions=(RuntimeError,),
-        on_retry=_cleanup_clangd_on_retry,
-    )
-    def _start_and_init_lsp(
-        self, clangd_args: List[str], kernel_dir: Path
-    ) -> subprocess.Popen[Any]:
-        proc = self.docker_manager.start_clangd_lsp(clangd_args, cwd=str(kernel_dir))
-        self._initialize_lsp(proc, self.docker_manager.kernel_dir)
-        return proc

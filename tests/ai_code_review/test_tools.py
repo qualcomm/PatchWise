@@ -3,12 +3,15 @@
 # SPDX-License-Identifier: BSD-3-Clause
 """End-to-end pytest suite for every AiCodeReview agent tool.
 
-Boots the full AiCodeReview pipeline (docker + clangd + ts_indexer) against
-a pinned linux-next checkout cloned into tests/linux/, then exercises each
-tool exposed via AiCodeReview.dispatch_tool:
+Boots the full AiCodeReview pipeline (docker + ts_indexer) against a pinned
+linux-next checkout cloned into tests/linux/, then exercises each tool exposed
+via AiCodeReview.dispatch_tool:
 
-  find_definition / find_callers / find_calls / grep / read_file / list_files
+  find_definition / find_callers / find_callees / grep / read_file / list_files
   / git_log / git_show / git_cat_file
+
+Code navigation is pure tree-sitter + ripgrep (no clangd / compile database),
+so the suite needs no kernel build.
 
 Run with the patchwise venv active.
 
@@ -125,9 +128,12 @@ def test_find_definition(
 ) -> None:
     result = review.agent.dispatch_tool("find_definition", {"name": name})
     assert result.get("ok"), f"tool returned not-ok: {result}"
-    definition = result.get("definition") or {}
-    path = definition.get("path", "")
-    assert expected_file in path, f"resolved to {path}:{definition.get('line')}"
+    defs = result.get("result", [])
+    assert defs, "expected at least one definition"
+    paths = [d.get("path", "") for d in defs]
+    assert any(
+        expected_file in p for p in paths
+    ), f"{expected_file!r} not among {paths}"
 
 
 # Models routinely pass a C type with its tag keyword (`struct inode`); the tool
@@ -150,8 +156,9 @@ def test_find_definition_strips_type_keyword(
 
 
 # #ifdef-variant cases: two textual defs in the same file under
-# mutually-exclusive branches. arm64 defconfig has CONFIG_OF=y and
-# CONFIG_NO_HZ_FULL=n.
+# mutually-exclusive branches. find_definition is build-agnostic — it returns
+# ALL variants (it does not collapse to the one a given defconfig compiles), so
+# the variant at expected_line must appear among the results.
 @pytest.mark.parametrize(
     "name,file_,expected_line",
     [
@@ -165,12 +172,11 @@ def test_find_definition_ifdef(
 ) -> None:
     result = review.agent.dispatch_tool("find_definition", {"name": name})
     assert result.get("ok"), f"tool returned not-ok: {result}"
-    definition = result.get("definition") or {}
-    path = definition.get("path", "")
-    line = definition.get("line")
-    assert (
-        file_ in path and line == expected_line
-    ), f"resolved to {path}:{line}, wanted {file_}:{expected_line}"
+    defs = result.get("result", [])
+    in_file = [d for d in defs if file_ in d.get("path", "")]
+    assert len(in_file) >= 2, f"expected both #ifdef variants in {file_}, got {in_file}"
+    lines = [d.get("line") for d in in_file]
+    assert expected_line in lines, f"variant at {expected_line} missing; got {lines}"
 
 
 @pytest.mark.parametrize(
@@ -190,6 +196,55 @@ def test_find_definition_errors(
     assert expected_error in (result.get("error") or "")
 
 
+def test_find_definition_multi_file_hint(review: AiCodeReview) -> None:
+    """`file` may list several paths; an exact hit on any ranks first."""
+    result = review.agent.dispatch_tool(
+        "find_definition",
+        {"name": "inode", "file": "fs/open.c, include/linux/fs.h"},
+    )
+    assert result.get("ok"), f"tool returned not-ok: {result}"
+    defs = result.get("result", [])
+    assert defs, "expected at least one definition"
+    assert "include/linux/fs.h" in defs[0]["path"], f"hint not ranked first: {defs[0]}"
+
+
+@pytest.mark.parametrize(
+    "file_arg",
+    [
+        "../../../etc/passwd, does/not/exist.c",  # escaping + nonexistent
+        "   ,  ",  # only separators -> empty hint list
+    ],
+    ids=["bad_paths", "blank"],
+)
+def test_find_definition_bad_hint_is_advisory(
+    review: AiCodeReview, file_arg: str
+) -> None:
+    """The `file` hint is advisory only: bogus paths never fail the lookup."""
+    result = review.agent.dispatch_tool(
+        "find_definition", {"name": "inode", "file": file_arg}
+    )
+    assert result.get("ok"), f"tool returned not-ok: {result}"
+    defs = result.get("result", [])
+    assert any(
+        "include/linux/fs.h" in d["path"] for d in defs
+    ), "inode should still resolve despite a bad hint"
+
+
+def test_find_definition_valid_and_invalid_hint(review: AiCodeReview) -> None:
+    """A valid + invalid path combo: the valid hint still ranks first, the bad
+    one is ignored (advisory hints are never validated, so no error)."""
+    result = review.agent.dispatch_tool(
+        "find_definition",
+        {"name": "inode", "file": "include/linux/fs.h, does/not/exist.c"},
+    )
+    assert result.get("ok"), f"tool returned not-ok: {result}"
+    defs = result.get("result", [])
+    assert defs, "expected at least one definition"
+    assert (
+        "include/linux/fs.h" in defs[0]["path"]
+    ), f"valid hint not ranked first: {defs[0]}"
+
+
 # ---------------------------------------------------------------------------
 # find_callers
 # ---------------------------------------------------------------------------
@@ -206,29 +261,154 @@ def test_find_definition_errors(
 def test_find_callers(review: AiCodeReview, name: str, min_count: int) -> None:
     result = review.agent.dispatch_tool("find_callers", {"name": name})
     assert result.get("ok"), f"tool returned not-ok: {result}"
-    total = result.get("total", 0)
+    payload = result.get("result", {})
+    callers = payload.get("callers", [])
+    total = result.get("total_callers", 0)
     assert total >= min_count, f"only {total} callers (wanted >= {min_count})"
+    assert callers, "expected at least one caller entry"
+    first = callers[0]
+    assert first.get("function"), f"missing function name in {first}"
+    assert first.get("lines"), f"missing call-site lines in {first}"
 
 
+def test_find_callers_references(review: AiCodeReview) -> None:
+    """A non-function symbol still works: it has references, not callers.
+
+    `file_operations` is a struct used widely as a typed variable, so its
+    references (at file scope) far outnumber any in-function uses.
+    """
+    result = review.agent.dispatch_tool("find_callers", {"name": "file_operations"})
+    assert result.get("ok"), f"tool returned not-ok: {result}"
+    payload = result.get("result", {})
+    total = result.get("total_callers", 0) + result.get("total_references", 0)
+    assert total >= 1, "expected references to file_operations"
+    assert payload.get("references"), "expected file-scope references"
+
+
+def test_find_callers_nonexistent(review: AiCodeReview) -> None:
+    """An unreferenced/typo'd symbol is not an error — just zero hits."""
+    result = review.agent.dispatch_tool(
+        "find_callers", {"name": "djskaldx_no_such_symbol"}
+    )
+    assert result.get("ok"), f"tool returned not-ok: {result}"
+    assert result.get("total_callers", 0) == 0
+    assert result.get("total_references", 0) == 0
+
+
+def test_find_callers_multi_file_scope(review: AiCodeReview) -> None:
+    """`file` may list several directories to scope the search."""
+    result = review.agent.dispatch_tool(
+        "find_callers",
+        {"name": "rproc_boot", "file": "drivers/remoteproc, drivers/soc"},
+    )
+    assert result.get("ok"), f"tool returned not-ok: {result}"
+    callers = result.get("result", {}).get("callers", [])
+    refs = result.get("result", {}).get("references", [])
+    assert all(
+        h["path"].startswith(("drivers/remoteproc/", "drivers/soc/"))
+        for h in callers + refs
+    ), "hit outside the requested directories"
+
+
+# Unlike the advisory hint on find_definition/find_callees, find_callers' `file`
+# scopes the search, so every path in the list is validated — one bad token
+# fails the call rather than being silently ignored.
 @pytest.mark.parametrize(
-    "args,expected_error",
+    "file_arg,expected_error",
     [
-        ({"name": "djskaldx_no_such_symbol"}, "not found in index"),
-        ({"name": "inode"}, "not a function"),
+        ("drivers/remoteproc, ../../../etc/passwd", "escapes kernel tree"),
+        ("drivers/remoteproc, does/not/exist", "file not found"),
     ],
-    ids=["nonexistent", "struct_not_function"],
+    ids=["escape_in_list", "missing_in_list"],
 )
-def test_find_callers_errors(
-    review: AiCodeReview, args: Dict[str, Any], expected_error: str
+def test_find_callers_multi_file_errors(
+    review: AiCodeReview, file_arg: str, expected_error: str
 ) -> None:
-    result = review.agent.dispatch_tool("find_callers", args)
+    result = review.agent.dispatch_tool(
+        "find_callers", {"name": "rproc_boot", "file": file_arg}
+    )
     assert not result.get("ok"), f"unexpectedly ok: {result}"
     assert expected_error in (result.get("error") or "")
 
 
 # ---------------------------------------------------------------------------
-# find_calls (currently intentionally not-implemented)
+# find_callees
 # ---------------------------------------------------------------------------
+
+
+def test_find_callees(review: AiCodeReview) -> None:
+    """do_sys_openat2's body calls build_open_flags then opens the file."""
+    result = review.agent.dispatch_tool("find_callees", {"name": "do_sys_openat2"})
+    assert result.get("ok"), f"tool returned not-ok: {result}"
+    defs = result.get("result", [])
+    assert defs, "expected at least one function definition"
+    names = {c["name"] for d in defs for c in d.get("callees", [])}
+    assert (
+        "build_open_flags" in names
+    ), f"build_open_flags not among callees: {sorted(names)}"
+
+
+def test_find_callees_multi_file_hint(review: AiCodeReview) -> None:
+    """`file` may list several paths to scope which variant(s) to expand."""
+    result = review.agent.dispatch_tool(
+        "find_callees",
+        {"name": "do_sys_openat2", "file": "fs/open.c, fs/read_write.c"},
+    )
+    assert result.get("ok"), f"tool returned not-ok: {result}"
+    defs = result.get("result", [])
+    assert defs and all(
+        "fs/open.c" in d["path"] for d in defs
+    ), f"expected only the fs/open.c variant: {[d['path'] for d in defs]}"
+
+
+@pytest.mark.parametrize(
+    "file_arg",
+    [
+        "drivers/remoteproc, drivers/soc",  # valid paths, but no variant lives there
+        "../../../etc/passwd",  # bogus path
+    ],
+    ids=["nonmatching", "bad_path"],
+)
+def test_find_callees_hint_falls_back(review: AiCodeReview, file_arg: str) -> None:
+    """When the hint matches no variant, fall back to all definitions, not error."""
+    result = review.agent.dispatch_tool(
+        "find_callees", {"name": "do_sys_openat2", "file": file_arg}
+    )
+    assert result.get("ok"), f"tool returned not-ok: {result}"
+    defs = result.get("result", [])
+    assert any(
+        "fs/open.c" in d["path"] for d in defs
+    ), "should fall back to the real definition"
+
+
+def test_find_callees_valid_and_invalid_hint(review: AiCodeReview) -> None:
+    """A valid + invalid path combo scopes to the matching variant (fs/open.c);
+    the bad path is ignored, not an error."""
+    result = review.agent.dispatch_tool(
+        "find_callees",
+        {"name": "do_sys_openat2", "file": "fs/open.c, does/not/exist.c"},
+    )
+    assert result.get("ok"), f"tool returned not-ok: {result}"
+    defs = result.get("result", [])
+    assert defs and all(
+        "fs/open.c" in d["path"] for d in defs
+    ), f"expected only the fs/open.c variant: {[d['path'] for d in defs]}"
+
+
+@pytest.mark.parametrize(
+    "args,expected_error",
+    [
+        ({"name": "djskaldx_no_such_symbol"}, "no function definition"),
+        ({"name": "inode"}, "no function definition"),
+    ],
+    ids=["nonexistent", "struct_not_function"],
+)
+def test_find_callees_errors(
+    review: AiCodeReview, args: Dict[str, Any], expected_error: str
+) -> None:
+    result = review.agent.dispatch_tool("find_callees", args)
+    assert not result.get("ok"), f"unexpectedly ok: {result}"
+    assert expected_error in (result.get("error") or "")
 
 
 # ---------------------------------------------------------------------------
