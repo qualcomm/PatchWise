@@ -373,7 +373,7 @@ class DockerManager:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            bufsize=0,  # Unbuffered for real-time LSP communication
+            bufsize=0,  # Unbuffered for real-time stdin/stdout JSON-RPC
             universal_newlines=True,
             **kwargs,
         )
@@ -396,134 +396,6 @@ class DockerManager:
             self.logger.debug(f"write_file({path}) failed: {stderr.strip()}")
             return False
         return True
-
-    def ensure_clangd_index_dir(self) -> None:
-        """Ensure clangd index directory exists in build volume with proper permissions."""
-        index_dir = self.build_dir / ".clangd"
-
-        self.logger.debug(f"Ensuring clangd index directory: {index_dir}")
-
-        # Create index directory in container
-        create_proc = self.run_command(
-            ["mkdir", "-p", str(index_dir)],
-            cwd=str(self.build_dir),
-        )
-        create_proc.wait()
-
-        if create_proc.returncode != 0:
-            self.logger.warning(f"Failed to create clangd index directory: {index_dir}")
-            return
-
-        # Fix permissions as root
-        try:
-            subprocess.run(
-                [
-                    "docker",
-                    "exec",
-                    "--user",
-                    "root",
-                    self.container_name,
-                    "chown",
-                    "-R",
-                    "patchwise:patchwise",
-                    str(index_dir),
-                ],
-                check=True,
-                capture_output=True,
-            )
-
-            subprocess.run(
-                [
-                    "docker",
-                    "exec",
-                    "--user",
-                    "root",
-                    self.container_name,
-                    "chmod",
-                    "-R",
-                    "755",
-                    str(index_dir),
-                ],
-                check=True,
-                capture_output=True,
-            )
-
-            self.logger.debug(
-                f"Fixed permissions for clangd index directory: {index_dir}"
-            )
-        except subprocess.CalledProcessError as e:
-            self.logger.warning(
-                f"Failed to fix permissions for clangd index directory: {e}\nstderr: {e.stderr}"
-            )
-
-    def start_clangd_lsp(
-        self, clangd_args: list[str], cwd: Optional[str] = None
-    ) -> subprocess.Popen[str]:
-        """Start clangd via docker exec with direct stdin/stdout communication."""
-        if not cwd:
-            cwd = str(self.kernel_dir)
-        else:
-            cwd = str(cwd)
-
-        # Ensure index directory exists
-        self.ensure_clangd_index_dir()
-
-        self.logger.debug(
-            f"Starting clangd LSP server with args: {' '.join(clangd_args)}"
-        )
-        self.logger.debug(f"Working directory: {cwd}")
-        self.logger.debug(f"Container name: {self.container_name}")
-
-        # Use docker exec -i for interactive communication
-        docker_command = [
-            "docker",
-            "exec",
-            "-i",
-            "--workdir",
-            cwd,
-            self.container_name,
-        ] + clangd_args
-
-        self.logger.debug(f"Docker command: {' '.join(docker_command)}")
-
-        process = subprocess.Popen(
-            docker_command,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            bufsize=0,  # Unbuffered for real-time LSP communication
-            universal_newlines=True,
-        )
-
-        self.logger.debug(f"clangd LSP server started with PID: {process.pid}")
-
-        # Give clangd a moment to start and check if it's still running
-        time.sleep(1)
-        if process.poll() is not None:
-            # Process died immediately, read stderr for debugging
-            stderr_output = (
-                process.stderr.read() if process.stderr else "No stderr available"
-            )
-            self.logger.error(
-                f"clangd process died immediately with return code {process.returncode}"
-            )
-            self.logger.error(f"clangd stderr: {stderr_output}")
-            raise RuntimeError(f"clangd failed to start: {stderr_output}")
-
-        return process
-
-    def cleanup_clangd(self) -> None:
-        """Clean up any running clangd processes in the container."""
-        try:
-            # Kill any existing clangd processes
-            subprocess.run(
-                ["docker", "exec", self.container_name, "pkill", "-f", "clangd"],
-                capture_output=True,
-            )
-            self.logger.debug("Cleaned up existing clangd processes")
-        except Exception as e:
-            self.logger.debug(f"No clangd processes to clean up: {e}")
 
     def stop_container(self) -> None:
         self.logger.info(f"Stopping container {self.container_name}...")

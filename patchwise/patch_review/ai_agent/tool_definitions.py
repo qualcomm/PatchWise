@@ -19,10 +19,9 @@ _NAME_PARAM = {
         "file": {
             "type": "string",
             "description": (
-                "Optional kernel-relative path where you saw the symbol "
-                "used. This is a disambiguation hint only, NOT the file "
-                "where the definition lives. Example: if a patch in "
-                "drivers/usb/foo.c calls bar(), pass file='drivers/usb/foo.c'."
+                "Optional kernel-relative path(s) where you saw the symbol used "
+                "(space/comma-separated). A ranking hint; the definition may "
+                "live elsewhere."
             ),
         },
     },
@@ -35,12 +34,10 @@ TOOLS = [
         "function": {
             "name": "find_definition",
             "description": (
-                "Find the declaration and definition of a symbol by name. "
-                "Returns {declaration, definition, alternatives?}: declaration "
-                "is the header-side prototype (may be null if same as definition); "
-                "definition is the implementation with full body. Alternatives are "
-                "included (capped at 5) only when the best pick is outside files "
-                "you have already seen and there is ambiguity."
+                "Find every definition of a symbol (function, struct, macro, "
+                "typedef, enum). Each arch/#ifdef variant is a separate result, "
+                "best-first by proximity. Result: {name, kind, path, line, "
+                "snippet}; `truncated` flags overflow."
             ),
             "parameters": _NAME_PARAM,
         },
@@ -50,11 +47,12 @@ TOOLS = [
         "function": {
             "name": "find_callers",
             "description": (
-                "One level of incoming call hierarchy for a function: who "
-                "calls this function. Returns an error for non-function "
-                "symbols (use grep for structs, macros, variables, etc.). "
-                "Each result is {name, path, line, snippet}. Capped at 100; "
-                "'total' and 'truncated' indicate overflow."
+                "Find what references a symbol. Returns {callers, references}: "
+                "`callers` is one entry per function {function, path, "
+                "function_line, lines, snippet}; `references` is file-scope hits "
+                "{path, line, snippet} (e.g. `.release = name` wiring); "
+                "`truncated` flags overflow. Textual match — verify the "
+                "subsystem for common names."
             ),
             "parameters": _NAME_PARAM,
         },
@@ -62,12 +60,12 @@ TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "find_calls",
+            "name": "find_callees",
             "description": (
-                "One level of outgoing call hierarchy for a function: what this "
-                "function calls. Each result is {name, path, line, snippet}. "
-                "Fails with an error if the symbol is not a function. "
-                "Capped at 100; 'total' and 'truncated' indicate overflow."
+                "Find what a function calls. Returns one entry per definition "
+                "{path, line, callees}; each callee is {name, line, kind} — kind "
+                "'direct' (foo()) or 'indirect' (ops->fn()). Pass `file` to pick "
+                "a variant."
             ),
             "parameters": _NAME_PARAM,
         },
@@ -97,8 +95,8 @@ TOOLS = [
                     "file": {
                         "type": "string",
                         "description": (
-                            "Optional kernel-relative file or directory to scope the search. "
-                            "Glob is ignored when this names a single file."
+                            "Optional kernel-relative file(s)/dir(s) to scope the search "
+                            "(space/comma-separated). Glob is ignored for single files."
                         ),
                     },
                     "glob": {
