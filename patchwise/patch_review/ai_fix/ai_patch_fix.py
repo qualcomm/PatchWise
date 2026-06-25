@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 
+from patchwise.patch_review.ai_agent.tool_definitions import NAVIGATION_TOOLS
 from patchwise.patch_review.ai_fix import AiFix
 from patchwise.patch_review.ai_review.ai_code_review import AiCodeReview
 from patchwise.patch_review.decorators import register_fix
@@ -18,6 +19,9 @@ class AiPatchFix(AiFix):
 
     Returns patch fix output.
     """
+
+    # Navigate the source, then apply the review's fixes with the write tools.
+    FIX_TOOLS = NAVIGATION_TOOLS + ["write_file_str", "write_file"]
 
     PATCH_SUGGEST_PROMPT_TEMPLATE = """
 # User Prompt
@@ -94,7 +98,9 @@ with a targeted edit.
             {"role": "system", "content": self.get_patch_fix_system_prompt()},
             {"role": "user", "content": formatted_prompt},
         ]
-        final_response = self.agent.run_agent_loop(messages)
+        final_response = self.agent.run_agent_loop(
+            messages, allowed_tools=self.FIX_TOOLS
+        )
         self.logger.debug(f"Patch-fix agent final response: {final_response!r}")
 
         try:

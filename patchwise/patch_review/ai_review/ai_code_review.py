@@ -14,6 +14,7 @@ from patchwise.patch_review.ai_agent.agent import (
     KERNEL_REVIEW_PROMPTS_PATH,
     SUBSYSTEM_REVIEW_PROMPTS_PATH,
 )
+from patchwise.patch_review.ai_agent.tool_definitions import NAVIGATION_TOOLS
 from patchwise.patch_review.decorators import register_llm_review, register_long_review
 
 from patchwise.patch_review.ai_review.ai_review import AiReview
@@ -55,20 +56,9 @@ class AiCodeReview(AiReview):
     EXEC_ITER_CAP = 100
     FP_ITER_CAP = 50
 
-    FP_FILTER_TOOLS = [
-        "find_definition",
-        "find_callers",
-        "find_callees",
-        "grep",
-        "read_file",
-        "read_doc",
-        "get_subsystem_review_guide",
-        "list_files",
-        "git_log",
-        "git_show",
-        "git_cat_file",
-        "record_verdict",
-    ]
+    # Reviewer loads guides and streams findings; the filter records verdicts.
+    EXEC_TOOLS = NAVIGATION_TOOLS + ["get_subsystem_review_guide", "record_finding"]
+    FP_FILTER_TOOLS = NAVIGATION_TOOLS + ["get_subsystem_review_guide", "record_verdict"]
     # Per-review token ceiling (runaway backstop). Override with
     # PATCHWISE_AI_TOKEN_BUDGET (set to 0/none to disable). The per-loop
     # iteration caps bound spend even when this is disabled.
@@ -841,6 +831,7 @@ finding with record_verdict as you work through them.
             exec_messages,
             force_tool_usage=True,
             max_iterations=self._exec_iter_cap(),
+            allowed_tools=self.EXEC_TOOLS,
             label=f"exec:{tid}",
         )
         result = (result or "").strip()

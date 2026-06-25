@@ -450,3 +450,18 @@ TOOLS = [
         },
     },
 ]
+
+# Read-only code-navigation tools; loops that scope themselves with
+# allowed_tools start from this set and append the few extras they need.
+NAVIGATION_TOOLS = [
+    "find_definition",
+    "find_callers",
+    "find_callees",
+    "grep",
+    "read_file",
+    "read_doc",
+    "list_files",
+    "git_log",
+    "git_show",
+    "git_cat_file",
+]
