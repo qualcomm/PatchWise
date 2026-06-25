@@ -37,6 +37,9 @@ class CheckpatchFixer(AiFix):
         "Cc:",
     )
 
+    # checkpatch reports file:line, so edit and re-verify; no navigation needed.
+    FIX_TOOLS = ["read_file", "run_checkpatch", "write_file_str", "write_file"]
+
     """AI-powered checkpatch fixer based on checkpatch findings.
 
     This fixer uses a two-stage approach:
@@ -639,7 +642,9 @@ Provide ONLY the corrected commit message, nothing else."""
                 {"role": "system", "content": self.get_checkpatch_fix_system_prompt()},
                 {"role": "user", "content": formatted_prompt},
             ]
-            final_response = self.agent.run_agent_loop(messages)
+            final_response = self.agent.run_agent_loop(
+                messages, allowed_tools=self.FIX_TOOLS
+            )
             self.logger.debug(f"Checkpatch-fix agent final response: {final_response!r}")
         finally:
             if rag_manager:
