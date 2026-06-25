@@ -284,6 +284,31 @@ TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_sparse",
+            "description": (
+                "Run sparse on modified C source/header files to verify that sparse "
+                "warnings and errors have been fixed. Returns human-readable output "
+                "summarizing remaining issues or a success message when none remain."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": (
+                            "Optional kernel-relative path to a specific file to check. "
+                            "If omitted, all modified C and header files in the last commit "
+                            "are checked."
+                        ),
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
     # write tools
     {
         "type": "function",
