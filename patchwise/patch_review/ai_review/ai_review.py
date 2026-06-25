@@ -11,6 +11,7 @@ from patchwise.patch_review.patch_review import PatchReview
 
 class AiReview(PatchReview):
 
+    # TODO: This messes up the formatting when AI has its own code in the response
     def format_chat_response(self, text: str) -> str:
         """
         Line wraps the given text at 75 columns but skips commit tags.
