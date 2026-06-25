@@ -33,6 +33,12 @@ TS_INDEXER_PATH = "/home/patchwise/bin/ts_indexer.py"
 # Max open documents in clangd before LRU eviction
 _CLANGD_OPEN_FILE_CAPACITY = 32
 
+REVIEW_PROMPTS_PATH = (
+    Path(__file__).resolve().parents[3] / "thirdparty" / "review-prompts"
+)
+KERNEL_REVIEW_PROMPTS_PATH = REVIEW_PROMPTS_PATH / "kernel"
+SUBSYSTEM_REVIEW_PROMPTS_PATH = KERNEL_REVIEW_PROMPTS_PATH / "subsystem"
+
 
 def path_to_uri(path: str) -> str:
     """Convert a file path to a file:// URI."""
@@ -79,6 +85,29 @@ class Agent:
         self.agent_lsp_proc: Optional[subprocess.Popen[Any]] = None
         self.seen_files: Set[str] = set()
 
+        # Per-review token ceiling shared across every run_agent_loop call on this
+        # Agent (the multi-phase review fans out many loops). None means unbounded;
+        # iteration caps still bound each loop. Aborts gracefully when exhausted.
+        self.token_budget: Optional[int] = None
+        self.tokens_used: int = 0
+
+        # Context-window guard (distinct from token_budget, which is cumulative
+        # cost). context_token_limit caps the *per-request input size* — the
+        # prompt tokens of a single completion, which is what the model's context
+        # window (e.g. 1M for gpt-5) actually bounds. last_prompt_tokens /
+        # peak_prompt_tokens track the input size the provider reported.
+        self.context_token_limit: Optional[int] = None
+        self.last_prompt_tokens: int = 0
+        self.peak_prompt_tokens: int = 0
+
+        # Label and iteration of the current phase/subtask (e.g. "planner",
+        # "exec:t2"), tagged onto every tool-call log line so per-subtask tool
+        # usage is traceable. Set per-loop by run_agent_loop. The review runs the
+        # phases sequentially on this one Agent, so plain instance attributes
+        # suffice.
+        self.current_label: str = ""
+        self.current_iteration: int = 0
+
         self.seen_files |= self._files_in_diff()
 
         self.kernel_path = kernel_path
@@ -98,19 +127,58 @@ class Agent:
         self.logger.debug(
             f"Making API call with model: {self.model}, api_base: {Agent.api_base}"
         )
-        return litellm.completion(**kwargs)
+        response = litellm.completion(**kwargs)
+        usage = getattr(response, "usage", None)
+        if usage is not None:
+            self.tokens_used += getattr(usage, "total_tokens", 0) or 0
+            pt = getattr(usage, "prompt_tokens", 0) or 0
+            self.last_prompt_tokens = pt
+            self.peak_prompt_tokens = max(self.peak_prompt_tokens, pt)
+        return response
+
+    def budget_remaining(self) -> bool:
+        """True while the per-review token budget is unset or not yet exhausted."""
+        return self.token_budget is None or self.tokens_used < self.token_budget
 
     # TODO: rename to loop()
-    def run_agent_loop(self, messages: list[dict], force_tool_usage=False) -> str:
+    def run_agent_loop(
+        self,
+        messages: list[dict],
+        force_tool_usage=False,
+        max_iterations: Optional[int] = None,
+        use_tools: bool = True,
+        allowed_tools: Optional[List[str]] = None,
+        label: Optional[str] = None,
+    ) -> str:
         """Run the agent loop, calling the LLM iteratively until it stops requesting tools.
 
         Args:
             messages: Initial message list (system + user turns).
+            force_tool_usage: Require a tool call on the first iteration.
+            max_iterations: Per-call iteration cap (defaults to AGENT_MAX_ITERATIONS).
+                The multi-phase review uses smaller caps for plan/critic/filter
+                loops than for execution subagents.
+            use_tools: When False, run without any tools (a single completion
+                from the prompt). The planner uses this so it divides the work
+                from the diff alone rather than investigating.
+            allowed_tools: When set (and use_tools is True), restrict the loop to
+                only these tool names; an empty list means no tools. E.g. the
+                plan critic is given only `get_subsystem_review_guide` (to load
+                guides for coverage) while the code-navigation tools are withheld
+                so it can't go hunting specific bugs.
+            label: Phase/subtask label for tool-call logging. Defaults to the
+                current instance `current_label` if not given.
 
         Returns:
             The final assistant text response.
         """
-        tools = self.get_tools()
+        # Logging context for this loop (phases run sequentially on one Agent).
+        if label is not None:
+            self.current_label = label
+        self.current_iteration = 0
+
+        max_iters = max_iterations or AGENT_MAX_ITERATIONS
+        tools = self.get_tools(allowed_tools) if use_tools else None
 
         completion_kwargs: dict = {
             "messages": messages,
@@ -125,9 +193,31 @@ class Agent:
             )
             completion_kwargs["allowed_openai_params"] = ["tools", "tool_choice"]
 
-        for iteration in range(1, AGENT_MAX_ITERATIONS + 1):
-            self._agent_iteration = iteration
-            self.logger.debug(f"Agent iteration {iteration}/{AGENT_MAX_ITERATIONS}")
+        for iteration in range(1, max_iters + 1):
+            self.current_iteration = iteration
+            self.logger.debug(f"Agent iteration {iteration}/{max_iters}")
+
+            if not self.budget_remaining():
+                self.logger.warning(
+                    f"Token budget exhausted ({self.tokens_used}/{self.token_budget}). "
+                    "Forcing final response without tools."
+                )
+                break
+
+            # Context-window guard: stop before the next request's input would
+            # approach the model's context limit. last_prompt_tokens is the input
+            # size the provider reported for the previous call; the next call is
+            # strictly larger (it appends the new tool calls + results), so this
+            # is a conservative pre-check.
+            if (
+                self.context_token_limit is not None
+                and self.last_prompt_tokens >= self.context_token_limit
+            ):
+                self.logger.warning(
+                    f"Context window near limit (prompt={self.last_prompt_tokens} "
+                    f">= {self.context_token_limit}). Forcing final response without tools."
+                )
+                break
 
             response = self.completion_with_retry(**completion_kwargs)
             msg = response.choices[0].message
@@ -175,9 +265,9 @@ class Agent:
                     }
                 )
 
-        # Max iterations reached, force a final response by disallowing tool calls
+        # Max iterations (or budget) reached: force a final response by disallowing tool calls
         self.logger.warning(
-            f"Agent reached max iterations ({AGENT_MAX_ITERATIONS}). Forcing final response without tools."
+            f"Agent reached max iterations ({max_iters}) or budget. Forcing final response without tools."
         )
 
         completion_kwargs["tool_choice"] = "none"
@@ -904,6 +994,16 @@ class Agent:
             raise RuntimeError(f"ts_indexer error: {resp['error']}")
         return resp.get("candidates", [])
 
+    @staticmethod
+    def _strip_type_keyword(name: str) -> str:
+        """Drop a leading C tag keyword the model often includes.
+
+        Models routinely pass a type as `struct foo`/`union foo`/`enum foo`, but
+        the tree-sitter index keys it under the bare tag `foo`. Strip the keyword
+        so the lookup matches; a bare name is returned unchanged.
+        """
+        return re.sub(r"^\s*(?:struct|union|enum)\s+", "", name.strip())
+
     def _ts_funcs_in_file(self, rel_path: str) -> List[Dict[str, Any]]:
         """Return function ranges for a single kernel-relative file."""
         resp = self._ts_query(op="funcs_in_file", path=rel_path)
@@ -1057,8 +1157,15 @@ class Agent:
         self.logger.error(f"No active definition found for {name}")
         return None
 
-    def get_tools(self) -> Optional[List[Dict[str, Any]]]:
-        return TOOLS
+    def get_tools(
+        self, allowed: Optional[List[str]] = None
+    ) -> Optional[List[Dict[str, Any]]]:
+        """Return tool schemas."""
+        if allowed is None:
+            return TOOLS
+        allowed_set = set(allowed)
+        filtered = [t for t in TOOLS if t.get("function", {}).get("name") in allowed_set]
+        return filtered or None
 
     def _format_call_hierarchy_results(
         self, calls: List[Dict[str, Any]], item_key: str
@@ -1198,40 +1305,47 @@ class Agent:
         glob: Optional[str] = None,
     ) -> Dict[str, Any]:
         self._ensure_navigation_stack(need_ts=True)
-        try:
-            re.compile(pattern)
-        except re.error as e:
-            return {"ok": False, "error": f"invalid regex: {e}"}
+        # ripgrep validates the pattern itself (Rust regex dialect). We do NOT
+        # pre-validate with Python's `re`: its dialect differs (lookaround and
+        # backrefs compile in Python but ripgrep rejects them, and vice versa),
+        # so a Python precheck both false-rejects rg-valid patterns and lets
+        # rg-invalid ones through. Let rg be the authority.
 
-        file_filter: Optional[str] = None
-        file_filter_is_dir = False
+        # `file` may name one OR several whitespace/comma-separated paths — the
+        # model routinely scopes a search to several subsystems at once, and rg
+        # takes multiple search roots natively. (Kernel paths never contain
+        # spaces, so splitting on whitespace is safe.)
+        file_paths: List[str] = []  # validated, kernel-relative, existing
+        any_dir = False
         if file:
-            try:
-                self._abs_in_kernel(file)
-            except ValueError as e:
-                return {"ok": False, "error": str(e)}
-            file_filter = self._kernel_rel(file)
-            container_path = str(self.docker_manager.kernel_dir / file_filter)
-            check = self.docker_manager.run_command(
-                [
-                    "sh",
-                    "-c",
-                    (
-                        'if [ -f "$1" ]; then echo file; '
-                        'elif [ -d "$1" ]; then echo dir; '
-                        "else echo missing; fi"
-                    ),
-                    "sh",
-                    container_path,
-                ],
-                cwd=None,
-            )
-            stdout, _ = check.communicate()
-            path_kind = stdout.strip()
-            if path_kind == "dir":
-                file_filter_is_dir = True
-            elif path_kind != "file":
-                return {"ok": False, "error": f"file not found: {file_filter}"}
+            for tok in (t for t in re.split(r"[,\s]+", file.strip()) if t):
+                try:
+                    self._abs_in_kernel(tok)
+                except ValueError as e:
+                    return {"ok": False, "error": str(e)}
+                rel = self._kernel_rel(tok)
+                container_path = str(self.docker_manager.kernel_dir / rel)
+                check = self.docker_manager.run_command(
+                    [
+                        "sh",
+                        "-c",
+                        (
+                            'if [ -f "$1" ]; then echo file; '
+                            'elif [ -d "$1" ]; then echo dir; '
+                            "else echo missing; fi"
+                        ),
+                        "sh",
+                        container_path,
+                    ],
+                    cwd=None,
+                )
+                stdout, _ = check.communicate()
+                kind = stdout.strip()
+                if kind == "missing":
+                    return {"ok": False, "error": f"file not found: {rel}"}
+                if kind == "dir":
+                    any_dir = True
+                file_paths.append(rel)
 
         kernel_dir = self.docker_manager.kernel_dir
 
@@ -1243,14 +1357,18 @@ class Agent:
             "--max-count",
             "500",
         ]
-        if file_filter and not file_filter_is_dir:
-            rg_cmd += ["-e", pattern, str(kernel_dir / file_filter)]
-        else:
+        # Apply glob filters when searching a directory (or the whole tree). When
+        # every path is a concrete file, search them directly so a glob can't
+        # filter an explicitly-named file out.
+        if any_dir or not file_paths:
             globs = [g.strip() for g in glob.split(",")] if glob else ["*.c", "*.h"]
             for g in globs:
                 rg_cmd += ["--glob", g]
-            search_root = kernel_dir / file_filter if file_filter else kernel_dir
-            rg_cmd += ["-e", pattern, str(search_root)]
+        rg_cmd += ["-e", pattern]
+        if file_paths:
+            rg_cmd += [str(kernel_dir / p) for p in file_paths]
+        else:
+            rg_cmd.append(str(kernel_dir))
 
         try:
             output = self.docker_manager.run_cmd_with_timer(
@@ -1312,7 +1430,7 @@ class Agent:
             "truncated": truncated,
         }
 
-    # TODO: Should we mark "truncated" only when we do not give what the AI wants (within bounds)
+    # TODO: mark "truncated" only when we do not give what the AI wants (within bounds)
     def _tool_read_file(
         self, path: str, start: int = 1, end: Optional[int] = None
     ) -> Dict[str, Any]:
@@ -1345,6 +1463,29 @@ class Agent:
                 "truncated": effective_end < total_lines,
             },
         }
+
+    def _tool_read_doc(self, path: str) -> Dict[str, Any]:
+        """Read a whole kernel `Documentation/` file. Scoped to Documentation/, so
+        a caller given only this tool cannot read source. No line cap."""
+        try:
+            self._abs_in_kernel(path)  # validation only; reject "../" escapes
+        except ValueError as e:
+            return {"ok": False, "error": str(e)}
+        rel = self._kernel_rel(path)
+        if not (rel == "Documentation" or rel.startswith("Documentation/")):
+            return {
+                "ok": False,
+                "error": (
+                    f"read_doc only reads files under Documentation/ (got {rel!r}); "
+                    "use it to check documented contracts/ABI."
+                ),
+            }
+        container_path = str(self.docker_manager.kernel_dir / rel)
+        content = self.docker_manager.read_file(container_path)
+        if content is False:
+            return {"ok": False, "error": f"not a file: {path}"}
+        self.seen_files.add(rel)
+        return {"ok": True, "result": {"path": rel, "content": content}}
 
     def _tool_list_files(self, path: str, recursive: bool = False) -> Dict[str, Any]:
         try:
@@ -1399,20 +1540,44 @@ class Agent:
             },
         }
 
+    def _tool_get_subsystem_review_guide(self, subsystem_file: str) -> Dict[str, Any]:
+        """Load a subsystem review guide from thirdparty/review-prompts/kernel/subsystem/."""
+        safe_name = os.path.basename(subsystem_file)
+        if safe_name != subsystem_file or not safe_name.endswith(".md"):
+            return {
+                "ok": False,
+                "error": (
+                    f"subsystem_file must be a bare .md filename from the "
+                    f"Subsystem Review Guide Index (got {subsystem_file!r})"
+                ),
+            }
+        guide_path = SUBSYSTEM_REVIEW_PROMPTS_PATH / safe_name
+        try:
+            with open(guide_path, "r") as f:
+                content = f.read()
+        except FileNotFoundError:
+            return {"ok": False, "error": f"subsystem guide not found: {safe_name}"}
+        return {
+            "ok": True,
+            "result": {"name": safe_name, "content": content},
+        }
+
     def _log_tool_call(self, name: str, args: dict, result: dict) -> None:
-        """Append a tool-call record to SANDBOX_PATH/tool_calls.log."""
-        if not self.logger.isEnabledFor(logging.DEBUG):
-            return
+        """Append a tool-call record to SANDBOX_PATH/tool_calls.log.
+
+        Always written (a dedicated file, one line per call) and tagged with the
+        active phase/subtask label so per-subtask tool usage is traceable.
+        """
         log_path = SANDBOX_PATH / "tool_calls.log"
         ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        # TODO: should we bring back subject in the tool call?
-        iteration = getattr(self, "_agent_iteration", 0)
+        label = self.current_label or "-"
+        iteration = self.current_iteration
         try:
             args_json = json.dumps(args, ensure_ascii=False)
         except Exception:
             args_json = str(args)
         ok = bool(result.get("ok"))
-        line = f"{ts} | iter={iteration} | call={name}({args_json}) | ok={ok}\n"
+        line = f"{ts} | task={label} | iter={iteration} | call={name}({args_json}) | ok={ok}\n"
         try:
             with open(log_path, "a") as f:
                 f.write(line)
@@ -1660,7 +1825,74 @@ class Agent:
         self._write(container_path, existing.replace(old_content, new_content, 1))
         return {"ok": True}
 
-    # TODO: remove
+    @staticmethod
+    def findings_path_for(label: str) -> Path:
+        """Sandbox path of the per-phase findings file for `label`, used by both
+        the record_finding tool and the review that reads the file back.
+
+        The label may originate from model-generated data (a plan's task id), so
+        the name is sanitized AND the resolved path is asserted to stay inside
+        SANDBOX_PATH — a defence-in-depth guard against `../`-style escapes."""
+        safe = re.sub(r"[^A-Za-z0-9_.-]", "_", label or "unit")
+        base = Path(SANDBOX_PATH).resolve()
+        path = (base / f"findings_{safe}.md").resolve()
+        if path.parent != base:
+            raise ValueError(f"findings path escapes sandbox: {path}")
+        return path
+
+    def _tool_record_finding(
+        self, finding: str, location: str = "", dimension: str = ""
+    ) -> dict:
+        """Append one confirmed review finding to the per-phase findings file in
+        the sandbox, so findings are persisted as the reviewer works rather than
+        only returned in one block at the end. The file is keyed by the active
+        phase/subtask label (the same label `_log_tool_call` uses), so a single
+        reviewer's findings accumulate in one file."""
+        path = self.findings_path_for(self.current_label or "unit")
+        head = " ".join(p for p in (f"[{dimension}]" if dimension else "", location) if p)
+        block = f"### {head}\n\n{finding}\n\n" if head else f"{finding}\n\n"
+        with open(path, "a") as f:
+            f.write(block)
+        return {"ok": True, "recorded": location or dimension or "finding"}
+
+    @staticmethod
+    def verdicts_path_for(label: str) -> Path:
+        """Sandbox path of the per-phase verdicts file (JSONL) for `label`, used
+        by the false-positive filter's record_verdict tool and the review that
+        reads it back. Same sandbox-escape guard as findings_path_for."""
+        safe = re.sub(r"[^A-Za-z0-9_.-]", "_", label or "unit")
+        base = Path(SANDBOX_PATH).resolve()
+        path = (base / f"verdicts_{safe}.jsonl").resolve()
+        if path.parent != base:
+            raise ValueError(f"verdicts path escapes sandbox: {path}")
+        return path
+
+    def _tool_record_verdict(
+        self,
+        finding: str,
+        impact: str = "",
+        verdict: str = "",
+        reason: str = "",
+        proof: str = "",
+    ) -> dict:
+        """Record one false-positive-filter verdict as the filter works through
+        the findings one at a time. Each call appends a structured JSON line to
+        the per-phase verdicts file, so verdicts are durable and read back
+        reliably (no giant array to parse, no markdown to re-split).
+        `impact` is its severity; `verdict` is keep/drop; `proof` substantiates a
+        drop. The keep/drop policy is applied by the review."""
+        path = self.verdicts_path_for(self.current_label or "unit")
+        record = {
+            "finding": finding,
+            "impact": impact,
+            "verdict": verdict,
+            "reason": reason,
+            "proof": proof,
+        }
+        with open(path, "a") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        return {"ok": True, "recorded": verdict or "verdict"}
+
     def dispatch_tool(self, name: str, args: dict) -> dict:
         """Dispatch an agent tool by name. Returns {ok, ...}."""
         read_tools = {
@@ -1669,11 +1901,15 @@ class Agent:
             "find_calls": self._tool_find_calls,
             "grep": self._tool_grep,
             "read_file": self._tool_read_file,
+            "read_doc": self._tool_read_doc,
             "list_files": self._tool_list_files,
+            "get_subsystem_review_guide": self._tool_get_subsystem_review_guide,
             "git_log": self._tool_git_log,
             "git_show": self._tool_git_show,
             "git_cat_file": self._tool_git_cat_file,
             "run_checkpatch": self._tool_run_checkpatch,
+            "record_finding": self._tool_record_finding,
+            "record_verdict": self._tool_record_verdict,
         }
         tool_fn = read_tools.get(name)
 

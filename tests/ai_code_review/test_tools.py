@@ -130,6 +130,25 @@ def test_find_definition(
     assert expected_file in path, f"resolved to {path}:{definition.get('line')}"
 
 
+# Models routinely pass a C type with its tag keyword (`struct inode`); the tool
+# strips the keyword and resolves the bare tag, matching the plain-name lookup.
+@pytest.mark.parametrize(
+    "name,expected_file",
+    [
+        ("struct inode", "include/linux/fs.h"),
+        ("enum pid_type", "include/linux/pid_types.h"),
+    ],
+    ids=lambda v: str(v),
+)
+def test_find_definition_strips_type_keyword(
+    review: AiCodeReview, name: str, expected_file: str
+) -> None:
+    result = review.agent.dispatch_tool("find_definition", {"name": name})
+    assert result.get("ok"), f"tool returned not-ok: {result}"
+    paths = [d.get("path", "") for d in result.get("result", [])]
+    assert any(expected_file in p for p in paths), f"{expected_file!r} not among {paths}"
+
+
 # #ifdef-variant cases: two textual defs in the same file under
 # mutually-exclusive branches. arm64 defconfig has CONFIG_OF=y and
 # CONFIG_NO_HZ_FULL=n.

@@ -3,7 +3,6 @@
 
 import argparse
 import logging
-import sys
 from pathlib import Path
 from typing import Dict
 
@@ -21,10 +20,6 @@ from .patch_review import (
     review_commit,
 )
 from patchwise.patch_review.ai_agent import add_ai_arguments, apply_ai_args
-from .patch_review.ai_review.ai_code_review import (
-    add_aicodereview_arguments,
-    apply_aicodereview_args,
-)
 from .utils.config import parse_config, update_user_config
 from .utils.tui import display_prompt_with_options
 
@@ -53,12 +48,6 @@ def parse_args(config: Dict) -> argparse.Namespace:
         default=None,
         help="Path to the kernel workspace containing the patch(es) to review. Uses CWD if not specified. (default: CWD)",
     )
-    review_group.add_argument(
-        "--enable-experimental-features",
-        action="store_true",
-        help="Enable experimental features across all reviews.",
-    )
-
     add_review_arguments(review_group)
 
     mail_group = parser.add_argument_group("Mail Options (require --mail)")
@@ -66,9 +55,6 @@ def parse_args(config: Dict) -> argparse.Namespace:
 
     ai_group = parser.add_argument_group("AI Review Options")
     add_ai_arguments(ai_group, config)
-
-    aicodereview_group = parser.add_argument_group("AiCodeReview Options")
-    add_aicodereview_arguments(aicodereview_group)
 
     logging_group = parser.add_argument_group("Logging Options")
     add_logging_arguments(logging_group, config)
@@ -129,20 +115,6 @@ def get_commits(repo: Repo, commits: list[str]) -> list[Commit]:
 def run_local_mode(args: argparse.Namespace) -> None:
     reviews = get_selected_reviews_from_args(args)
 
-    if (args.url is not None or args.cache_dir is not None) and not (
-        args.enable_experimental_features and "AiCodeReview" in reviews
-    ):
-        passed = [
-            flag
-            for flag, val in (("--url", args.url), ("--cache-dir", args.cache_dir))
-            if val is not None
-        ]
-        sys.exit(
-            f"error: {' and '.join(passed)} only effective with --reviews aicodereview and --enable-experimental-features"
-        )
-
-    apply_aicodereview_args(args)
-
     repo = Repo(args.repo_path)
     commits = get_commits(repo, args.commits)
 
@@ -154,7 +126,6 @@ def run_local_mode(args: argparse.Namespace) -> None:
             commit,
             args.repo_path,
             additional_context=args.additional_context,
-            enable_experimental_features=args.enable_experimental_features,
         )
 
         fix_results = fix_reported_issues(results) if args.fix else {}

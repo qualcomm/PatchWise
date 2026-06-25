@@ -131,7 +131,6 @@ def review_commit(
     commit: Commit,
     repo_path: str,
     additional_context: str = "",
-    enable_experimental_features: bool = False,
 ) -> PatchReviewResults:
     all_reviews = {cls.__name__: cls for cls in AVAILABLE_PATCH_REVIEWS}
 
@@ -147,9 +146,7 @@ def review_commit(
 
     for selected_review in selected_reviews:
         logger.debug(f"Initializing review: {selected_review.__name__}")
-        cur_review = selected_review(
-            repo_path, commit, additional_context, enable_experimental_features
-        )
+        cur_review = selected_review(repo_path, commit, additional_context)
 
         logger.debug(f"Running review: {selected_review.__name__}")
         result = cur_review.run()

@@ -144,6 +144,54 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "read_doc",
+            "description": (
+                "Read a whole kernel Documentation/ file (e.g. "
+                "'Documentation/filesystems/mmap_prepare.rst') to check a "
+                "documented contract, ABI, or interface promise. Restricted to "
+                "Documentation/; returns the full file."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Kernel-relative path under Documentation/.",
+                    },
+                },
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_subsystem_review_guide",
+            "description": (
+                "Load a subsystem-specific review guide by filename. Use the "
+                "Subsystem Review Guide Index in the system prompt to pick "
+                "guides whose triggers match the paths and symbols touched by "
+                "this patch. Returns {name, content}; the content is the full "
+                "guide to apply when reviewing."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "subsystem_file": {
+                        "type": "string",
+                        "description": (
+                            "The bare .md filename from the Subsystem Review "
+                            "Guide Index (e.g. 'networking-core.md', 'rcu.md'). "
+                        ),
+                    },
+                },
+                "required": ["subsystem_file"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "list_files",
             "description": (
                 "List files and directories at a kernel-relative path. Set "
@@ -257,6 +305,94 @@ TOOLS = [
                     },
                 },
                 "required": ["rev", "path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "record_finding",
+            "description": (
+                "Record one confirmed review finding immediately, the moment you "
+                "have grounded it in the code. Call this once per finding as you "
+                "work through the review — do NOT wait until the end and do "
+                "NOT batch them. Each call is appended to your findings file, so "
+                "your final message does not need to repeat the findings."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "location": {
+                        "type": "string",
+                        "description": (
+                            "Where the issue is: kernel-relative file and line or "
+                            "symbol, e.g. 'drivers/x/y.c:123' or 'foo_get()'."
+                        ),
+                    },
+                    "finding": {
+                        "type": "string",
+                        "description": (
+                            "The issue, written as an inline review comment: quote "
+                            "the relevant code and explain the bug and its impact."
+                        ),
+                    },
+                    "dimension": {
+                        "type": "string",
+                        "description": "The analysis dimension this finding came from.",
+                    },
+                },
+                "required": ["location", "finding"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "record_verdict",
+            "description": (
+                "Record your verdict on one finding the moment you have judged "
+                "it. Call this once per finding as you work through them in order, "
+                "so each verdict is saved as you go. Each call is appended to your "
+                "verdicts file, so your final message does not need to repeat them."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "finding": {
+                        "type": "string",
+                        "description": (
+                            "The finding you judged, copied faithfully (its "
+                            "location and review comment), so a kept one survives "
+                            "unchanged."
+                        ),
+                    },
+                    "impact": {
+                        "type": "string",
+                        "description": (
+                            "Severity of the defect if real: 'high' (memory "
+                            "corruption, crash, security, data loss, deadlock, "
+                            "uninitialised/freed memory), 'medium' (a functional "
+                            "bug under specific conditions), or 'low' (style, "
+                            "robustness, comment/commit-message)."
+                        ),
+                    },
+                    "verdict": {
+                        "type": "string",
+                        "description": "'keep' or 'drop' (drop = proven false positive).",
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": "One line: why the finding stands or is a false positive.",
+                    },
+                    "proof": {
+                        "type": "string",
+                        "description": (
+                            "For a drop: the guide rule plus the actual code/contract "
+                            "lines that refute it. Leave empty for a keep."
+                        ),
+                    },
+                },
+                "required": ["finding", "impact", "verdict"],
             },
         },
     },
