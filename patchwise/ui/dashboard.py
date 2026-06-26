@@ -194,10 +194,10 @@ class Dashboard:
             right.append(f"iter {self.iter_n}/{self.iter_cap}   ", style="dim")
         if self.budget:
             near = self.tokens >= 0.8 * self.budget
-            right.append(f"{self.tokens // 1000}k/{self.budget // 1000}k tok   ",
+            right.append(f"{self.tokens / 1e6:.2f}M/{self.budget / 1e6:.2f}M tok   ",
                          style="yellow" if near else "dim")
         elif self.tokens:
-            right.append(f"{self.tokens // 1000}k tok   ", style="dim")
+            right.append(f"{self.tokens / 1e6:.2f}M tok   ", style="dim")
         right.append(self._elapsed(), style="dim")
 
         bar = Table.grid(expand=True)
