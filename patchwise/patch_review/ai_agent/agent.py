@@ -438,7 +438,14 @@ class Agent:
         # Block on the `ready` line the daemon emits after it finishes building.
         ready_line = self.ts_daemon.stdout.readline() if self.ts_daemon.stdout else ""
         if not ready_line:
-            raise RuntimeError("ts_indexer daemon exited before ready signal")
+            # The daemon has exited, so its stderr is drained to EOF without
+            # blocking; surface it so the real cause (missing file, ImportError,
+            # …) is visible instead of an opaque generic failure.
+            stderr = self.ts_daemon.stderr.read() if self.ts_daemon.stderr else ""
+            raise RuntimeError(
+                "ts_indexer daemon exited before ready signal"
+                + (f":\n{stderr.strip()}" if stderr.strip() else "")
+            )
         try:
             ready = json.loads(ready_line)
         except json.JSONDecodeError as e:
