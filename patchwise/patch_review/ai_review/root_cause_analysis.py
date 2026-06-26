@@ -226,9 +226,12 @@ using callers and callees (`find_definition`, `find_callers`, `find_callees`,
 `grep`, `read_file`); the defect is often in a different function or file than the
 fault. Ground every step in code you have actually read, separate what the
 evidence proves from what you assume, and check that the assumptions the code path
-relies on actually hold under the conditions the dump shows. Do not settle on the
-first coherent explanation — look for evidence that would disprove it before
-accepting it.
+relies on actually hold under the conditions the dump shows. When a step depends on
+how a kernel interface is specified to behave — a locking or calling-context rule,
+an API or ABI guarantee, a documented invariant — open that contract under
+`Documentation/` with `read_doc` and ground the step in what is documented, not in
+behavior assumed from the code. Do not settle on the first coherent explanation —
+look for evidence that would disprove it before accepting it.
 
 Once you have a mechanism grounded in the code, identify the exact fix site — the
 file, function, and lines that must change — that removes the originating cause.
@@ -280,13 +283,19 @@ Probe things like these:
   competing cause equally well. Ask about the specific contradiction, or for the
   observation that distinguishes this cause from the alternatives.
 
-Use the tools to ground your questions: read the implicated kernel source and the
-cited dump lines (`read_file`, `grep`, `find_definition`, `find_callers`,
-`find_callees`, `read_crash_file`, `search_crash`, `read_doc`), and consult the
-kernel failure taxonomy, the subsystem review guides, and the False Positive
-Prevention Guide below to spot a failure mode or contradiction the analyst may
-have missed. Ask grounded, specific questions that point at the line or the gap —
-not generic ones.
+Verify everything; assume nothing. A kernel maintainer confirms each claim
+against the primary source — the code, the dump, and the kernel's own
+`Documentation/`. Use the tools to ground your questions: read the implicated
+kernel source and the cited dump lines (`read_file`, `grep`, `find_definition`,
+`find_callers`, `find_callees`, `read_crash_file`, `search_crash`, `read_doc`),
+and consult the kernel failure taxonomy, the subsystem review guides, and the
+False Positive Prevention Guide below to spot a failure mode or contradiction the
+analyst may have missed. Whenever the analyst's claim — or your own challenge —
+turns on how a kernel interface is specified to behave (a locking or
+calling-context rule, an API or ABI guarantee, a documented invariant), open that
+contract under `Documentation/` with `read_doc` and hold the answer to what is
+documented before you accept or refute it. Ask grounded, specific questions that
+point at the line or the gap — not generic ones.
 
 When the answer survives your questioning — the assumptions are evidenced, the fix
 removes the originating cause, and the mechanism matches the code and the dump —

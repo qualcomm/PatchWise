@@ -922,11 +922,21 @@ class Agent:
         except ValueError as e:
             return {"ok": False, "error": str(e)}
         rel = self._kernel_rel(path)
-        # The model often drops the Documentation/ prefix (e.g. "filesystems/
-        # locking.rst"). Prepend it rather than failing — the escape check above
-        # already ran on the original path, so this can't widen scope.
+        # Documentation/ lives under the kernel git subtree (e.g.
+        # msm-kernel/Documentation/) when --kernel-tree puts the tree below the
+        # mounted root, and at the root otherwise. Re-anchor whatever the model
+        # passed under <subdir>/Documentation/: strip a leading subdir, then
+        # (since the model often drops the Documentation/ prefix, e.g.
+        # "filesystems/locking.rst") ensure it, then prepend the subdir back —
+        # so both "Documentation/x.rst" and "msm-kernel/Documentation/x.rst"
+        # resolve. The escape check above already ran, so re-anchoring can't
+        # widen scope.
+        subdir = self.docker_manager.git_subdir
+        if subdir and (rel == subdir or rel.startswith(subdir + "/")):
+            rel = rel[len(subdir):].lstrip("/")
         if not (rel == "Documentation" or rel.startswith("Documentation/")):
             rel = "Documentation/" + rel
+        rel = "/".join(filter(None, [subdir, rel]))
         container_path = str(self.docker_manager.kernel_dir / rel)
         content = self.docker_manager.read_file(container_path)
         if content is False:
