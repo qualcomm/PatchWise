@@ -642,7 +642,7 @@ class Agent:
         self._ensure_navigation_stack(need_ts=True)
         name = self._strip_type_keyword(name)
         pattern = rf"\b{re.escape(name)}\b"
-        hits, error = self._rg_search(pattern, file, glob=None)
+        hits, error, skipped = self._rg_search(pattern, file, glob=None)
         if error is not None:
             return {"ok": False, "error": error}
         callers: Dict[Tuple[str, str], Dict[str, Any]] = {}
@@ -673,7 +673,7 @@ class Agent:
         limit = self._CALLERS_LIMIT
         for c in caller_list[:limit]:
             self.seen_files.add(c["path"])
-        return {
+        out: Dict[str, Any] = {
             "ok": True,
             "result": {
                 "callers": caller_list[:limit],
@@ -683,6 +683,9 @@ class Agent:
             "total_references": len(references),
             "truncated": len(caller_list) > limit or len(references) > limit,
         }
+        if skipped:
+            out["skipped_paths"] = skipped
+        return out
 
     # TODO: Do models prefer reading the whole function with read_file()?
     def _tool_find_callees(
@@ -730,13 +733,15 @@ class Agent:
         pattern: str,
         file: Optional[str] = None,
         glob: Optional[str] = None,
-    ) -> Tuple[Optional[List[Dict[str, Any]]], Optional[str]]:
+    ) -> Tuple[Optional[List[Dict[str, Any]]], Optional[str], List[str]]:
         """Run ripgrep and attribute each hit to its enclosing function.
 
-        Returns (hits, None) on success or (None, error_message). Each hit is
-        {path, enclosing_function, line, snippet}, deduped by (path, line);
-        enclosing_function is None for hits outside any function body. No result
-        cap — callers truncate as they see fit.
+        Returns (hits, None, skipped) on success or (None, error_message,
+        skipped). `skipped` lists named paths that were absent from the tree and
+        dropped from the search. Each hit is {path, enclosing_function, line,
+        snippet}, deduped by (path, line); enclosing_function is None for hits
+        outside any function body. No result cap — callers truncate as they see
+        fit.
         """
         # ripgrep validates the pattern itself (Rust regex dialect). We do NOT
         # pre-validate with Python's `re`: its dialect differs (lookaround and
@@ -749,13 +754,14 @@ class Agent:
         # takes multiple search roots natively. (Kernel paths never contain
         # spaces, so splitting on whitespace is safe.)
         file_paths: List[str] = []  # validated, kernel-relative, existing
+        skipped: List[str] = []  # named but absent from the tree
         any_dir = False
         if file:
             for tok in (t for t in re.split(r"[,\s]+", file.strip()) if t):
                 try:
                     self._abs_in_kernel(tok)
                 except ValueError as e:
-                    return None, str(e)
+                    return None, str(e), []
                 rel = self._kernel_rel(tok)
                 container_path = str(self.docker_manager.kernel_dir / rel)
                 check = self.docker_manager.run_command(
@@ -775,10 +781,19 @@ class Agent:
                 stdout, _ = check.communicate()
                 kind = stdout.strip()
                 if kind == "missing":
-                    return None, f"file not found: {rel}"
+                    # Drop a missing path and keep going: the model routinely
+                    # passes several roots, and one stale path should not throw
+                    # away the others' hits. Reported back via `skipped` so the
+                    # model can correct it.
+                    skipped.append(rel)
+                    continue
                 if kind == "dir":
                     any_dir = True
                 file_paths.append(rel)
+            # Every named path was missing — falling back to a tree-wide search
+            # would silently change the question, so fail with the list instead.
+            if skipped and not file_paths:
+                return None, f"file not found: {', '.join(skipped)}", skipped
 
         kernel_dir = self.docker_manager.kernel_dir
 
@@ -810,7 +825,7 @@ class Agent:
         # silent 0 on a malformed pattern reads as "nothing found".
         if proc.returncode == 2:
             detail = (err or "").strip().splitlines()
-            return None, f"invalid regex or search error: {detail[0] if detail else ''}"
+            return None, f"invalid regex or search error: {detail[0] if detail else ''}", skipped
 
         file_to_funcs: Dict[str, List[Tuple[int, int, str]]] = {}
 
@@ -862,7 +877,7 @@ class Agent:
                     "snippet": text.strip()[:240],
                 }
             )
-        return hits, None
+        return hits, None, skipped
 
     def _tool_grep(
         self,
@@ -871,7 +886,7 @@ class Agent:
         glob: Optional[str] = None,
     ) -> Dict[str, Any]:
         self._ensure_navigation_stack(need_ts=True)
-        hits, error = self._rg_search(pattern, file, glob)
+        hits, error, skipped = self._rg_search(pattern, file, glob)
         if error is not None:
             return {"ok": False, "error": error}
         total = len(hits)
@@ -892,12 +907,15 @@ class Agent:
         ]
         for r in results:
             self.seen_files.add(r["path"])
-        return {
+        out: Dict[str, Any] = {
             "ok": True,
             "result": results,
             "total": total,
             "truncated": total > self._GREP_LIMIT,
         }
+        if skipped:
+            out["skipped_paths"] = skipped
+        return out
 
     # TODO: mark "truncated" only when we do not give what the AI wants (within bounds)
     def _tool_read_file(

@@ -86,6 +86,8 @@ TOOLS = [
                 "non-null, enclosing_function_start/end give its line range, so "
                 "read_file(path, start, end) returns the whole function. "
                 "Capped at 100; 'total' and 'truncated' indicate overflow. "
+                "If some scoped paths don't exist, the search still runs over "
+                "the rest and lists the dropped ones in 'skipped_paths'. "
                 "By default searches *.c and *.h only. Use `glob` to widen: "
                 "e.g. '*.dts,*.dtsi,*.yaml' for DT/binding reviews, "
                 "'Kconfig,Makefile' for build-system searches."
