@@ -5,8 +5,8 @@
 All tools accept and return kernel-relative paths (e.g. 'drivers/usb/foo.c').
 The `file` arg on name-taking tools is a hint for where you saw the symbol
 used, not where its definition lives. The tool resolves the definition
-itself. List tools cap results at 100; read_file/git_show/git_cat_file cap at
-200 lines.
+itself. List tools cap results at 100; read_file and git_cat_file cap at
+256 lines; git_show caps at 200.
 """
 
 _NAME_PARAM = {
@@ -116,7 +116,7 @@ TOOLS = [
             "name": "read_file",
             "description": (
                 "Read lines [start, end] of a kernel-relative file. Capped at "
-                "200 lines per call. If `truncated` is true, call again with "
+                "256 lines per call. If `truncated` is true, call again with "
                 "a later `start` to read more."
             ),
             "parameters": {
@@ -132,7 +132,7 @@ TOOLS = [
                     },
                     "end": {
                         "type": "integer",
-                        "description": "1-based ending line, inclusive (default start+199).",
+                        "description": "1-based ending line, inclusive (default start+255).",
                     },
                 },
                 "required": ["path"],
@@ -279,7 +279,7 @@ TOOLS = [
             "description": (
                 "Read a historical file from git by commit revision and kernel-relative "
                 "path. Returns {rev, path, start, end, content, truncated}. "
-                "Capped at 200 lines per call. Use this when `git_show` output is "
+                "Capped at 256 lines per call. Use this when `git_show` output is "
                 "truncated or when you want file contents without a patch."
             ),
             "parameters": {
@@ -299,7 +299,7 @@ TOOLS = [
                     },
                     "end": {
                         "type": "integer",
-                        "description": "1-based ending line, inclusive (default start+199).",
+                        "description": "1-based ending line, inclusive (default start+255).",
                     },
                 },
                 "required": ["rev", "path"],

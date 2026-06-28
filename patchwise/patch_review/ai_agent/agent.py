@@ -588,6 +588,7 @@ class Agent:
     _CALLEES_LIMIT = 200
     _CALLERS_LIMIT = 100  # max caller entries and max file-scope references each
     _GREP_LIMIT = 100  # max grep hits returned
+    _READ_MAX_LINES = 256  # max lines returned per read_file / git_cat_file call
 
     def _tool_find_definition(
         self, name: str, file: Optional[str] = None
@@ -906,8 +907,9 @@ class Agent:
         lines = content.splitlines(keepends=True)
         total_lines = len(lines)
         start_1 = max(1, start)
-        request_end = end if end is not None else start_1 + 199
-        effective_end = min(request_end, start_1 + 199, total_lines)
+        cap_end = start_1 + self._READ_MAX_LINES - 1
+        request_end = end if end is not None else cap_end
+        effective_end = min(request_end, cap_end, total_lines)
         content = "".join(lines[start_1 - 1 : effective_end])
         self.seen_files.add(rel)
         return {
@@ -1204,8 +1206,9 @@ class Agent:
         lines = stdout.splitlines(keepends=True)
         total_lines = len(lines)
         start_1 = max(1, start)
-        request_end = end if end is not None else start_1 + 199
-        effective_end = min(request_end, start_1 + 199, total_lines)
+        cap_end = start_1 + self._READ_MAX_LINES - 1
+        request_end = end if end is not None else cap_end
+        effective_end = min(request_end, cap_end, total_lines)
         return {
             "ok": True,
             "result": {
