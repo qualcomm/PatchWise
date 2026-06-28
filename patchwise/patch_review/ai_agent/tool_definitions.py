@@ -228,9 +228,14 @@ TOOLS = [
         "function": {
             "name": "git_log",
             "description": (
-                "Show recent commit history touching a kernel-relative file or "
-                "directory path. Returns {result: [{rev, author, date, subject}], "
-                "total, truncated}. Capped at 100 commits."
+                "Search commit history. Returns {result: [{rev, author, date, "
+                "subject}], total, truncated}, capped at 100 commits. Give at "
+                "least one criterion: `path` (history of a file/dir), `grep` "
+                "(commit-message regex), `pickaxe` (commits that added or "
+                "removed an exact string — when a symbol/line was introduced or "
+                "deleted), or `pickaxe_regex` (commits whose diff adds/removes a "
+                "line matching a regex). Combine them to narrow, e.g. pickaxe + "
+                "path to find where a symbol entered one file."
             ),
             "parameters": {
                 "type": "object",
@@ -238,12 +243,30 @@ TOOLS = [
                     "path": {
                         "type": "string",
                         "description": (
-                            "Kernel-relative file or directory path whose history "
-                            "you want to inspect."
+                            "Kernel-relative file or directory path to scope the "
+                            "search to (optional when a search criterion is given)."
+                        ),
+                    },
+                    "grep": {
+                        "type": "string",
+                        "description": "Regex matched against commit messages (--grep).",
+                    },
+                    "pickaxe": {
+                        "type": "string",
+                        "description": (
+                            "Exact string; finds commits that changed how many "
+                            "times it occurs, i.e. added or removed it (-S)."
+                        ),
+                    },
+                    "pickaxe_regex": {
+                        "type": "string",
+                        "description": (
+                            "Regex; finds commits whose diff adds or removes any "
+                            "line matching it (-G)."
                         ),
                     },
                 },
-                "required": ["path"],
+                "required": [],
             },
         },
     },

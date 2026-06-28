@@ -1093,11 +1093,25 @@ class Agent:
         except Exception as e:
             self.logger.debug(f"Failed to write tool_calls.log: {e}")
 
-    def _tool_git_log(self, path: str) -> Dict[str, Any]:
-        try:
-            rel = self._validate_existing_kernel_path(path)
-        except ValueError as e:
-            return {"ok": False, "error": str(e)}
+    def _tool_git_log(
+        self,
+        path: Optional[str] = None,
+        grep: Optional[str] = None,
+        pickaxe: Optional[str] = None,
+        pickaxe_regex: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        if not (path or grep or pickaxe or pickaxe_regex):
+            return {
+                "ok": False,
+                "error": "give at least one of: path, grep, pickaxe, pickaxe_regex",
+            }
+
+        rel: Optional[str] = None
+        if path:
+            try:
+                rel = self._validate_existing_kernel_path(path)
+            except ValueError as e:
+                return {"ok": False, "error": str(e)}
 
         log_cmd = [
             *self._git_command("log"),
@@ -1108,9 +1122,17 @@ class Agent:
             "101",
             "--format=%H%x1f%an%x1f%ad%x1f%s",
             "--date=short",
-            "--",
-            self._git_tree_rel(rel),
         ]
+        # Search options, passed in attached form (--opt=value / -Xvalue) so a
+        # value that begins with '-' is never re-parsed as a flag.
+        if grep:
+            log_cmd.append(f"--grep={grep}")
+        if pickaxe:
+            log_cmd.append(f"-S{pickaxe}")
+        if pickaxe_regex:
+            log_cmd.append(f"-G{pickaxe_regex}")
+        if rel is not None:
+            log_cmd += ["--", self._git_tree_rel(rel)]
         proc = self.docker_manager.run_command(
             log_cmd, cwd=self.docker_manager._git_workdir
         )
