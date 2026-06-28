@@ -170,6 +170,7 @@ Code-navigation tools (all paths kernel-relative, e.g. `drivers/mtd/nand/raw/qco
 - `find_callees(name, file?)`
 - `grep(pattern, file?)`
 - `read_doc(path)`
+- `read_binding(compatible)`
 - `read_file(path, start?, end?)`
 - `list_files(path, recursive?)`
 - `get_subsystem_review_guide(subsystem_file)`
@@ -646,7 +647,7 @@ finding with record_verdict as you work through them.
             critic_messages,
             force_tool_usage=False,
             max_iterations=self.CRITIC_ITER_CAP,
-            allowed_tools=["get_subsystem_review_guide", "read_doc"],
+            allowed_tools=["get_subsystem_review_guide", "read_doc", "read_binding"],
         )
         # Carry whatever it read this round into the next round's prompt.
         self._harvest_loaded_refs(critic_messages, critic_loaded)
@@ -659,12 +660,14 @@ finding with record_verdict as you work through them.
     def _harvest_loaded_refs(
         messages: List[dict], critic_loaded: OrderedDict[str, str]
     ) -> None:
-        """Record read_doc / get_subsystem_review_guide contents from a finished
-        critic conversation so later rounds get them pasted in rather than
-        re-fetching. Keyed by doc path / guide name; first read wins."""
+        """Record read_doc / read_binding / get_subsystem_review_guide contents
+        from a finished critic conversation so later rounds get them pasted in
+        rather than re-fetching. Keyed by doc path / guide name; first read
+        wins."""
         for m in messages:
             if m.get("role") != "tool" or m.get("name") not in (
                 "read_doc",
+                "read_binding",
                 "get_subsystem_review_guide",
             ):
                 continue
@@ -672,10 +675,18 @@ finding with record_verdict as you work through them.
                 res = json.loads(m.get("content") or "{}").get("result") or {}
             except (json.JSONDecodeError, AttributeError):
                 continue
-            key = res.get("path") or res.get("name")
-            content = res.get("content")
-            if key and content and key not in critic_loaded:
-                critic_loaded[key] = content
+            # read_binding returns several matched bindings under `matches`;
+            # everything else carries a single path/name + content.
+            entries = (
+                res.get("matches")
+                if isinstance(res.get("matches"), list)
+                else [res]
+            )
+            for entry in entries:
+                key = entry.get("path") or entry.get("name")
+                content = entry.get("content")
+                if key and content and key not in critic_loaded:
+                    critic_loaded[key] = content
 
     @staticmethod
     def _render_loaded_refs(critic_loaded: OrderedDict[str, str]) -> str:

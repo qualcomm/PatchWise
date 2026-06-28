@@ -180,6 +180,35 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "read_binding",
+            "description": (
+                "Resolve a devicetree `compatible` pattern to its binding "
+                "documentation and return the yaml(s) whole. Greps "
+                "Documentation/devicetree/bindings/ for the compatible. "
+                "Result: {matches: [{path, content}]}, deduped by path. Use "
+                "this instead of guessing the Documentation/devicetree/bindings/ "
+                "path."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "compatible": {
+                        "type": "string",
+                        "description": (
+                            "A ripgrep regex for the devicetree compatible: a "
+                            "literal like 'qcom,sm8550-adsp-pas' matches itself; "
+                            "a pattern like 'qcom,sm8[0-9]50-.*-adsp-pas' or an "
+                            "alternation 'qcom,foo|qcom,bar' matches several."
+                        ),
+                    },
+                },
+                "required": ["compatible"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "get_subsystem_review_guide",
             "description": (
                 "Load a subsystem-specific review guide by filename. Use the "
@@ -500,6 +529,7 @@ NAVIGATION_TOOLS = [
     "grep",
     "read_file",
     "read_doc",
+    "read_binding",
     "list_files",
     "git_log",
     "git_show",

@@ -317,6 +317,17 @@ class Agent:
         """Return a kernel-relative path anchored at the container kernel root."""
         return str(self.docker_manager.kernel_dir / rel)
 
+    def _doc_container_path(self, sub: str = "") -> str:
+        """Container path of `Documentation/<sub>`, honoring the kernel git subdir.
+
+        Documentation/ lives under the kernel git subtree (e.g.
+        msm-kernel/Documentation/) when --kernel-tree mounts the tree below the
+        root, and at the root otherwise. `sub` is appended under Documentation/.
+        """
+        subdir = self.docker_manager.git_subdir
+        rel = "/".join(filter(None, [subdir, "Documentation", sub.strip("/")]))
+        return str(self.docker_manager.kernel_dir / rel)
+
     def _validate_existing_kernel_path(self, path: str) -> str:
         """Validate and normalize a kernel-relative path that must exist."""
         self._abs_in_kernel(path)
@@ -998,6 +1009,65 @@ class Agent:
         self.seen_files.add(rel)
         return {"ok": True, "result": {"path": rel, "content": content}}
 
+    def _tool_read_binding(
+        self, compatible: Union[str, List[str]]
+    ) -> Dict[str, Any]:
+        """Resolve a devicetree `compatible` pattern to its binding docs.
+
+        The compatible is in the diff; the binding is one ripgrep away under
+        Documentation/devicetree/bindings/. Greps that subtree for the
+        compatible — a ripgrep regex, so a literal compatible matches itself and
+        a pattern like `qcom,sm8[0-9]50-.*-adsp-pas` (or an alternation
+        `qcom,foo|qcom,bar`) matches several — and reads the matching yaml(s)
+        whole, so the model reads the bindings it needs without guessing the
+        path. Returns {matches: [{path, content}]}, deduped by path. A list is
+        tolerated and joined as an alternation."""
+        # Canonical form is a single rg regex; tolerate a list by OR-joining it.
+        if isinstance(compatible, list):
+            compatible = "|".join(
+                c.strip() for c in compatible if isinstance(c, str) and c.strip()
+            )
+        compatible = compatible.strip() if isinstance(compatible, str) else ""
+        if not compatible:
+            return {"ok": False, "error": "compatible must be a non-empty string"}
+
+        bindings_abs = self._doc_container_path("devicetree/bindings")
+        cmd = ["rg", "-l", "--glob", "*.yaml", "-e", compatible, bindings_abs]
+        proc = self.docker_manager.run_command(
+            cmd, cwd=str(self.docker_manager.kernel_dir)
+        )
+        out, err = proc.communicate()
+        # rg exit codes: 0 = matches, 1 = none, 2 = error (e.g. bad regex).
+        if proc.returncode == 2:
+            detail = (err or "").strip().splitlines()
+            return {
+                "ok": False,
+                "error": f"invalid pattern or search error: {detail[0] if detail else ''}",
+            }
+        rels = sorted({self._kernel_rel(p) for p in out.splitlines() if p.strip()})
+        if not rels:
+            return {
+                "ok": False,
+                "error": (
+                    f"no binding matches {compatible!r} under "
+                    f"Documentation/devicetree/bindings/"
+                ),
+            }
+
+        # Inline the content of the first few matches (bindings are small); list
+        # the rest by path so an over-broad set does not flood context.
+        matches: List[Dict[str, Any]] = []
+        for rel in rels[:5]:
+            content = self.docker_manager.read_file(self._container_kernel_path(rel))
+            self.seen_files.add(rel)
+            entry: Dict[str, Any] = {"path": rel}
+            if content is not False:
+                entry["content"] = content
+            matches.append(entry)
+        for rel in rels[5:]:
+            matches.append({"path": rel})
+        return {"ok": True, "result": {"matches": matches}}
+
     def _tool_list_files(self, path: str, recursive: bool = False) -> Dict[str, Any]:
         try:
             self._abs_in_kernel(path)  # validation only; reject "../" escapes
@@ -1458,6 +1528,7 @@ class Agent:
             "grep": self._tool_grep,
             "read_file": self._tool_read_file,
             "read_doc": self._tool_read_doc,
+            "read_binding": self._tool_read_binding,
             "list_files": self._tool_list_files,
             "get_subsystem_review_guide": self._tool_get_subsystem_review_guide,
             "git_log": self._tool_git_log,

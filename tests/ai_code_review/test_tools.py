@@ -775,6 +775,51 @@ def test_read_file_eof_reaches_total(review: AiCodeReview) -> None:
 
 
 # ---------------------------------------------------------------------------
+# read_binding
+# ---------------------------------------------------------------------------
+
+
+def test_read_binding_resolves_compatible(review: AiCodeReview) -> None:
+    """A literal compatible resolves to its binding yaml and returns it whole."""
+    result = review.agent.dispatch_tool(
+        "read_binding", {"compatible": "qcom,msm8226-adsp-pil"}
+    )
+    assert result.get("ok"), f"tool returned not-ok: {result}"
+    matches = result.get("result", {}).get("matches", [])
+    paths = [m["path"] for m in matches]
+    assert any(
+        p.endswith("Documentation/devicetree/bindings/remoteproc/qcom,adsp.yaml")
+        for p in paths
+    ), f"expected qcom,adsp.yaml among matches: {paths}"
+    # The resolved binding is returned whole, not just located.
+    inlined = [m for m in matches if "content" in m]
+    assert inlined, "expected at least one match to carry content"
+    assert "compatible" in inlined[0]["content"]
+
+
+def test_read_binding_alternation_dedup(review: AiCodeReview) -> None:
+    """An alternation over compatibles sharing one binding yields one match."""
+    result = review.agent.dispatch_tool(
+        "read_binding",
+        {"compatible": "qcom,msm8226-adsp-pil|qcom,sdm845-adsp-pas"},
+    )
+    assert result.get("ok"), f"tool returned not-ok: {result}"
+    paths = [m["path"] for m in result.get("result", {}).get("matches", [])]
+    binding = "Documentation/devicetree/bindings/remoteproc/qcom,adsp.yaml"
+    # Both compatibles live in qcom,adsp.yaml, so it appears exactly once.
+    assert sum(1 for p in paths if p.endswith(binding)) == 1, paths
+
+
+def test_read_binding_miss(review: AiCodeReview) -> None:
+    """A compatible no binding matches fails loudly with an actionable error."""
+    result = review.agent.dispatch_tool(
+        "read_binding", {"compatible": "acme,nonexistent-widget-9000"}
+    )
+    assert not result.get("ok"), f"expected miss, got: {result}"
+    assert "no binding matches" in result.get("error", "")
+
+
+# ---------------------------------------------------------------------------
 # list_files
 # ---------------------------------------------------------------------------
 
