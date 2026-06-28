@@ -123,8 +123,10 @@ TOOLS = [
             "name": "read_file",
             "description": (
                 "Read lines [start, end] of a kernel-relative file. Capped at "
-                "256 lines per call. If `truncated` is true, call again with "
-                "a later `start` to read more."
+                "256 lines per call. Returns {path, start, end, total, content}: "
+                "you have lines start..end of `total`, so end < total means more "
+                "remains (call again with start = end + 1) and end == total is "
+                "end-of-file."
             ),
             "parameters": {
                 "type": "object",
@@ -285,7 +287,8 @@ TOOLS = [
             "name": "git_cat_file",
             "description": (
                 "Read a historical file from git by commit revision and kernel-relative "
-                "path. Returns {rev, path, start, end, content, truncated}. "
+                "path. Returns {rev, path, start, end, total, content}: "
+                "lines start..end of `total` (end < total means more remains). "
                 "Capped at 256 lines per call. Use this when `git_show` output is "
                 "truncated or when you want file contents without a patch."
             ),

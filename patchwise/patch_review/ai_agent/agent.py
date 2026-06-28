@@ -917,7 +917,6 @@ class Agent:
             out["skipped_paths"] = skipped
         return out
 
-    # TODO: mark "truncated" only when we do not give what the AI wants (within bounds)
     def _tool_read_file(
         self, path: str, start: int = 1, end: Optional[int] = None
     ) -> Dict[str, Any]:
@@ -947,8 +946,12 @@ class Agent:
                 "path": rel,
                 "start": start_1,
                 "end": effective_end,
+                # Position triple: you have lines start..end of `total`. end <
+                # total means more remains; end == total is end-of-file. This
+                # subsumes a separate truncated flag (which couldn't tell a cap
+                # clip from EOF anyway).
+                "total": total_lines,
                 "content": content,
-                "truncated": effective_end < total_lines,
             },
         }
 
@@ -1210,7 +1213,6 @@ class Agent:
             },
         }
 
-    # TODO: mark "truncated" only when we do not give what the AI wants (withing bounds)
     def _tool_git_cat_file(
         self, rev: str, path: str, start: int = 1, end: Optional[int] = None
     ) -> Dict[str, Any]:
@@ -1245,8 +1247,9 @@ class Agent:
                 "path": rel,
                 "start": start_1,
                 "end": effective_end,
+                # Position triple — see _tool_read_file: lines start..end of total.
+                "total": total_lines,
                 "content": "".join(lines[start_1 - 1 : effective_end]),
-                "truncated": effective_end < total_lines,
             },
         }
 
