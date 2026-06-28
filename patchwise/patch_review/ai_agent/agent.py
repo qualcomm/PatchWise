@@ -8,6 +8,7 @@ import os
 import re
 import subprocess
 import time
+from functools import cache
 from typing import Any, Dict, List, Optional, Tuple, Set, Union
 from urllib.parse import unquote, urlparse
 import httpx
@@ -41,6 +42,21 @@ REVIEW_PROMPTS_PATH = (
 )
 KERNEL_REVIEW_PROMPTS_PATH = REVIEW_PROMPTS_PATH / "kernel"
 SUBSYSTEM_REVIEW_PROMPTS_PATH = KERNEL_REVIEW_PROMPTS_PATH / "subsystem"
+
+
+@cache
+def _load_subsystem_guide(safe_name: str) -> Optional[str]:
+    """Read a subsystem guide's content, cached for the process lifetime.
+
+    The guides are immutable on disk, so the first read serves every later
+    call across reviews, phases, and critic rounds (the critic re-fetches the
+    same guide each round). Returns None when the guide does not exist.
+    """
+    try:
+        with open(SUBSYSTEM_REVIEW_PROMPTS_PATH / safe_name, "r") as f:
+            return f.read()
+    except FileNotFoundError:
+        return None
 
 
 def uri_to_path(uri: str) -> str:
@@ -1174,11 +1190,12 @@ class Agent:
                     f"available: {avail_str}"
                 ),
             }
-        guide_path = SUBSYSTEM_REVIEW_PROMPTS_PATH / safe_name
-        try:
-            with open(guide_path, "r") as f:
-                content = f.read()
-        except FileNotFoundError:
+        content = _load_subsystem_guide(safe_name)
+        if content is None:
+            self.logger.warning(
+                f"requested subsystem guide {safe_name!r} does not exist; "
+                f"available: {avail_str}"
+            )
             return {
                 "ok": False,
                 "error": (

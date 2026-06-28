@@ -1085,3 +1085,28 @@ def test_git_cat_file_errors(
     result = review.agent.dispatch_tool("git_cat_file", args)
     assert not result.get("ok"), f"unexpectedly ok: {result}"
     assert expected_error in (result.get("error") or "")
+
+
+# ---------------------------------------------------------------------------
+# get_subsystem_review_guide (process-lifetime cache)
+# ---------------------------------------------------------------------------
+
+
+def test_get_subsystem_review_guide_is_cached(review: AiCodeReview) -> None:
+    """The guide is read from disk once and served from cache thereafter."""
+    from patchwise.patch_review.ai_agent.agent import _load_subsystem_guide
+
+    _load_subsystem_guide.cache_clear()
+    first = review.agent.dispatch_tool(
+        "get_subsystem_review_guide", {"subsystem_file": "alignment.md"}
+    )
+    assert first.get("ok"), f"tool returned not-ok: {first}"
+    assert first["result"]["content"].strip(), "expected non-empty guide content"
+    # A second fetch of the same guide is a cache hit, not a re-read.
+    second = review.agent.dispatch_tool(
+        "get_subsystem_review_guide", {"subsystem_file": "alignment.md"}
+    )
+    assert second["result"]["content"] == first["result"]["content"]
+    info = _load_subsystem_guide.cache_info()
+    assert info.misses == 1, f"expected one disk read, got {info}"
+    assert info.hits >= 1, f"expected a cache hit, got {info}"
