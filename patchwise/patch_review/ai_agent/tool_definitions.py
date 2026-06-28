@@ -37,7 +37,9 @@ TOOLS = [
                 "Find every definition of a symbol (function, struct, macro, "
                 "typedef, enum). Each arch/#ifdef variant is a separate result, "
                 "best-first by proximity. Result: {name, kind, path, line, "
-                "snippet}; `truncated` flags overflow."
+                "end, snippet} — the definition spans lines [line, end], so "
+                "read_file(path, line, end) returns it whole; `truncated` flags "
+                "overflow."
             ),
             "parameters": _NAME_PARAM,
         },
@@ -76,10 +78,13 @@ TOOLS = [
             "name": "grep",
             "description": (
                 "Search for a regex pattern across the kernel source tree. "
-                "Each result is {path, line, snippet, enclosing_function}: "
+                "Each result is {path, line, snippet, enclosing_function, "
+                "enclosing_function_start, enclosing_function_end}: "
                 "enclosing_function names the function the hit sits inside, or "
                 "is null for hits at file scope (macro definitions, struct/enum "
-                "declarations, static initializers, EXPORT_SYMBOL_*, etc.). "
+                "declarations, static initializers, EXPORT_SYMBOL_*, etc.). When "
+                "non-null, enclosing_function_start/end give its line range, so "
+                "read_file(path, start, end) returns the whole function. "
                 "Capped at 100; 'total' and 'truncated' indicate overflow. "
                 "By default searches *.c and *.h only. Use `glob` to widen: "
                 "e.g. '*.dts,*.dtsi,*.yaml' for DT/binding reviews, "

@@ -612,7 +612,10 @@ class Agent:
                     "name": c["name"],
                     "kind": c["kind"],
                     "path": c["file"],
+                    # The definition spans [line, end]; read_file(path, line,
+                    # end) returns it whole instead of guessing a window.
                     "line": c["start_line"],
+                    "end": c["end_line"],
                     "snippet": self._snippet_for_range(
                         c["file"], c["start_line"], c["end_line"], ctx=0
                     ),
@@ -836,21 +839,25 @@ class Agent:
             seen_hits.add((rel, hit_line))
 
             enclosing: Optional[str] = None
-            enclosing_line: Optional[int] = None
+            enclosing_start: Optional[int] = None
+            enclosing_end: Optional[int] = None
             for s, e, fname in funcs_for(rel):
                 if s <= hit_line <= e:
                     enclosing = fname
-                    enclosing_line = s
+                    enclosing_start = s
+                    enclosing_end = e
                     break
 
             hits.append(
                 {
                     "path": rel,
                     "enclosing_function": enclosing,
-                    # Definition line of the enclosing function. Two #ifdef/#else
-                    # variants share a name in one file but have distinct lines —
-                    # this keeps them apart.
-                    "enclosing_function_line": enclosing_line,
+                    # Definition line range of the enclosing function. Two
+                    # #ifdef/#else variants share a name in one file but have
+                    # distinct ranges — the start keeps them apart, and the end
+                    # lets a caller read the whole function in one precise read.
+                    "enclosing_function_line": enclosing_start,
+                    "enclosing_function_end": enclosing_end,
                     "line": hit_line,
                     "snippet": text.strip()[:240],
                 }
@@ -868,12 +875,16 @@ class Agent:
         if error is not None:
             return {"ok": False, "error": error}
         total = len(hits)
-        # Project to grep's documented schema (the enclosing-function definition
-        # line that _rg_search also carries is only needed by find_callers).
+        # Project to grep's documented schema. enclosing_function_start/end are
+        # the line range of the function the hit sits in (null at file scope),
+        # so the model can read the whole function in one precise read_file
+        # instead of guessing a window around the hit.
         results = [
             {
                 "path": h["path"],
                 "enclosing_function": h["enclosing_function"],
+                "enclosing_function_start": h["enclosing_function_line"],
+                "enclosing_function_end": h["enclosing_function_end"],
                 "line": h["line"],
                 "snippet": h["snippet"],
             }
