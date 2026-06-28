@@ -54,10 +54,12 @@ TOOLS = [
             "description": (
                 "Find what references a symbol. Returns {callers, references}: "
                 "`callers` is one entry per function {function, path, "
-                "function_line, lines, snippet}; `references` is file-scope hits "
-                "{path, line, snippet} (e.g. `.release = name` wiring); "
-                "`truncated` flags overflow. Textual match — verify the "
-                "subsystem for common names."
+                "function_start, function_end, lines, snippet} — read_file(path, "
+                "function_start, function_end) returns the whole calling "
+                "function; `references` is file-scope hits {path, line, snippet} "
+                "(e.g. `.release = name` wiring, annotated with the enclosing "
+                "construct); `truncated` flags overflow. Textual match — verify "
+                "the subsystem for common names."
             ),
             "parameters": _NAME_PARAM,
         },

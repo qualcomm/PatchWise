@@ -322,6 +322,13 @@ def test_find_callers(review: AiCodeReview, name: str, min_count: int) -> None:
     first = callers[0]
     assert first.get("function"), f"missing function name in {first}"
     assert first.get("lines"), f"missing call-site lines in {first}"
+    # Each caller carries the calling function's full range, so it can be read
+    # whole in one call.
+    assert isinstance(first.get("function_start"), int), first
+    assert isinstance(first.get("function_end"), int), first
+    assert first["function_start"] <= first["function_end"], first
+    assert all(first["function_start"] <= ln <= first["function_end"]
+               for ln in first["lines"]), first
 
 
 def test_find_callers_references(review: AiCodeReview) -> None:

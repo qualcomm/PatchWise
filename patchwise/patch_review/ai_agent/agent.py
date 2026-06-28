@@ -670,7 +670,10 @@ class Agent:
                 entry = {
                     "function": enc["name"],
                     "path": h["path"],
-                    "function_line": enc["start"],
+                    # Full range of the calling function, so read_file(path,
+                    # function_start, function_end) returns it whole.
+                    "function_start": enc["start"],
+                    "function_end": enc["end"],
                     "lines": [],
                     "snippet": h["snippet"],
                 }
