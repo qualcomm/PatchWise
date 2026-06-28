@@ -8,8 +8,8 @@ Protocol:
     host -> daemon: {"op": "lookup", "name": <str>, "limit": <int>}
     daemon -> host: {"candidates": [<entry>, ...]}
 
-    host -> daemon: {"op": "funcs_in_file", "path": <kernel-relative str>}
-    daemon -> host: {"funcs": [{"name","start_line","end_line",...}, ...]}
+    host -> daemon: {"op": "constructs_in_file", "path": <kernel-relative str>}
+    daemon -> host: {"constructs": [{"name","kind","start_line","end_line"}, ...]}
 
 A `{"ready": true, ...}` line is emitted once the index finishes building, so
 the host can block on first stdout readline() before issuing requests.
@@ -72,9 +72,42 @@ _TS_QUERY_SRC = """
 
 (preproc_function_def name: (identifier)    @other.name) @other.body
 ; #define list_for_each_entry(pos, head, member) ...
+
+(declaration
+  declarator: (init_declarator
+    declarator: (identifier) @other.name
+    value: (initializer_list))) @other.body
+; static const struct file_operations foo_fops = { .read = ... };
+
+(declaration
+  declarator: (init_declarator
+    declarator: (array_declarator declarator: (identifier) @other.name)
+    value: (initializer_list))) @other.body
+; static const struct of_device_id foo_match[] = { ... };
+
+(declaration
+  declarator: (init_declarator
+    declarator: (pointer_declarator declarator: (identifier) @other.name)
+    value: (initializer_list))) @other.body
+; static struct attribute *foo_attrs[] = { ... };  (pointer form)
 """
 
 _TS_QUERY = Query(_C_LANGUAGE, _TS_QUERY_SRC)
+
+# Map a captured construct's grammar node type to the kind we report. The body
+# capture is the whole construct node, so its type tells the kind apart (the
+# query lumps all non-functions under @other.*). An aggregate initializer
+# (`= { ... }`) — an ops table, id table, attribute group — is a `declaration`.
+_KIND_BY_NODE = {
+    "function_definition": "function",
+    "struct_specifier": "struct",
+    "union_specifier": "union",
+    "enum_specifier": "enum",
+    "type_definition": "typedef",
+    "preproc_def": "macro",
+    "preproc_function_def": "macro",
+    "declaration": "initializer",
+}
 
 # Callees: the functions a given function body invokes. A direct call is
 # `foo(...)` (function field is an identifier); an indirect call is
@@ -155,7 +188,7 @@ def _parse_one(path_str: str) -> Optional[Tuple[str, List[Dict[str, Any]]]]:
             out.append(
                 {
                     "name": name,
-                    "kind": "function" if "func.body" in captures else "other",
+                    "kind": _KIND_BY_NODE.get(body_node.type, "other"),
                     "start_line": body_node.start_point[0] + 1,
                     "end_line": body_node.end_point[0] + 1,
                     "name_line": name_node.start_point[0] + 1,
@@ -174,7 +207,13 @@ def build_index() -> Tuple[
     int,
     int,
 ]:
-    """Return (by_name, funcs_by_file, files_parsed, files_skipped)."""
+    """Return (by_name, constructs_by_file, files_parsed, files_skipped).
+
+    constructs_by_file holds EVERY captured construct per file — functions,
+    structs, unions, enums, typedefs, macros, and aggregate initializers — with
+    its kind and line range, so a hit can be attributed to the innermost
+    construct of any kind, not just functions.
+    """
     files: List[str] = []
     for dirpath, dirnames, filenames in os.walk(KERNEL):
         dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
@@ -184,7 +223,7 @@ def build_index() -> Tuple[
     print(f"ts-indexer: parsing {len(files)} files", file=sys.stderr)
 
     by_name: Dict[str, List[Dict[str, Any]]] = {}
-    funcs_by_file: Dict[str, List[Dict[str, Any]]] = {}
+    constructs_by_file: Dict[str, List[Dict[str, Any]]] = {}
     skipped = 0
 
     with multiprocessing.Pool() as pool:
@@ -193,22 +232,22 @@ def build_index() -> Tuple[
                 skipped += 1
                 continue
             rel, captures = result
-            file_funcs: List[Dict[str, Any]] = []
+            file_constructs: List[Dict[str, Any]] = []
             for c in captures:
                 entry = {"file": rel, **c}
                 by_name.setdefault(entry["name"], []).append(entry)
-                if entry["kind"] == "function":
-                    file_funcs.append(
-                        {
-                            "name": entry["name"],
-                            "start_line": entry["start_line"],
-                            "end_line": entry["end_line"],
-                        }
-                    )
-            if file_funcs:
-                funcs_by_file[rel] = file_funcs
+                file_constructs.append(
+                    {
+                        "name": entry["name"],
+                        "kind": entry["kind"],
+                        "start_line": entry["start_line"],
+                        "end_line": entry["end_line"],
+                    }
+                )
+            if file_constructs:
+                constructs_by_file[rel] = file_constructs
 
-    return by_name, funcs_by_file, len(files) - skipped, skipped
+    return by_name, constructs_by_file, len(files) - skipped, skipped
 
 
 def _write(obj: Dict[str, Any]) -> None:
@@ -228,7 +267,7 @@ def main() -> int:
         return 1
     print(f"ts-indexer: kernel={KERNEL}", file=sys.stderr)
 
-    by_name, funcs_by_file, parsed, skipped = build_index()
+    by_name, constructs_by_file, parsed, skipped = build_index()
     total_entries = sum(len(v) for v in by_name.values())
     _write(
         {
@@ -256,9 +295,9 @@ def main() -> int:
             limit = int(req.get("limit", 100))
             candidates = by_name.get(name, [])
             _write({"candidates": candidates[:limit], "total": len(candidates)})
-        elif op == "funcs_in_file":
+        elif op == "constructs_in_file":
             path = req.get("path", "")
-            _write({"funcs": funcs_by_file.get(path, [])})
+            _write({"constructs": constructs_by_file.get(path, [])})
         elif op == "callees":
             path = req.get("path", "")
             start_line = int(req.get("start_line", 0))

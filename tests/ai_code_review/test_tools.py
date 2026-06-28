@@ -270,6 +270,34 @@ def test_find_definition_hint_does_not_scope(review: AiCodeReview) -> None:
     assert any("fs/open.c" in p for p in paths), f"definition was scoped away: {paths}"
 
 
+@pytest.mark.parametrize(
+    "name,kind,expected_file",
+    [
+        ("inode", "struct", "include/linux/fs.h"),
+        ("gfp_t", "typedef", "include/linux/types.h"),
+        ("LIST_HEAD_INIT", "macro", "include/linux/list.h"),
+        ("do_sys_openat2", "function", "fs/open.c"),
+        # An ops-table / aggregate initializer is a findable definition too — a
+        # `static const struct file_operations simple_dir_operations = {...}`.
+        ("simple_dir_operations", "initializer", "fs/libfs.c"),
+    ],
+    ids=lambda v: str(v),
+)
+def test_find_definition_granular_kind(
+    review: AiCodeReview, name: str, kind: str, expected_file: str
+) -> None:
+    """find_definition reports a granular kind (struct/typedef/macro/function),
+    not a lumped 'other'."""
+    result = review.agent.dispatch_tool("find_definition", {"name": name})
+    assert result.get("ok"), f"tool returned not-ok: {result}"
+    match = [
+        d
+        for d in result.get("result", [])
+        if expected_file in d.get("path", "") and d.get("kind") == kind
+    ]
+    assert match, f"no {kind!r} for {name!r} in {expected_file}; got {result.get('result')}"
+
+
 # ---------------------------------------------------------------------------
 # find_callers
 # ---------------------------------------------------------------------------
@@ -573,18 +601,54 @@ def test_grep_file_array_comma_in_name(review: AiCodeReview) -> None:
 
 
 def test_grep_returns_enclosing_span(review: AiCodeReview) -> None:
-    """A hit inside a function carries the function's line range, with
-    start <= hit_line <= end."""
+    """A hit inside a function is attributed via `enclosing` (kind 'function')
+    with start <= hit_line <= end, so the whole function can be read at once."""
     result = review.agent.dispatch_tool(
         "grep", {"pattern": "do_sys_openat2", "file": ["fs/open.c"]}
     )
     assert result.get("ok"), f"tool returned not-ok: {result}"
-    in_func = [h for h in result.get("result", []) if h.get("enclosing_function")]
+    in_func = [
+        h
+        for h in result.get("result", [])
+        if (h.get("enclosing") or {}).get("kind") == "function"
+    ]
     assert in_func, "expected at least one hit inside a function"
-    h = in_func[0]
-    assert isinstance(h["enclosing_function_start"], int)
-    assert isinstance(h["enclosing_function_end"], int)
-    assert h["enclosing_function_start"] <= h["line"] <= h["enclosing_function_end"], h
+    enc = in_func[0]["enclosing"]
+    assert isinstance(enc["start"], int) and isinstance(enc["end"], int)
+    assert enc["start"] <= in_func[0]["line"] <= enc["end"], in_func[0]
+
+
+def test_grep_enclosing_macro(review: AiCodeReview) -> None:
+    """A hit on a macro definition attributes to that macro (kind 'macro') —
+    a file-scope construct that has no enclosing function."""
+    result = review.agent.dispatch_tool(
+        "grep", {"pattern": "LIST_HEAD_INIT", "file": ["include/linux/list.h"]}
+    )
+    assert result.get("ok"), f"tool returned not-ok: {result}"
+    macro_hits = [
+        h
+        for h in result.get("result", [])
+        if (h.get("enclosing") or {}).get("kind") == "macro"
+        and h["enclosing"]["name"] == "LIST_HEAD_INIT"
+    ]
+    assert macro_hits, f"no macro-scoped hit: {result.get('result')}"
+
+
+def test_grep_enclosing_ops_table(review: AiCodeReview) -> None:
+    """A hit inside an ops-table / aggregate initializer attributes to that
+    initializer (kind 'initializer') — the .release=foo wiring case that was
+    previously null."""
+    result = review.agent.dispatch_tool(
+        "grep", {"pattern": "dcache_dir_close", "file": ["fs/libfs.c"]}
+    )
+    assert result.get("ok"), f"tool returned not-ok: {result}"
+    table_hits = [
+        h
+        for h in result.get("result", [])
+        if (h.get("enclosing") or {}).get("kind") == "initializer"
+        and h["enclosing"]["name"] == "simple_dir_operations"
+    ]
+    assert table_hits, f"no initializer-scoped hit: {result.get('result')}"
 
 
 def test_grep_skips_missing_path(review: AiCodeReview) -> None:

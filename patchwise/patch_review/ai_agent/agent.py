@@ -501,12 +501,13 @@ class Agent:
         """
         return re.sub(r"^\s*(?:struct|union|enum)\s+", "", name.strip())
 
-    def _ts_funcs_in_file(self, rel_path: str) -> List[Dict[str, Any]]:
-        """Return function ranges for a single kernel-relative file."""
-        resp = self._ts_query(op="funcs_in_file", path=rel_path)
+    def _ts_constructs_in_file(self, rel_path: str) -> List[Dict[str, Any]]:
+        """Return every construct (function, struct, enum, macro, initializer, …)
+        in a kernel-relative file, each as {name, kind, start_line, end_line}."""
+        resp = self._ts_query(op="constructs_in_file", path=rel_path)
         if "error" in resp:
             raise RuntimeError(f"ts_indexer error: {resp['error']}")
-        return resp.get("funcs", [])
+        return resp.get("constructs", [])
 
     def _ts_callees(
         self, rel_path: str, start_line: int, end_line: int
@@ -636,37 +637,40 @@ class Agent:
         self, name: str, file: Optional[Union[str, List[str]]] = None
     ) -> Dict[str, Any]:
         # Callers = every function whose body references `name`. ripgrep the bare
-        # identifier tree-wide (or within `file`) and attribute each hit to its
-        # enclosing function via the tree-sitter index, grouping multiple call
-        # sites in the same function. Hits at file scope (function-pointer wiring
-        # like `.release = name`, macro bodies, ops tables) have no enclosing
-        # function — kept as `references`, since that wiring is often how `name`
-        # actually gets invoked.
+        # identifier tree-wide (or within `file`) and split each hit on its
+        # enclosing construct: a hit inside a function body is a caller (grouped
+        # by function); anything else — file scope, or wiring like `.release =
+        # name` inside an ops table, a macro body, a struct — is a `reference`,
+        # since that wiring is often how `name` actually gets invoked. Both come
+        # straight off `enclosing`, so there is no caller-specific plumbing.
         self._ensure_navigation_stack(need_ts=True)
         name = self._strip_type_keyword(name)
         pattern = rf"\b{re.escape(name)}\b"
         hits, error, skipped = self._rg_search(pattern, file, glob=None)
         if error is not None:
             return {"ok": False, "error": error}
-        callers: Dict[Tuple[str, str], Dict[str, Any]] = {}
+        callers: Dict[Tuple[str, str, int], Dict[str, Any]] = {}
         references: List[Dict[str, Any]] = []
         for h in hits:
-            fn = h["enclosing_function"]
-            if fn is None:
-                references.append(
-                    {"path": h["path"], "line": h["line"], "snippet": h["snippet"]}
-                )
+            enc = h["enclosing"]
+            if enc is None or enc["kind"] != "function":
+                ref = {"path": h["path"], "line": h["line"], "snippet": h["snippet"]}
+                # Annotate wiring with the construct it sits in (ops table, macro,
+                # struct), when there is one.
+                if enc is not None:
+                    ref["enclosing"] = enc
+                references.append(ref)
                 continue
             # Key on the definition line too: #ifdef/#else variants share a name
             # in one file but are distinct functions — keep them as separate
             # callers rather than merging their call sites.
-            key = (h["path"], fn, h["enclosing_function_line"])
+            key = (h["path"], enc["name"], enc["start"])
             entry = callers.get(key)
             if entry is None:
                 entry = {
-                    "function": fn,
+                    "function": enc["name"],
                     "path": h["path"],
-                    "function_line": h["enclosing_function_line"],
+                    "function_line": enc["start"],
                     "lines": [],
                     "snippet": h["snippet"],
                 }
@@ -737,14 +741,15 @@ class Agent:
         file: Optional[Union[str, List[str]]] = None,
         glob: Optional[str] = None,
     ) -> Tuple[Optional[List[Dict[str, Any]]], Optional[str], List[str]]:
-        """Run ripgrep and attribute each hit to its enclosing function.
+        """Run ripgrep and attribute each hit to its innermost enclosing construct.
 
         Returns (hits, None, skipped) on success or (None, error_message,
         skipped). `skipped` lists named paths that were absent from the tree and
-        dropped from the search. Each hit is {path, enclosing_function, line,
-        snippet}, deduped by (path, line); enclosing_function is None for hits
-        outside any function body. No result cap — callers truncate as they see
-        fit.
+        dropped from the search. Each hit is {path, enclosing, line, snippet},
+        deduped by (path, line); `enclosing` is {name, kind, start, end} for the
+        innermost construct (function/struct/enum/union/typedef/macro/initializer)
+        containing the hit, or None at file scope outside every indexed construct.
+        No result cap — callers truncate as they see fit.
         """
         # ripgrep validates the pattern itself (Rust regex dialect). We do NOT
         # pre-validate with Python's `re`: its dialect differs (lookaround and
@@ -831,15 +836,15 @@ class Agent:
             detail = (err or "").strip().splitlines()
             return None, f"invalid regex or search error: {detail[0] if detail else ''}", skipped
 
-        file_to_funcs: Dict[str, List[Tuple[int, int, str]]] = {}
+        file_to_constructs: Dict[str, List[Tuple[int, int, str, str]]] = {}
 
-        def funcs_for(rel_path: str) -> List[Tuple[int, int, str]]:
-            if rel_path not in file_to_funcs:
-                funcs = self._ts_funcs_in_file(rel_path)
-                file_to_funcs[rel_path] = [
-                    (f["start_line"], f["end_line"], f["name"]) for f in funcs
+        def constructs_for(rel_path: str) -> List[Tuple[int, int, str, str]]:
+            if rel_path not in file_to_constructs:
+                cs = self._ts_constructs_in_file(rel_path)
+                file_to_constructs[rel_path] = [
+                    (c["start_line"], c["end_line"], c["name"], c["kind"]) for c in cs
                 ]
-            return file_to_funcs[rel_path]
+            return file_to_constructs[rel_path]
 
         hits: List[Dict[str, Any]] = []
         seen_hits: Set[Tuple[str, int]] = set()
@@ -857,26 +862,30 @@ class Agent:
                 continue
             seen_hits.add((rel, hit_line))
 
-            enclosing: Optional[str] = None
-            enclosing_start: Optional[int] = None
-            enclosing_end: Optional[int] = None
-            for s, e, fname in funcs_for(rel):
-                if s <= hit_line <= e:
-                    enclosing = fname
-                    enclosing_start = s
-                    enclosing_end = e
-                    break
+            # Attribute the hit to the INNERMOST construct that contains it
+            # (smallest span), of any kind — function, struct, enum, union,
+            # typedef, macro, or ops-table initializer. Consumers split on
+            # `enclosing["kind"]` (e.g. find_callers treats kind=="function" as a
+            # caller and everything else as a file-scope reference); two
+            # #ifdef/#else variants share a name in one file but have distinct
+            # [start, end] ranges, so the range keeps them apart and lets a caller
+            # read the whole construct in one precise read.
+            enclosing: Optional[Dict[str, Any]] = None
+            enclosing_span: Optional[int] = None
+            for s, e, cname, ckind in constructs_for(rel):
+                if not (s <= hit_line <= e):
+                    continue
+                span = e - s
+                if enclosing_span is None or span < enclosing_span:
+                    enclosing_span = span
+                    enclosing = {"name": cname, "kind": ckind, "start": s, "end": e}
 
             hits.append(
                 {
                     "path": rel,
-                    "enclosing_function": enclosing,
-                    # Definition line range of the enclosing function. Two
-                    # #ifdef/#else variants share a name in one file but have
-                    # distinct ranges — the start keeps them apart, and the end
-                    # lets a caller read the whole function in one precise read.
-                    "enclosing_function_line": enclosing_start,
-                    "enclosing_function_end": enclosing_end,
+                    # Innermost enclosing construct {name, kind, start, end}, or
+                    # None at file scope outside every indexed construct.
+                    "enclosing": enclosing,
                     "line": hit_line,
                     "snippet": text.strip()[:240],
                 }
@@ -894,16 +903,13 @@ class Agent:
         if error is not None:
             return {"ok": False, "error": error}
         total = len(hits)
-        # Project to grep's documented schema. enclosing_function_start/end are
-        # the line range of the function the hit sits in (null at file scope),
-        # so the model can read the whole function in one precise read_file
-        # instead of guessing a window around the hit.
+        # Project to grep's documented schema: `enclosing` gives the innermost
+        # construct (name/kind/start/end), so the model can read the whole
+        # construct in one precise read_file instead of guessing a window.
         results = [
             {
                 "path": h["path"],
-                "enclosing_function": h["enclosing_function"],
-                "enclosing_function_start": h["enclosing_function_line"],
-                "enclosing_function_end": h["enclosing_function_end"],
+                "enclosing": h["enclosing"],
                 "line": h["line"],
                 "snippet": h["snippet"],
             }

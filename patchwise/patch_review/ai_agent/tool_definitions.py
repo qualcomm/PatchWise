@@ -35,10 +35,12 @@ TOOLS = [
         "function": {
             "name": "find_definition",
             "description": (
-                "Find every definition of a symbol (function, struct, macro, "
-                "typedef, enum). Each arch/#ifdef variant is a separate result, "
-                "best-first by proximity. Result: {name, kind, path, line, "
-                "end, snippet} — the definition spans lines [line, end], so "
+                "Find every definition of a symbol (function, struct, union, "
+                "enum, typedef, macro, or ops-table/aggregate initializer such "
+                "as `static const struct x_ops foo_ops = {...}`). Each arch/"
+                "#ifdef variant is a separate result, best-first by proximity. "
+                "Result: {name, kind, path, line, end, snippet} — kind names "
+                "which it is; the definition spans lines [line, end], so "
                 "read_file(path, line, end) returns it whole; `truncated` flags "
                 "overflow."
             ),
@@ -79,13 +81,14 @@ TOOLS = [
             "name": "grep",
             "description": (
                 "Search for a regex pattern across the kernel source tree. "
-                "Each result is {path, line, snippet, enclosing_function, "
-                "enclosing_function_start, enclosing_function_end}: "
-                "enclosing_function names the function the hit sits inside, or "
-                "is null for hits at file scope (macro definitions, struct/enum "
-                "declarations, static initializers, EXPORT_SYMBOL_*, etc.). When "
-                "non-null, enclosing_function_start/end give its line range, so "
-                "read_file(path, start, end) returns the whole function. "
+                "Each result is {path, line, snippet, enclosing}. `enclosing` is "
+                "the innermost construct containing the hit — {name, kind, start, "
+                "end} where kind is one of function, struct, union, enum, typedef, "
+                "macro, initializer (an ops-table / aggregate initializer) — so a "
+                "hit is oriented whether it is in a function body or at file scope "
+                "(a struct member, a macro body, a `.release = foo` ops-table "
+                "entry). read_file(path, start, end) returns the whole construct. "
+                "It is null only outside every indexed construct. "
                 "Capped at 100; 'total' and 'truncated' indicate overflow. "
                 "If some scoped paths don't exist, the search still runs over "
                 "the rest and lists the dropped ones in 'skipped_paths'. "
