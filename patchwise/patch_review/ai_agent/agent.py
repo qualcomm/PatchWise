@@ -8,7 +8,7 @@ import os
 import re
 import subprocess
 import time
-from typing import Any, Dict, List, Optional, Tuple, Set
+from typing import Any, Dict, List, Optional, Tuple, Set, Union
 from urllib.parse import unquote, urlparse
 import httpx
 import litellm
@@ -519,16 +519,19 @@ class Agent:
             raise RuntimeError(f"ts_indexer error: {resp['error']}")
         return resp.get("callees", [])
 
-    def _split_file_arg(self, file: Optional[str]) -> List[str]:
+    def _split_file_arg(self, file: Optional[Union[str, List[str]]]) -> List[str]:
         """Parse a `file` argument into normalized kernel-relative paths.
 
-        Like grep, the name-taking tools accept one OR several whitespace/comma-
-        separated paths in `file` (kernel paths never contain spaces). Used as a
-        ranking/disambiguation hint, so no existence check here.
+        The name-taking tools take `file` as an array of paths — one path per
+        element, so any character (including the commas in DT binding names like
+        `qcom,apr.yaml`) is literal, with no separator to escape. A bare string
+        is still accepted and whitespace-split for back-compat. Used as a
+        ranking/scope hint, so no existence check here.
         """
         if not file:
             return []
-        return [self._kernel_rel(t) for t in re.split(r"[,\s]+", file.strip()) if t]
+        toks = file if isinstance(file, list) else re.split(r"\s+", file.strip())
+        return [self._kernel_rel(t) for t in toks if t]
 
     def _rank_candidates(
         self, candidates: List[Dict[str, Any]], file_hints: List[str]
@@ -591,7 +594,7 @@ class Agent:
     _READ_MAX_LINES = 256  # max lines returned per read_file / git_cat_file call
 
     def _tool_find_definition(
-        self, name: str, file: Optional[str] = None
+        self, name: str, file: Optional[Union[str, List[str]]] = None
     ) -> Dict[str, Any]:
         # Pure tree-sitter: return EVERY definition of `name` across the tree —
         # all arch/#ifdef variants — ranked by proximity to files already seen.
@@ -630,7 +633,7 @@ class Agent:
 
     # TODO: This is almost the same as grep(), remove if models don't call this often
     def _tool_find_callers(
-        self, name: str, file: Optional[str] = None
+        self, name: str, file: Optional[Union[str, List[str]]] = None
     ) -> Dict[str, Any]:
         # Callers = every function whose body references `name`. ripgrep the bare
         # identifier tree-wide (or within `file`) and attribute each hit to its
@@ -689,7 +692,7 @@ class Agent:
 
     # TODO: Do models prefer reading the whole function with read_file()?
     def _tool_find_callees(
-        self, name: str, file: Optional[str] = None
+        self, name: str, file: Optional[Union[str, List[str]]] = None
     ) -> Dict[str, Any]:
         # Callees = the calls made inside `name`'s own body. Local and purely
         # syntactic: locate the function definition(s) in the tree-sitter index
@@ -731,7 +734,7 @@ class Agent:
     def _rg_search(
         self,
         pattern: str,
-        file: Optional[str] = None,
+        file: Optional[Union[str, List[str]]] = None,
         glob: Optional[str] = None,
     ) -> Tuple[Optional[List[Dict[str, Any]]], Optional[str], List[str]]:
         """Run ripgrep and attribute each hit to its enclosing function.
@@ -749,15 +752,16 @@ class Agent:
         # so a Python precheck both false-rejects rg-valid patterns and lets
         # rg-invalid ones through. Let rg be the authority.
 
-        # `file` may name one OR several whitespace/comma-separated paths — the
-        # model routinely scopes a search to several subsystems at once, and rg
-        # takes multiple search roots natively. (Kernel paths never contain
-        # spaces, so splitting on whitespace is safe.)
+        # `file` is an array of paths — rg takes multiple search roots natively,
+        # one per argv element, so any character (including the commas in DT
+        # binding names like `qcom,apr.yaml`) is literal with nothing to escape.
+        # A bare string is accepted and whitespace-split for back-compat.
         file_paths: List[str] = []  # validated, kernel-relative, existing
         skipped: List[str] = []  # named but absent from the tree
         any_dir = False
         if file:
-            for tok in (t for t in re.split(r"[,\s]+", file.strip()) if t):
+            toks = file if isinstance(file, list) else re.split(r"\s+", file.strip())
+            for tok in (t for t in toks if t):
                 try:
                     self._abs_in_kernel(tok)
                 except ValueError as e:
@@ -882,7 +886,7 @@ class Agent:
     def _tool_grep(
         self,
         pattern: str,
-        file: Optional[str] = None,
+        file: Optional[Union[str, List[str]]] = None,
         glob: Optional[str] = None,
     ) -> Dict[str, Any]:
         self._ensure_navigation_stack(need_ts=True)

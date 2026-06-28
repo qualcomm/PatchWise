@@ -17,10 +17,11 @@ _NAME_PARAM = {
             "description": "The symbol name.",
         },
         "file": {
-            "type": "string",
+            "type": "array",
+            "items": {"type": "string"},
             "description": (
-                "Optional kernel-relative path(s) where you saw the symbol used "
-                "(space/comma-separated). A ranking hint; the definition may "
+                "Optional kernel-relative path(s) where you saw the symbol used, "
+                "one path per array element. A ranking hint; the definition may "
                 "live elsewhere."
             ),
         },
@@ -100,10 +101,11 @@ TOOLS = [
                         "description": "Ripgrep regex (Rust-style).",
                     },
                     "file": {
-                        "type": "string",
+                        "type": "array",
+                        "items": {"type": "string"},
                         "description": (
-                            "Optional kernel-relative file(s)/dir(s) to scope the search "
-                            "(space/comma-separated). Glob is ignored for single files."
+                            "Optional kernel-relative file(s)/dir(s) to scope the search, "
+                            "one path per array element. Glob is ignored for single files."
                         ),
                     },
                     "glob": {
