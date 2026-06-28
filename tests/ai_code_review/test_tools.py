@@ -775,6 +775,59 @@ def test_read_file_eof_reaches_total(review: AiCodeReview) -> None:
 
 
 # ---------------------------------------------------------------------------
+# read_doc
+# ---------------------------------------------------------------------------
+
+
+def test_read_doc_reads_file(review: AiCodeReview) -> None:
+    """read_doc returns a Documentation/ file whole."""
+    result = review.agent.dispatch_tool(
+        "read_doc", {"path": "Documentation/filesystems/mmap_prepare.rst"}
+    )
+    assert result.get("ok"), f"tool returned not-ok: {result}"
+    payload = result.get("result", {})
+    assert payload["path"].endswith("Documentation/filesystems/mmap_prepare.rst")
+    assert payload["content"].strip(), "expected non-empty doc content"
+
+
+def test_read_doc_miss_points_to_search(review: AiCodeReview) -> None:
+    """A guessed path that misses points the model at search_docs/read_binding."""
+    result = review.agent.dispatch_tool(
+        "read_doc", {"path": "Documentation/filesystems/no_such_doc.rst"}
+    )
+    assert not result.get("ok"), f"expected miss, got: {result}"
+    assert "search_docs" in result.get("error", "")
+
+
+# ---------------------------------------------------------------------------
+# search_docs
+# ---------------------------------------------------------------------------
+
+
+def test_search_docs_finds_doc_by_topic(review: AiCodeReview) -> None:
+    """A topic word surfaces the doc that covers it."""
+    result = review.agent.dispatch_tool("search_docs", {"query": "mmap_prepare"})
+    assert result.get("ok"), f"tool returned not-ok: {result}"
+    paths = [h["path"] for h in result.get("result", [])]
+    assert any(
+        p.endswith("Documentation/filesystems/mmap_prepare.rst") for p in paths
+    ), f"expected mmap_prepare.rst among hits: {paths[:10]}"
+
+
+def test_search_docs_by_compatible(review: AiCodeReview) -> None:
+    """A compatible string surfaces its binding yaml."""
+    result = review.agent.dispatch_tool(
+        "search_docs", {"query": "qcom,msm8226-adsp-pil"}
+    )
+    assert result.get("ok"), f"tool returned not-ok: {result}"
+    paths = [h["path"] for h in result.get("result", [])]
+    assert any(
+        p.endswith("Documentation/devicetree/bindings/remoteproc/qcom,adsp.yaml")
+        for p in paths
+    ), f"expected qcom,adsp.yaml among hits: {paths[:10]}"
+
+
+# ---------------------------------------------------------------------------
 # read_binding
 # ---------------------------------------------------------------------------
 

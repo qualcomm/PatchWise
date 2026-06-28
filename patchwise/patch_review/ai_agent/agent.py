@@ -1005,7 +1005,14 @@ class Agent:
         container_path = str(self.docker_manager.kernel_dir / rel)
         content = self.docker_manager.read_file(container_path)
         if content is False:
-            return {"ok": False, "error": f"not a file: {path}"}
+            return {
+                "ok": False,
+                "error": (
+                    f"not found: {path}. Use search_docs(<topic>) to locate a "
+                    f"Documentation/ file, or read_binding(<compatible>) for a "
+                    f"devicetree binding."
+                ),
+            }
         self.seen_files.add(rel)
         return {"ok": True, "result": {"path": rel, "content": content}}
 
@@ -1067,6 +1074,38 @@ class Agent:
         for rel in rels[5:]:
             matches.append({"path": rel})
         return {"ok": True, "result": {"matches": matches}}
+
+    def _tool_search_docs(self, query: str) -> Dict[str, Any]:
+        """Search the Documentation/ tree for a topic, symbol, or compatible.
+
+        The model knows what it is looking for but not the exact Documentation/
+        path, so guessing the path misses often. search_docs greps the whole
+        Documentation/ tree (a thin scope over the existing grep) and returns
+        matching {path, line, snippet} so the model reads the right file with
+        read_doc instead of guessing. Empty is a successful empty list."""
+        query = (query or "").strip()
+        if not query:
+            return {"ok": False, "error": "query must be a non-empty string"}
+        # _rg_search attributes hits to their enclosing construct via the
+        # tree-sitter daemon, so boot it first (the critic, which runs before
+        # any navigation tool, would otherwise hit it cold).
+        self._ensure_navigation_stack(need_ts=True)
+        doc_rel = "/".join(
+            filter(None, [self.docker_manager.git_subdir, "Documentation"])
+        )
+        hits, error, _ = self._rg_search(query, file=[doc_rel], glob="*")
+        if error:
+            return {"ok": False, "error": error}
+        capped = hits[:50]
+        return {
+            "ok": True,
+            "result": [
+                {"path": h["path"], "line": h["line"], "snippet": h["snippet"]}
+                for h in capped
+            ],
+            "total": len(hits),
+            "truncated": len(hits) > 50,
+        }
 
     def _tool_list_files(self, path: str, recursive: bool = False) -> Dict[str, Any]:
         try:
@@ -1529,6 +1568,7 @@ class Agent:
             "read_file": self._tool_read_file,
             "read_doc": self._tool_read_doc,
             "read_binding": self._tool_read_binding,
+            "search_docs": self._tool_search_docs,
             "list_files": self._tool_list_files,
             "get_subsystem_review_guide": self._tool_get_subsystem_review_guide,
             "git_log": self._tool_git_log,

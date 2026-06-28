@@ -171,6 +171,7 @@ Code-navigation tools (all paths kernel-relative, e.g. `drivers/mtd/nand/raw/qco
 - `grep(pattern, file?)`
 - `read_doc(path)`
 - `read_binding(compatible)`
+- `search_docs(query)`
 - `read_file(path, start?, end?)`
 - `list_files(path, recursive?)`
 - `get_subsystem_review_guide(subsystem_file)`
@@ -647,7 +648,12 @@ finding with record_verdict as you work through them.
             critic_messages,
             force_tool_usage=False,
             max_iterations=self.CRITIC_ITER_CAP,
-            allowed_tools=["get_subsystem_review_guide", "read_doc", "read_binding"],
+            allowed_tools=[
+                "get_subsystem_review_guide",
+                "read_doc",
+                "read_binding",
+                "search_docs",
+            ],
         )
         # Carry whatever it read this round into the next round's prompt.
         self._harvest_loaded_refs(critic_messages, critic_loaded)

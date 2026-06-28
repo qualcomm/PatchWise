@@ -209,6 +209,33 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "search_docs",
+            "description": (
+                "Search the kernel Documentation/ tree for a topic, symbol, or "
+                "compatible to find the right doc. Returns matching {path, line, "
+                "snippet}; read the chosen file whole with read_doc(path). Use "
+                "this to locate a documented contract, ABI, or interface by "
+                "content instead of guessing its path. For a devicetree "
+                "compatible, read_binding is more direct."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": (
+                            "Ripgrep regex to search Documentation/ contents "
+                            "for, e.g. a symbol, topic word, or compatible."
+                        ),
+                    },
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "get_subsystem_review_guide",
             "description": (
                 "Load a subsystem-specific review guide by filename. Use the "
@@ -530,6 +557,7 @@ NAVIGATION_TOOLS = [
     "read_file",
     "read_doc",
     "read_binding",
+    "search_docs",
     "list_files",
     "git_log",
     "git_show",
