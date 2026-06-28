@@ -197,10 +197,10 @@ def test_find_definition_errors(
 
 
 def test_find_definition_multi_file_hint(review: AiCodeReview) -> None:
-    """`file` may list several paths; an exact hit on any ranks first."""
+    """`file` is an array of paths; an exact hit on any ranks first."""
     result = review.agent.dispatch_tool(
         "find_definition",
-        {"name": "inode", "file": "fs/open.c, include/linux/fs.h"},
+        {"name": "inode", "file": ["fs/open.c", "include/linux/fs.h"]},
     )
     assert result.get("ok"), f"tool returned not-ok: {result}"
     defs = result.get("result", [])
@@ -211,15 +211,16 @@ def test_find_definition_multi_file_hint(review: AiCodeReview) -> None:
 @pytest.mark.parametrize(
     "file_arg",
     [
-        "../../../etc/passwd, does/not/exist.c",  # escaping + nonexistent
-        "   ,  ",  # only separators -> empty hint list
+        ["../../../etc/passwd", "does/not/exist.c"],  # escaping + nonexistent
+        [],  # no hints
     ],
-    ids=["bad_paths", "blank"],
+    ids=["bad_paths", "empty"],
 )
 def test_find_definition_bad_hint_is_advisory(
-    review: AiCodeReview, file_arg: str
+    review: AiCodeReview, file_arg: list
 ) -> None:
-    """The `file` hint is advisory only: bogus paths never fail the lookup."""
+    """A `file` scope that matches no candidate never fails the lookup: the
+    filter is skipped and the definition is still returned."""
     result = review.agent.dispatch_tool(
         "find_definition", {"name": "inode", "file": file_arg}
     )
@@ -235,7 +236,7 @@ def test_find_definition_valid_and_invalid_hint(review: AiCodeReview) -> None:
     one is ignored (advisory hints are never validated, so no error)."""
     result = review.agent.dispatch_tool(
         "find_definition",
-        {"name": "inode", "file": "include/linux/fs.h, does/not/exist.c"},
+        {"name": "inode", "file": ["include/linux/fs.h", "does/not/exist.c"]},
     )
     assert result.get("ok"), f"tool returned not-ok: {result}"
     defs = result.get("result", [])
@@ -243,6 +244,30 @@ def test_find_definition_valid_and_invalid_hint(review: AiCodeReview) -> None:
     assert (
         "include/linux/fs.h" in defs[0]["path"]
     ), f"valid hint not ranked first: {defs[0]}"
+
+
+def test_find_definition_returns_span(review: AiCodeReview) -> None:
+    """Each definition carries its line range [line, end] so the function can be
+    read whole in one read_file call."""
+    result = review.agent.dispatch_tool("find_definition", {"name": "do_sys_openat2"})
+    assert result.get("ok"), f"tool returned not-ok: {result}"
+    defs = result.get("result", [])
+    assert defs, "expected at least one definition"
+    d = defs[0]
+    assert isinstance(d.get("line"), int) and isinstance(d.get("end"), int), d
+    assert d["end"] >= d["line"], f"end before start: {d}"
+
+
+def test_find_definition_hint_does_not_scope(review: AiCodeReview) -> None:
+    """`file` is a ranking hint only — it never filters. A symbol defined
+    outside the hinted directory is still returned (find_definition surfaces
+    every definition)."""
+    result = review.agent.dispatch_tool(
+        "find_definition", {"name": "do_sys_openat2", "file": ["drivers/soc"]}
+    )
+    assert result.get("ok"), f"tool returned not-ok: {result}"
+    paths = [d["path"] for d in result.get("result", [])]
+    assert any("fs/open.c" in p for p in paths), f"definition was scoped away: {paths}"
 
 
 # ---------------------------------------------------------------------------
@@ -299,7 +324,7 @@ def test_find_callers_multi_file_scope(review: AiCodeReview) -> None:
     """`file` may list several directories to scope the search."""
     result = review.agent.dispatch_tool(
         "find_callers",
-        {"name": "rproc_boot", "file": "drivers/remoteproc, drivers/soc"},
+        {"name": "rproc_boot", "file": ["drivers/remoteproc", "drivers/soc"]},
     )
     assert result.get("ok"), f"tool returned not-ok: {result}"
     callers = result.get("result", {}).get("callers", [])
@@ -310,19 +335,30 @@ def test_find_callers_multi_file_scope(review: AiCodeReview) -> None:
     ), "hit outside the requested directories"
 
 
-# Unlike the advisory hint on find_definition/find_callees, find_callers' `file`
-# scopes the search, so every path in the list is validated — one bad token
-# fails the call rather than being silently ignored.
+def test_find_callers_skips_missing_path(review: AiCodeReview) -> None:
+    """One missing path is dropped (and reported), not fatal — the valid path's
+    callers still come back."""
+    result = review.agent.dispatch_tool(
+        "find_callers",
+        {"name": "rproc_boot", "file": ["drivers/remoteproc", "does/not/exist"]},
+    )
+    assert result.get("ok"), f"tool returned not-ok: {result}"
+    assert "does/not/exist" in result.get("skipped_paths", [])
+    assert result.get("total_callers", 0) >= 1, "valid path's callers were lost"
+
+
+# A path that escapes the tree is still fatal (security), and an all-missing
+# scope still fails — but a *partial* miss is now skipped (see above).
 @pytest.mark.parametrize(
     "file_arg,expected_error",
     [
-        ("drivers/remoteproc, ../../../etc/passwd", "escapes kernel tree"),
-        ("drivers/remoteproc, does/not/exist", "file not found"),
+        (["drivers/remoteproc", "../../../etc/passwd"], "escapes kernel tree"),
+        (["does/not/exist", "also/missing"], "file not found"),
     ],
-    ids=["escape_in_list", "missing_in_list"],
+    ids=["escape_in_list", "all_missing"],
 )
 def test_find_callers_multi_file_errors(
-    review: AiCodeReview, file_arg: str, expected_error: str
+    review: AiCodeReview, file_arg: list, expected_error: str
 ) -> None:
     result = review.agent.dispatch_tool(
         "find_callers", {"name": "rproc_boot", "file": file_arg}
@@ -352,7 +388,7 @@ def test_find_callees_multi_file_hint(review: AiCodeReview) -> None:
     """`file` may list several paths to scope which variant(s) to expand."""
     result = review.agent.dispatch_tool(
         "find_callees",
-        {"name": "do_sys_openat2", "file": "fs/open.c, fs/read_write.c"},
+        {"name": "do_sys_openat2", "file": ["fs/open.c", "fs/read_write.c"]},
     )
     assert result.get("ok"), f"tool returned not-ok: {result}"
     defs = result.get("result", [])
@@ -364,12 +400,12 @@ def test_find_callees_multi_file_hint(review: AiCodeReview) -> None:
 @pytest.mark.parametrize(
     "file_arg",
     [
-        "drivers/remoteproc, drivers/soc",  # valid paths, but no variant lives there
-        "../../../etc/passwd",  # bogus path
+        ["drivers/remoteproc", "drivers/soc"],  # valid paths, no variant lives there
+        ["../../../etc/passwd"],  # bogus path
     ],
     ids=["nonmatching", "bad_path"],
 )
-def test_find_callees_hint_falls_back(review: AiCodeReview, file_arg: str) -> None:
+def test_find_callees_hint_falls_back(review: AiCodeReview, file_arg: list) -> None:
     """When the hint matches no variant, fall back to all definitions, not error."""
     result = review.agent.dispatch_tool(
         "find_callees", {"name": "do_sys_openat2", "file": file_arg}
@@ -386,7 +422,7 @@ def test_find_callees_valid_and_invalid_hint(review: AiCodeReview) -> None:
     the bad path is ignored, not an error."""
     result = review.agent.dispatch_tool(
         "find_callees",
-        {"name": "do_sys_openat2", "file": "fs/open.c, does/not/exist.c"},
+        {"name": "do_sys_openat2", "file": ["fs/open.c", "does/not/exist.c"]},
     )
     assert result.get("ok"), f"tool returned not-ok: {result}"
     defs = result.get("result", [])
@@ -523,21 +559,61 @@ def test_grep_glob_star_qcom_msm8226_adsp_pil(review: AiCodeReview) -> None:
     assert count_in("drivers/remoteproc/qcom_q6v5_pas.c") == 1
 
 
+def test_grep_file_array_comma_in_name(review: AiCodeReview) -> None:
+    """A path whose filename contains a comma is one array element — not split.
+    This is the case the old delimiter-based parsing corrupted."""
+    binding = "Documentation/devicetree/bindings/remoteproc/qcom,adsp.yaml"
+    result = review.agent.dispatch_tool(
+        "grep", {"pattern": "qcom,msm8226-adsp-pil", "file": [binding]}
+    )
+    assert result.get("ok"), f"tool returned not-ok: {result}"
+    hits = result.get("result", [])
+    assert result.get("total", 0) >= 1, "comma-named binding path was not searched"
+    assert all(h["path"] == binding for h in hits), f"hit outside {binding}: {hits}"
+
+
+def test_grep_returns_enclosing_span(review: AiCodeReview) -> None:
+    """A hit inside a function carries the function's line range, with
+    start <= hit_line <= end."""
+    result = review.agent.dispatch_tool(
+        "grep", {"pattern": "do_sys_openat2", "file": ["fs/open.c"]}
+    )
+    assert result.get("ok"), f"tool returned not-ok: {result}"
+    in_func = [h for h in result.get("result", []) if h.get("enclosing_function")]
+    assert in_func, "expected at least one hit inside a function"
+    h = in_func[0]
+    assert isinstance(h["enclosing_function_start"], int)
+    assert isinstance(h["enclosing_function_end"], int)
+    assert h["enclosing_function_start"] <= h["line"] <= h["enclosing_function_end"], h
+
+
+def test_grep_skips_missing_path(review: AiCodeReview) -> None:
+    """One missing path is dropped and reported; the valid path's hits remain."""
+    binding = "Documentation/devicetree/bindings/remoteproc/qcom,adsp.yaml"
+    result = review.agent.dispatch_tool(
+        "grep",
+        {"pattern": "qcom,msm8226-adsp-pil", "file": [binding, "does/not/exist.yaml"]},
+    )
+    assert result.get("ok"), f"tool returned not-ok: {result}"
+    assert "does/not/exist.yaml" in result.get("skipped_paths", [])
+    assert result.get("total", 0) >= 1, "valid path's hits were lost"
+
+
 # Bad inputs must surface an error, never a silent ok/total=0.
 @pytest.mark.parametrize(
     "args,expected_error",
     [
         ({"pattern": "(unclosed"}, "invalid regex"),
         (
-            {"pattern": "anything", "file": "does/not/exist/nowhere.yaml"},
+            {"pattern": "anything", "file": ["does/not/exist/nowhere.yaml"]},
             "file not found",
         ),
         (
-            {"pattern": "anything", "file": "../../../etc/passwd"},
+            {"pattern": "anything", "file": ["../../../etc/passwd"]},
             "escapes kernel tree",
         ),
     ],
-    ids=["invalid_regex", "missing_file", "path_escape"],
+    ids=["invalid_regex", "all_missing", "path_escape"],
 )
 def test_grep_errors(
     review: AiCodeReview, args: Dict[str, Any], expected_error: str
@@ -590,6 +666,41 @@ def test_read_file_errors(review: AiCodeReview, path: str, expected_error: str) 
     result = review.agent.dispatch_tool("read_file", {"path": path})
     assert not result.get("ok"), f"unexpectedly ok: {result}"
     assert expected_error in (result.get("error") or "")
+
+
+def test_read_file_position_triple(review: AiCodeReview) -> None:
+    """read_file reports start/end/total (lines start..end of total) and no
+    longer ships the ambiguous `truncated` flag — end < total means more."""
+    result = review.agent.dispatch_tool(
+        "read_file", {"path": "fs/open.c", "start": 1, "end": 10}
+    )
+    assert result.get("ok"), f"tool returned not-ok: {result}"
+    payload = result.get("result", {})
+    assert payload["start"] == 1 and payload["end"] == 10
+    assert payload["total"] == 1581, f"unexpected total: {payload['total']}"
+    assert "truncated" not in payload, "truncated should be gone for the reader"
+    assert payload["end"] < payload["total"], "end<total signals more remains"
+
+
+def test_read_file_caps_at_256(review: AiCodeReview) -> None:
+    """With no `end`, a long file is capped at 256 lines (not 200), and total
+    reflects the whole file."""
+    result = review.agent.dispatch_tool("read_file", {"path": "fs/open.c", "start": 1})
+    assert result.get("ok"), f"tool returned not-ok: {result}"
+    payload = result.get("result", {})
+    assert payload["end"] == 256, f"cap not 256: {payload['end']}"
+    assert payload["total"] == 1581
+    assert payload["content"].count("\n") <= 256
+
+
+def test_read_file_eof_reaches_total(review: AiCodeReview) -> None:
+    """Reading to the end yields end == total (the EOF signal)."""
+    result = review.agent.dispatch_tool(
+        "read_file", {"path": "fs/open.c", "start": 1570, "end": 5000}
+    )
+    assert result.get("ok"), f"tool returned not-ok: {result}"
+    payload = result.get("result", {})
+    assert payload["end"] == payload["total"] == 1581, payload
 
 
 # ---------------------------------------------------------------------------
@@ -682,6 +793,41 @@ def test_git_log_errors(review: AiCodeReview, path: str, expected_error: str) ->
     assert expected_error in (result.get("error") or "")
 
 
+def test_git_log_grep(review: AiCodeReview) -> None:
+    """--grep searches commit messages; no path needed."""
+    result = review.agent.dispatch_tool("git_log", {"grep": "open"})
+    assert result.get("ok"), f"tool returned not-ok: {result}"
+    assert result.get("total", 0) >= 1, "expected message matches for 'open'"
+
+
+# Pickaxe searches are scoped to fs/open.c so they walk only that file's
+# history (fast) rather than all of mainline.
+def test_git_log_pickaxe_added_removed(review: AiCodeReview) -> None:
+    """-S finds the commit(s) that added or removed an exact string."""
+    result = review.agent.dispatch_tool(
+        "git_log", {"pickaxe": "do_sys_openat2", "path": "fs/open.c"}
+    )
+    assert result.get("ok"), f"tool returned not-ok: {result}"
+    assert result.get("total", 0) >= 1, "expected the commit that introduced it"
+
+
+def test_git_log_pickaxe_regex(review: AiCodeReview) -> None:
+    """-G finds commits whose diff adds/removes a line matching a regex."""
+    result = review.agent.dispatch_tool(
+        "git_log", {"pickaxe_regex": "do_sys_openat2", "path": "fs/open.c"}
+    )
+    assert result.get("ok"), f"tool returned not-ok: {result}"
+    assert result.get("total", 0) >= 1, "expected diff-content matches"
+
+
+def test_git_log_requires_a_criterion(review: AiCodeReview) -> None:
+    """With neither path nor a search term, git_log refuses rather than dumping
+    unscoped history."""
+    result = review.agent.dispatch_tool("git_log", {})
+    assert not result.get("ok"), f"unexpectedly ok: {result}"
+    assert "at least one" in (result.get("error") or "")
+
+
 # ---------------------------------------------------------------------------
 # git_show
 # ---------------------------------------------------------------------------
@@ -749,6 +895,10 @@ def test_git_cat_file(review: AiCodeReview) -> None:
     assert payload.get("rev") == PINNED_COMMIT
     assert payload.get("path") == "fs/open.c"
     assert "#include <linux/string.h>" in payload.get("content", "")
+    # Same position-triple contract as read_file: total present, no truncated.
+    assert payload.get("start") == 1 and payload.get("end") == 20
+    assert isinstance(payload.get("total"), int) and payload["total"] >= 20
+    assert "truncated" not in payload
 
 
 @pytest.mark.parametrize(
