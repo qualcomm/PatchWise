@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import logging
-import os
 import subprocess
 import sys
 import time
@@ -11,6 +10,7 @@ from typing import Any, List, Literal, Optional, Union
 
 from patchwise import PACKAGE_NAME, PACKAGE_PATH
 from patchwise.utils.config import parse_config
+from patchwise.utils.repo_workspace import is_repo_managed, require_workspace_root
 
 _GIT_COMMITTER = parse_config()["git_committer"]
 
@@ -44,7 +44,8 @@ class DockerManager:
         self.build_dir = self.sandbox_path / "build"
         self.kernel_dir = self.sandbox_path / "kernel"
         self._kernel_overlay_volume: Optional[str] = None
-        self._has_external_gitdir = False
+        require_workspace_root(str(self.repo_path))
+        self._repo_managed = is_repo_managed(str(self.repo_path))
 
     @property
     def _git_workdir(self) -> str:
@@ -167,41 +168,6 @@ class DockerManager:
                 start_new_session=True,
             )
         self.logger.debug(f"Kernel overlay for {self.container_name} cleaned up.")
-
-    def _external_gitdir_mounts(self) -> List[tuple[str, str]]:
-        """Bind mounts that make a repo(1)-managed kernel's .git resolve in the
-        container.
-
-        Android/msm ``kernel_platform`` trees are checked out with ``repo``: the
-        worktree's ``.git`` is a directory whose ``objects``/``config``/
-        ``packed-refs``/``logs``/``hooks`` are symlinks into a shared store that
-        lives *outside* the kernel directory (repo's ``.repo/``). Only the kernel
-        directory is mounted into the container, so those relative symlinks dangle
-        and git reports "not a git repository". Return ``(host, container)`` pairs
-        that place each real symlink target where the in-container ``.git`` symlink
-        resolves, giving the container a complete repository. Empty for a
-        self-contained ``.git`` (e.g. a normal clone), so standalone kernels are
-        unaffected."""
-        git_dir = self.repo_path / self.git_subdir / ".git"
-        if not git_dir.is_dir():
-            return []
-        container_gitdir = "/".join(
-            filter(None, [str(self.kernel_dir), self.git_subdir, ".git"])
-        )
-        repo_prefix = str(self.repo_path) + os.sep
-        mounts: dict[str, str] = {}
-        for entry in sorted(git_dir.iterdir()):
-            if not entry.is_symlink():
-                continue
-            link = os.readlink(str(entry))
-            host_target = os.path.realpath(str(entry))
-            # Symlinks that resolve back inside the mounted kernel directory ride
-            # along in the overlay already; only the escaping ones need a mount.
-            if host_target == str(self.repo_path) or host_target.startswith(repo_prefix):
-                continue
-            container_target = os.path.normpath(os.path.join(container_gitdir, link))
-            mounts[host_target] = container_target
-        return list(mounts.items())
 
     def _stream_build_output(self, process: subprocess.Popen[str]) -> None:
         """Drain the build's merged stdout/stderr through the logger at debug
@@ -622,18 +588,6 @@ class DockerManager:
                 "-v",
                 f"{self._kernel_overlay_volume}:{self.kernel_dir}",
             ]
-            # repo(1)-managed kernels keep their git store outside the mounted
-            # kernel directory; mount the real targets (read-only, so the user's
-            # tree is never written) where the in-container .git symlinks resolve.
-            external_mounts = self._external_gitdir_mounts()
-            self._has_external_gitdir = bool(external_mounts)
-            for host, container in external_mounts:
-                args += ["-v", f"{host}:{container}:ro"]
-            if external_mounts:
-                self.logger.info(
-                    f"Detected repo-managed kernel; mounting {len(external_mounts)} "
-                    f"external git store path(s) read-only into the container."
-                )
             args += [
                 self.image_tag,
                 "tail",
@@ -686,7 +640,12 @@ class DockerManager:
                 raise
 
     def _prepare_kernel_tree(self) -> None:
-        """Set git safe.directory and reset the kernel tree to the target commit."""
+        """Configure git trust and, for standalone (upstream) kernels, reset the
+        tree to the commit under review.
+
+        Skipped for downstream repo(1) workspaces: the caller already checked out
+        the change and only the read-only AiCodeReview runs. (The tree is an
+        overlay, so reset/clean/chown never reach the caller's on-disk tree.)"""
         self.logger.debug(
             f"Preparing kernel tree at {self.commit_sha} in {self.container_name}..."
         )
@@ -710,23 +669,22 @@ class DockerManager:
             capture_output=True,
         )
 
-        # A repo(1)-managed kernel's git store is mounted read-only and owned by a
-        # different user. Trust it system-wide (so git as either user accepts the
-        # differently-owned store) and disable reflog writes (the `logs` symlink
-        # points at the read-only mount, so `git reset` must not append to it).
-        if self._has_external_gitdir:
-            for cfg in (
-                ["--add", "safe.directory", "*"],
-                ["core.logallrefupdates", "false"],
-            ):
-                subprocess.run(
-                    [
-                        "docker", "exec", "--user", "root",
-                        self.container_name, "git", "config", "--system",
-                    ] + cfg,
-                    check=True,
-                    capture_output=True,
-                )
+        # Downstream: the tree is left as mounted (foreign-owned, never chowned)
+        # and git runs as the agent user across projects, so trust every store.
+        if self._repo_managed:
+            subprocess.run(
+                [
+                    "docker", "exec", "--user", "root",
+                    self.container_name, "git", "config", "--system",
+                    "--add", "safe.directory", "*",
+                ],
+                check=True,
+                capture_output=True,
+            )
+            self.logger.debug(
+                "repo-managed workspace: leaving tree as mounted (read-only)."
+            )
+            return
 
         subprocess.run(
             [
