@@ -19,7 +19,7 @@ from patchwise.patch_review.decorators import register_llm_review, register_long
 
 from patchwise.patch_review.ai_review.ai_review import AiReview
 from patchwise.ui import events
-from patchwise.utils.repo_workspace import project_layout_note
+from patchwise.utils.repo_workspace import project_layout_note, repo_project_note
 
 
 @register_llm_review
@@ -1088,10 +1088,11 @@ finding with record_verdict as you work through them.
             if self.additional_context
             else ""
         )
-        # When the patch's kernel tree sits under a subdirectory of the mounted
-        # root (--kernel-tree), tell the reviewer the path prefix so its read/grep
-        # calls resolve (the diff paths are relative to the kernel tree).
-        additional_context = project_layout_note(self.git_subdir) + ctx_block
+        additional_context = (
+            project_layout_note(self.git_subdir)
+            + repo_project_note(str(self.docker_manager.repo_path))
+            + ctx_block
+        )
         shared_user = self.PROMPT_TEMPLATE.format(
             diff=self.diff,
             commit_text=self.commit_message,
