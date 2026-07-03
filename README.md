@@ -113,7 +113,7 @@ folder containing the dmesg/console log (and any parser output), and `--repo-pat
 at the kernel source tree the crash came from:
 
 ```bash
-patchwise --rca --dump <crashdump-folder> --repo-path <kernel-tree>
+patchwise --rca --dump <crashdump-folder> --repo-path <kernel-source>
 ```
 
 An *engineer* agent investigates from the evidence and proposes one root cause and
@@ -122,7 +122,7 @@ unstated assumptions, symptom-only fixes, and incorrect causes — until it hold
 Give the engineer a head start with any debugging you've already done:
 
 ```bash
-patchwise --rca --dump <crashdump-folder> --repo-path <kernel-tree> \
+patchwise --rca --dump <crashdump-folder> --repo-path <kernel-source> \
   --additional-context "perf_fuzzer + cpu-hotplug + stress-ng reproduces this"
 ```
 
@@ -212,7 +212,8 @@ mail:
 ### Patch Review Options
 
 - `--commits`: Space separated list of commit SHAs/refs, or a single commit range in start..end format. (default: [`HEAD`])
-- `--repo-path`: Path to the kernel workspace root. Uses your current directory if not specified. (default: `$PWD`)
+- `--repo-path`: Path to the workspace root. Must directly contain either `.repo` (a repo(1)-managed downstream workspace) or `.git` (a standalone upstream kernel); PatchWise raises otherwise. Uses your current directory if not specified. (default: `$PWD`)
+- `--commit-dir`: Git subtree (has `.git`) holding the commit under review, when `--repo-path` is a broader workspace, e.g. `--repo-path .../kp6.0 --commit-dir kernel_platform/soc-repo`. Relative to `--repo-path` or absolute, and inside it. The agent navigates the whole `--repo-path` while the diff and (for upstream) tree reset use this subtree. Defaults to `--repo-path`.
 - `--reviews`: Space-separated list of reviews to run. (default: all available reviews)
 - `--short-reviews`: Run only short reviews. Overrides `--reviews`.
 - `--install`: Install missing dependencies for the specified reviews. This will not run any reviews, only install dependencies.
@@ -226,6 +227,14 @@ mail:
 - `--message-id`: Process only messages with the given Message-ID(s).
 - `-w`, `--watch`: Watch for new mail and process it in a loop.
 - `--send` / `--no-send`: Send the review replies, or print them to stdout instead. (default: `--no-send`)
+
+> **Downstream (repo(1)-managed) kernels support `AiCodeReview` only.** When
+> `--repo-path` is a `.repo` workspace root, PatchWise treats the tree as
+> read-only — the caller is responsible for syncing and checking out the change
+> under review, and PatchWise does not reset, clean, or take ownership of it.
+> Running any other review (static analysis, etc.) against such a tree is
+> undefined. Standalone `.git` kernels (upstream) support the full set of reviews
+> and are reset to the commit under review.
 
 ### Ai Review Options
 
