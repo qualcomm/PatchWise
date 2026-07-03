@@ -47,19 +47,66 @@ def resolve_git_tree(mount_path: str, project: str = "") -> Tuple[Path, Path, st
     return root, git_tree, git_subdir
 
 
-def project_layout_note(git_subdir: str) -> str:
-    """A note, for the agent, describing the in-tree path prefix when the kernel
-    git tree sits under a subdirectory of the navigable mount. Empty when the
-    mount root is itself the kernel tree (nothing to prefix)."""
-    if not git_subdir:
+def is_repo_managed(path: str) -> bool:
+    """Whether ``path`` is a repo(1)-managed (downstream) workspace.
+
+    A pure query; pair with ``require_workspace_root`` to reject a path that is
+    neither ``.repo`` nor ``.git``."""
+    return (Path(path).resolve() / ".repo").is_dir()
+
+
+def require_workspace_root(path: str) -> None:
+    """Raise unless ``--repo-path`` directly holds ``.repo`` or ``.git``.
+
+    We reject an ambiguous root rather than walking ancestors and guessing."""
+    p = Path(path).resolve()
+    if not (p / ".repo").is_dir() and not (p / ".git").exists():
+        raise ValueError(
+            f"--repo-path must contain .repo (downstream) or .git (upstream): {p}"
+        )
+
+
+def repo_project_note(repo_path: str) -> str:
+    """Review context listing the workspace's git projects. Empty when not
+    repo-managed."""
+    project_list = Path(repo_path).resolve() / ".repo" / "project.list"
+    if not project_list.is_file():
         return ""
+    projects = [ln.strip() for ln in project_list.read_text().splitlines() if ln.strip()]
+    if not projects:
+        return ""
+    listing = "\n".join(projects)
+    return (
+        "## Workspace projects\n\n"
+        "This is a repo(1)-managed workspace with these git projects "
+        "(workspace-relative paths). The git tools resolve a file's project from "
+        "its path automatically; you only name one of these as `dir` for a "
+        "path-less `git_log` search (grep/pickaxe):\n\n"
+        f"```\n{listing}\n```\n"
+    )
+
+
+def project_layout_note(git_subdir: str) -> str:
+    """Review context: where the diff's files live, and that the git tools resolve
+    a file's project from its path."""
+    if not git_subdir:
+        return (
+            "## Repository layout\n\n"
+            "The workspace root is the git tree, so the diff's paths are already "
+            "workspace-relative. The git tools resolve a file's project from its "
+            "path; a path-less `git_log` search takes `dir='.'`.\n"
+        )
     return (
         "## Repository layout\n\n"
-        f"You are navigating a multi-project workspace. The kernel tree under "
-        f"review lives under `{git_subdir}/`, so prefix paths to its source with "
-        f"`{git_subdir}/` (e.g. `{git_subdir}/kernel/events/core.c`, "
-        f"`{git_subdir}/drivers/...`, `{git_subdir}/Documentation/...`). Other "
-        f"top-level directories are sibling projects, including out-of-tree "
-        f"modules, that you can read at their own paths when the evidence points "
-        f"there.\n"
+        f"You are navigating a multi-project workspace. The diff lists its changed "
+        f"files tree-relative (unprefixed), and they live under `{git_subdir}/`, so "
+        f"prepend `{git_subdir}/` to locate them (a diff path `drivers/foo.c` is "
+        f"`{git_subdir}/drivers/foo.c`). `{git_subdir}` is only where this change is "
+        f"committed — the code it depends on (definitions, callers, headers) may "
+        f"live in other projects, such as the base kernel. Investigate wherever the "
+        f"evidence leads: `find_definition`, `find_callers` and `grep` search the "
+        f"whole workspace and return full workspace paths, and the git tools "
+        f"(`git_log`, `git_show`, `git_cat_file`) resolve each file's project from "
+        f"the path you pass. Only a path-less `git_log` search needs a `dir` naming "
+        f"the project to search.\n"
     )
