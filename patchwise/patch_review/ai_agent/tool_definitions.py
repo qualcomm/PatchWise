@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 """Tool definitions in LiteLLM/OpenAI format for the agent.
 
-All tools accept and return kernel-relative paths (e.g. 'drivers/usb/foo.c').
+All tools accept and return workspace-relative paths (e.g. 'drivers/usb/foo.c').
 The `file` arg on name-taking tools is a hint for where you saw the symbol
 used, not where its definition lives. The tool resolves the definition
 itself. List tools cap results at 100; read_file and git_cat_file cap at
@@ -20,7 +20,7 @@ _NAME_PARAM = {
             "type": "array",
             "items": {"type": "string"},
             "description": (
-                "Optional kernel-relative path(s) where you saw the symbol used, "
+                "Optional workspace-relative path(s) where you saw the symbol used, "
                 "one path per array element. A ranking hint; the definition may "
                 "live elsewhere."
             ),
@@ -109,7 +109,7 @@ TOOLS = [
                         "type": "array",
                         "items": {"type": "string"},
                         "description": (
-                            "Optional kernel-relative file(s)/dir(s) to scope the search, "
+                            "Optional workspace-relative file(s)/dir(s) to scope the search, "
                             "one path per array element. Glob is ignored for single files."
                         ),
                     },
@@ -129,7 +129,7 @@ TOOLS = [
         "function": {
             "name": "read_file",
             "description": (
-                "Read lines [start, end] of a kernel-relative file. Capped at "
+                "Read lines [start, end] of a workspace-relative file. Capped at "
                 "256 lines per call. Returns {path, start, end, total, content}: "
                 "you have lines start..end of `total`, so end < total means more "
                 "remains (call again with start = end + 1) and end == total is "
@@ -140,7 +140,7 @@ TOOLS = [
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Kernel-relative path, e.g. 'drivers/gpio/gpio-foo.c'.",
+                        "description": "Workspace-relative path, e.g. 'drivers/gpio/gpio-foo.c'.",
                     },
                     "start": {
                         "type": "integer",
@@ -170,7 +170,7 @@ TOOLS = [
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Kernel-relative path under Documentation/.",
+                        "description": "Path under Documentation/.",
                     },
                 },
                 "required": ["path"],
@@ -264,7 +264,7 @@ TOOLS = [
         "function": {
             "name": "list_files",
             "description": (
-                "List files and directories at a kernel-relative path. Set "
+                "List files and directories at a workspace-relative path. Set "
                 "recursive=true for a deep listing. Hidden entries (dotfiles/dirs "
                 "such as .git) are filtered out. Result is "
                 "{entries: [{name, type: 'file'|'dir'}], total, truncated}. "
@@ -275,7 +275,7 @@ TOOLS = [
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Kernel-relative directory path (use '.' for the kernel root).",
+                        "description": "Workspace-relative directory path (use '.' for the workspace root).",
                     },
                     "recursive": {
                         "type": "boolean",
@@ -306,8 +306,16 @@ TOOLS = [
                     "path": {
                         "type": "string",
                         "description": (
-                            "Kernel-relative file or directory path to scope the "
-                            "search to (optional when a search criterion is given)."
+                            "Workspace-relative file or directory path to scope the "
+                            "search to. Optional when a search criterion is given."
+                        ),
+                    },
+                    "dir": {
+                        "type": "string",
+                        "description": (
+                            "Workspace-relative project git tree for a path-less "
+                            "search (grep/pickaxe with no `path`); use `.` for the "
+                            "workspace root."
                         ),
                     },
                     "grep": {
@@ -351,9 +359,16 @@ TOOLS = [
                     "rev": {
                         "type": "string",
                         "description": (
-                            "A commit revision such as HEAD, HEAD~1, or a commit SHA, "
-                            "or a historical file object like "
-                            "'43cfbdda5af6:drivers/remoteproc/qcom_q6v5.c'."
+                            "A commit revision (e.g. HEAD, HEAD~1, a SHA) or a "
+                            "historical file object "
+                            "`43cfbdda5af6:drivers/remoteproc/qcom_q6v5.c`."
+                        ),
+                    },
+                    "dir": {
+                        "type": "string",
+                        "description": (
+                            "Workspace-relative project git tree for a bare commit "
+                            "`rev` (no `:path`); use `.` for the workspace root."
                         ),
                     },
                     "name_only": {
@@ -372,11 +387,11 @@ TOOLS = [
         "function": {
             "name": "git_cat_file",
             "description": (
-                "Read a historical file from git by commit revision and kernel-relative "
-                "path. Returns {rev, path, start, end, total, content}: "
-                "lines start..end of `total` (end < total means more remains). "
-                "Capped at 256 lines per call. Use this when `git_show` output is "
-                "truncated or when you want file contents without a patch."
+                "Read a historical file from git by commit revision and "
+                "workspace-relative path. Returns {rev, path, start, end, total, "
+                "content}: lines start..end of `total` (end < total means more "
+                "remains). Capped at 256 lines per call. Use this when `git_show` "
+                "output is truncated or when you want file contents without a patch."
             ),
             "parameters": {
                 "type": "object",
@@ -387,7 +402,7 @@ TOOLS = [
                     },
                     "path": {
                         "type": "string",
-                        "description": "Kernel-relative path inside that revision.",
+                        "description": "Workspace-relative path, read at `rev`.",
                     },
                     "start": {
                         "type": "integer",
@@ -419,7 +434,7 @@ TOOLS = [
                     "location": {
                         "type": "string",
                         "description": (
-                            "Where the issue is: kernel-relative file and line or "
+                            "Where the issue is: workspace-relative file and line or "
                             "symbol, e.g. 'drivers/x/y.c:123' or 'foo_get()'."
                         ),
                     },
@@ -530,7 +545,7 @@ TOOLS = [
                 "properties": {
                     "file": {
                         "type": "string",
-                        "description": "Kernel-relative path, e.g. 'drivers/i2c/foo.c'.",
+                        "description": "Workspace-relative path, e.g. 'drivers/i2c/foo.c'.",
                     },
                     "old_content": {
                         "type": "string",

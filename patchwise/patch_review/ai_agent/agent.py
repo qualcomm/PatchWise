@@ -114,6 +114,7 @@ class Agent:
         self.seen_files |= self._files_in_diff()
 
         self.kernel_path = kernel_path
+        self._docs_subdir = self._detect_docs_tree()
 
     @retry(
         max_retries=10,
@@ -333,15 +334,38 @@ class Agent:
         """Return a kernel-relative path anchored at the container kernel root."""
         return str(self.docker_manager.kernel_dir / rel)
 
-    def _doc_container_path(self, sub: str = "") -> str:
-        """Container path of `Documentation/<sub>`, honoring the kernel git subdir.
+    def _detect_docs_tree(self) -> str:
+        """Workspace-relative dir of the Linux Documentation/, detected in-container.
 
-        Documentation/ lives under the kernel git subtree (e.g.
-        msm-kernel/Documentation/) when --kernel-tree mounts the tree below the
-        root, and at the root otherwise. `sub` is appended under Documentation/.
-        """
+        The commit under review may sit in a sparse vendor tree while the real
+        docs live in the base kernel, so the doc tools anchor here rather than at
+        the commit's subtree. Prefers the commit's own tree when it too carries
+        full docs, else the first match."""
+        proc = self.docker_manager.run_command(
+            ["rg", "-l", "--glob", "index.rst",
+             "The Linux Kernel documentation", str(self.docker_manager.kernel_dir)],
+            cwd=None,
+        )
+        stdout, _ = proc.communicate()
+        leaf = "Documentation/index.rst"
+        trees: List[str] = []
+        for line in (stdout or "").splitlines():
+            rel = self._kernel_rel(line.strip())
+            if rel == leaf:
+                trees.append("")
+            elif rel.endswith("/" + leaf):
+                trees.append(rel[: -len(leaf)].rstrip("/"))
+        if not trees:
+            raise RuntimeError(
+                "kernel Documentation/ not found in the workspace; --repo-path is "
+                "likely not a kernel tree"
+            )
         subdir = self.docker_manager.git_subdir
-        rel = "/".join(filter(None, [subdir, "Documentation", sub.strip("/")]))
+        return subdir if subdir in trees else sorted(trees)[0]
+
+    def _doc_container_path(self, sub: str = "") -> str:
+        """Container path of `Documentation/<sub>` in the detected Linux docs tree."""
+        rel = "/".join(filter(None, [self._docs_subdir, "Documentation", sub.strip("/")]))
         return str(self.docker_manager.kernel_dir / rel)
 
     def _validate_existing_kernel_path(self, path: str) -> str:
@@ -358,7 +382,37 @@ class Agent:
             raise ValueError(f"path not found: {rel}")
         return rel
 
-    def _resolve_git_commit(self, rev: str) -> str:
+    def _git_dir_cwd(self, tree: Optional[str]) -> str:
+        """Container cwd for git in project ``tree`` ("" = mount root; ``None`` =
+        the reviewed commit's anchored subtree)."""
+        if tree is None:
+            return self.docker_manager._git_workdir
+        return "/".join(filter(None, [str(self.docker_manager.kernel_dir), tree]))
+
+    def _resolve_git_tree_dir(self, dir: str) -> str:
+        """Validate `dir` is a git tree inside the workspace and return it
+        workspace-relative. For the path-less git tools, which have no path to
+        derive the project from."""
+        if not isinstance(dir, str) or not dir.strip():
+            raise ValueError(
+                "dir is required: name the project git tree, e.g. 'common' or '.'"
+            )
+        rel = self._kernel_rel(dir)
+        if rel in ("", "."):
+            rel = ""  # mount root is itself the git tree (upstream)
+        self._abs_in_kernel(rel or ".")
+        gitmarker = "/".join(
+            filter(None, [str(self.docker_manager.kernel_dir), rel, ".git"])
+        )
+        check = self.docker_manager.run_command(["test", "-e", gitmarker], cwd=None)
+        check.communicate()
+        if check.returncode != 0:
+            raise ValueError(
+                f"dir is not a git tree (no .git): {rel or '.'}; pass the project root"
+            )
+        return rel
+
+    def _resolve_git_commit(self, rev: str, tree: Optional[str] = None) -> str:
         """Resolve a revision to a commit SHA, rejecting invalid or option-like refs."""
         if not isinstance(rev, str) or not rev.strip():
             raise ValueError("rev must be a non-empty string")
@@ -375,7 +429,7 @@ class Agent:
                 "--end-of-options",
                 f"{rev}^{{commit}}",
             ],
-            cwd=self.docker_manager._git_workdir,
+            cwd=self._git_dir_cwd(tree),
         )
         stdout, stderr = proc.communicate()
         if proc.returncode != 0:
@@ -388,17 +442,20 @@ class Agent:
         self._abs_in_kernel(path)
         return self._kernel_rel(path)
 
-    def _git_tree_rel(self, rel: str) -> str:
-        """Strip the kernel git subtree prefix from a mount-relative path so git
-        (which runs inside that subtree, `_git_workdir`) sees a tree-relative
-        path. The agent refers to files relative to the mounted root (matching
-        read/grep and the prefixed diff from `_files_in_diff`), e.g.
-        `msm-kernel/foo.c` when `--kernel-tree msm-kernel`; this is the inverse of
-        that prefixing. A no-op when the mount root is the git tree."""
-        subdir = self.docker_manager.git_subdir
-        if subdir and (rel == subdir or rel.startswith(subdir + "/")):
-            return rel[len(subdir):].lstrip("/")
-        return rel
+    def _split_tree(self, rel: str) -> Tuple[str, str]:
+        """Locate the git project owning a workspace-relative path (nearest
+        enclosing ``.git``), returning ``(tree, tree_rel)``.
+
+        The file's location decides the project, not the commit under review — so
+        the git tools reach every project. Raises when none is found."""
+        base = Path(self.kernel_path)
+        parts = [p for p in rel.split("/") if p]
+        for i in range(len(parts), -1, -1):
+            candidate = "/".join(parts[:i])
+            gitmarker = (base / candidate / ".git") if candidate else (base / ".git")
+            if gitmarker.exists():
+                return candidate, "/".join(parts[i:])
+        raise ValueError(f"no git project found for path: {rel}")
 
     def _split_git_object_spec(self, rev: str) -> Tuple[str, Optional[str]]:
         """Split `rev[:path]` syntax into commit rev and optional kernel-relative path."""
@@ -416,15 +473,6 @@ class Agent:
         if not commit_rev or not rel_path:
             raise ValueError(f"invalid rev: {rev}")
         return commit_rev, self._validate_git_path(rel_path)
-
-    def _resolve_git_object_spec(self, rev: str) -> Tuple[str, Optional[str], str]:
-        """Resolve a git commit or commit:path object spec."""
-        commit_rev, rel_path = self._split_git_object_spec(rev)
-        resolved_rev = self._resolve_git_commit(commit_rev)
-        if rel_path is None:
-            return resolved_rev, None, resolved_rev
-        git_rel = self._git_tree_rel(rel_path)
-        return resolved_rev, git_rel, f"{resolved_rev}:{git_rel}"
 
     def _git_command(self, *args: str) -> List[str]:
         """Run git with paging disabled so tool output is deterministic."""
@@ -1003,16 +1051,9 @@ class Agent:
         except ValueError as e:
             return {"ok": False, "error": str(e)}
         rel = self._kernel_rel(path)
-        # Documentation/ lives under the kernel git subtree (e.g.
-        # msm-kernel/Documentation/) when --kernel-tree puts the tree below the
-        # mounted root, and at the root otherwise. Re-anchor whatever the model
-        # passed under <subdir>/Documentation/: strip a leading subdir, then
-        # (since the model often drops the Documentation/ prefix, e.g.
-        # "filesystems/locking.rst") ensure it, then prepend the subdir back —
-        # so both "Documentation/x.rst" and "msm-kernel/Documentation/x.rst"
-        # resolve. The escape check above already ran, so re-anchoring can't
-        # widen scope.
-        subdir = self.docker_manager.git_subdir
+        # Re-anchor under the docs tree: strip a leading tree prefix, ensure the
+        # Documentation/ prefix (the model often drops it), then prepend the tree.
+        subdir = self._docs_subdir
         if subdir and (rel == subdir or rel.startswith(subdir + "/")):
             rel = rel[len(subdir):].lstrip("/")
         if not (rel == "Documentation" or rel.startswith("Documentation/")):
@@ -1106,9 +1147,7 @@ class Agent:
         # tree-sitter daemon, so boot it first (the critic, which runs before
         # any navigation tool, would otherwise hit it cold).
         self._ensure_navigation_stack(need_ts=True)
-        doc_rel = "/".join(
-            filter(None, [self.docker_manager.git_subdir, "Documentation"])
-        )
+        doc_rel = "/".join(filter(None, [self._docs_subdir, "Documentation"]))
         hits, error, _ = self._rg_search(query, file=[doc_rel], glob="*")
         if error:
             return {"ok": False, "error": error}
@@ -1238,6 +1277,7 @@ class Agent:
         grep: Optional[str] = None,
         pickaxe: Optional[str] = None,
         pickaxe_regex: Optional[str] = None,
+        dir: Optional[str] = None,
     ) -> Dict[str, Any]:
         if not (path or grep or pickaxe or pickaxe_regex):
             return {
@@ -1245,12 +1285,23 @@ class Agent:
                 "error": "give at least one of: path, grep, pickaxe, pickaxe_regex",
             }
 
-        rel: Optional[str] = None
-        if path:
-            try:
+        tree_rel: Optional[str] = None
+        try:
+            if path:
                 rel = self._validate_existing_kernel_path(path)
-            except ValueError as e:
-                return {"ok": False, "error": str(e)}
+                tree, tree_rel = self._split_tree(rel)
+            elif isinstance(dir, str) and dir.strip():
+                tree = self._resolve_git_tree_dir(dir)
+            else:
+                return {
+                    "ok": False,
+                    "error": (
+                        "dir is required for a path-less search: name the project "
+                        "git tree to search, e.g. 'kernel_platform/common' or '.'"
+                    ),
+                }
+        except ValueError as e:
+            return {"ok": False, "error": str(e)}
 
         log_cmd = [
             *self._git_command("log"),
@@ -1270,10 +1321,10 @@ class Agent:
             log_cmd.append(f"-S{pickaxe}")
         if pickaxe_regex:
             log_cmd.append(f"-G{pickaxe_regex}")
-        if rel is not None:
-            log_cmd += ["--", self._git_tree_rel(rel)]
+        if tree_rel:
+            log_cmd += ["--", tree_rel]
         proc = self.docker_manager.run_command(
-            log_cmd, cwd=self.docker_manager._git_workdir
+            log_cmd, cwd=self._git_dir_cwd(tree)
         )
         stdout, stderr = proc.communicate()
         if proc.returncode != 0:
@@ -1303,9 +1354,11 @@ class Agent:
             "truncated": truncated,
         }
 
-    def _tool_git_show(self, rev: str, name_only: bool = False) -> Dict[str, Any]:
+    def _tool_git_show(
+        self, rev: str, name_only: bool = False, dir: Optional[str] = None
+    ) -> Dict[str, Any]:
         try:
-            resolved_rev, rel_path, object_spec = self._resolve_git_object_spec(rev)
+            commit_rev, rel_path = self._split_git_object_spec(rev)
         except ValueError as e:
             return {"ok": False, "error": str(e)}
 
@@ -1314,6 +1367,29 @@ class Agent:
                 "ok": False,
                 "error": "name_only is only supported for commit revisions, not rev:path",
             }
+
+        tree_rel: Optional[str] = None
+        try:
+            if rel_path is not None:
+                tree, tree_rel = self._split_tree(rel_path)
+            elif isinstance(dir, str) and dir.strip():
+                tree = self._resolve_git_tree_dir(dir)
+            else:
+                return {
+                    "ok": False,
+                    "error": (
+                        "dir is required when rev has no ':path': name the project "
+                        "git tree that holds the commit, e.g. "
+                        "'kernel_platform/common' or '.'"
+                    ),
+                }
+            resolved_rev = self._resolve_git_commit(commit_rev, tree)
+        except ValueError as e:
+            return {"ok": False, "error": str(e)}
+
+        object_spec = (
+            resolved_rev if tree_rel is None else f"{resolved_rev}:{tree_rel}"
+        )
 
         if name_only:
             show_cmd = [
@@ -1337,7 +1413,7 @@ class Agent:
                 object_spec,
             ]
         proc = self.docker_manager.run_command(
-            show_cmd, cwd=self.docker_manager._git_workdir
+            show_cmd, cwd=self._git_dir_cwd(tree)
         )
         stdout, stderr = proc.communicate()
         if proc.returncode != 0:
@@ -1345,7 +1421,7 @@ class Agent:
             return {"ok": False, "error": detail}
 
         if name_only:
-            prefix = self.docker_manager.git_subdir
+            prefix = tree
             paths = [
                 f"{prefix}/{p}" if prefix else p
                 for p in (
@@ -1375,18 +1451,23 @@ class Agent:
         }
 
     def _tool_git_cat_file(
-        self, rev: str, path: str, start: int = 1, end: Optional[int] = None
+        self,
+        rev: str,
+        path: str,
+        start: int = 1,
+        end: Optional[int] = None,
     ) -> Dict[str, Any]:
         try:
-            resolved_rev = self._resolve_git_commit(rev)
             rel = self._validate_git_path(path)
+            tree, tree_rel = self._split_tree(rel)
+            resolved_rev = self._resolve_git_commit(rev, tree)
         except ValueError as e:
             return {"ok": False, "error": str(e)}
 
-        object_spec = f"{resolved_rev}:{self._git_tree_rel(rel)}"
+        object_spec = f"{resolved_rev}:{tree_rel}"
         proc = self.docker_manager.run_command(
             self._git_command("cat-file", "-p", object_spec),
-            cwd=self.docker_manager._git_workdir,
+            cwd=self._git_dir_cwd(tree),
         )
         stdout, stderr = proc.communicate()
         if proc.returncode != 0:
@@ -1423,11 +1504,13 @@ class Agent:
             except ValueError as e:
                 return {"ok": False, "error": str(e)}
 
-        kernel_dir = str(self.docker_manager.kernel_dir)
+        # Run inside the kernel git tree (a subdirectory of the mount when
+        # reviewing a broader workspace), where scripts/checkpatch.pl lives.
+        git_wd = self.docker_manager._git_workdir
 
         try:
             # Ensure checkpatch.pl exists in the container kernel tree
-            checkpatch_path = os.path.join(kernel_dir, "scripts", "checkpatch.pl")
+            checkpatch_path = os.path.join(git_wd, "scripts", "checkpatch.pl")
             check_proc = self.docker_manager.run_command(
                 ["test", "-x", checkpatch_path],
                 cwd=None,
@@ -1436,10 +1519,14 @@ class Agent:
             if check_proc.returncode != 0:
                 return {"ok": False, "error": "checkpatch.pl not found in kernel tree"}
 
-            # Pipe current diff directly into checkpatch.pl inside the container
+            # By SHA, not HEAD: a downstream tree isn't reset, so HEAD may not be
+            # the reviewed commit.
+            sha = self.docker_manager.commit_sha
             proc = self.docker_manager.run_command(
-                ["sh", "-c", "git diff HEAD | scripts/checkpatch.pl -"],
-                cwd=kernel_dir,
+                ["sh", "-c",
+                 f"git --no-pager format-patch -1 --stdout {sha} "
+                 "| scripts/checkpatch.pl -"],
+                cwd=git_wd,
             )
             stdout, _ = proc.communicate()
 
@@ -1625,9 +1712,13 @@ class Agent:
         tree-relative paths it reports are prefixed with that subdirectory so they
         match the paths the agent's read/grep tools use (which are relative to the
         mounted root). With no subdirectory this is exactly `git diff` at the
-        root."""
+        root.
+
+        By SHA, not HEAD: a downstream tree isn't reset, so HEAD may not be the
+        reviewed commit."""
         git_wd = self.docker_manager._git_workdir
-        log_cmd = [*self._git_command("diff"), "--name-only", "HEAD^..HEAD"]
+        sha = self.docker_manager.commit_sha
+        log_cmd = [*self._git_command("diff"), "--name-only", f"{sha}^..{sha}"]
         proc = self.docker_manager.run_command(log_cmd, cwd=git_wd)
         stdout, _ = proc.communicate()
         prefix = self.docker_manager.git_subdir
