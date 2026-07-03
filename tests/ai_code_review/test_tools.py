@@ -964,7 +964,7 @@ def test_git_log_errors(review: AiCodeReview, path: str, expected_error: str) ->
 
 def test_git_log_grep(review: AiCodeReview) -> None:
     """--grep searches commit messages; no path needed."""
-    result = review.agent.dispatch_tool("git_log", {"grep": "open"})
+    result = review.agent.dispatch_tool("git_log", {"dir": ".", "grep": "open"})
     assert result.get("ok"), f"tool returned not-ok: {result}"
     assert result.get("total", 0) >= 1, "expected message matches for 'open'"
 
@@ -997,13 +997,31 @@ def test_git_log_requires_a_criterion(review: AiCodeReview) -> None:
     assert "at least one" in (result.get("error") or "")
 
 
+def test_git_log_path_less_requires_dir(review: AiCodeReview) -> None:
+    """A grep/pickaxe search has no path to derive the project from, so it must
+    be told which project to search."""
+    result = review.agent.dispatch_tool("git_log", {"grep": "open"})
+    assert not result.get("ok"), f"unexpectedly ok: {result}"
+    assert "dir is required" in (result.get("error") or "")
+
+
+@pytest.mark.parametrize("bad_dir", ["../../etc", "../..", "foo/../../.."], ids=lambda v: v)
+def test_git_log_dir_cannot_escape_workspace(
+    review: AiCodeReview, bad_dir: str
+) -> None:
+    """A path-less search's `dir` must stay inside the workspace."""
+    result = review.agent.dispatch_tool("git_log", {"grep": "open", "dir": bad_dir})
+    assert not result.get("ok"), f"unexpectedly ok: {result}"
+    assert "escapes kernel tree" in (result.get("error") or "")
+
+
 # ---------------------------------------------------------------------------
 # git_show
 # ---------------------------------------------------------------------------
 
 
 def test_git_show(review: AiCodeReview) -> None:
-    result = review.agent.dispatch_tool("git_show", {"rev": PINNED_COMMIT})
+    result = review.agent.dispatch_tool("git_show", {"dir": ".", "rev": PINNED_COMMIT})
     assert result.get("ok"), f"tool returned not-ok: {result}"
     payload = result.get("result", {})
     assert payload.get("rev") == PINNED_COMMIT
@@ -1013,7 +1031,7 @@ def test_git_show(review: AiCodeReview) -> None:
 
 def test_git_show_name_only(review: AiCodeReview) -> None:
     result = review.agent.dispatch_tool(
-        "git_show", {"rev": PINNED_COMMIT, "name_only": True}
+        "git_show", {"dir": ".", "rev": PINNED_COMMIT, "name_only": True}
     )
     assert result.get("ok"), f"tool returned not-ok: {result}"
     payload = result.get("result", {})
@@ -1032,11 +1050,19 @@ def test_git_show_object_path(review: AiCodeReview) -> None:
     assert "diff --git" not in content
 
 
+def test_git_show_bare_commit_requires_dir(review: AiCodeReview) -> None:
+    """A bare commit rev (no ':path') has no path to derive the project from, so
+    the caller must name the project holding the commit."""
+    result = review.agent.dispatch_tool("git_show", {"rev": PINNED_COMMIT})
+    assert not result.get("ok"), f"unexpectedly ok: {result}"
+    assert "dir is required" in (result.get("error") or "")
+
+
 @pytest.mark.parametrize(
     "args,expected_error",
     [
-        ({"rev": "not_a_real_rev"}, "invalid rev"),
-        ({"rev": "-n1"}, "invalid rev"),
+        ({"dir": ".", "rev": "not_a_real_rev"}, "invalid rev"),
+        ({"dir": ".", "rev": "-n1"}, "invalid rev"),
         ({"rev": f"{PINNED_COMMIT}:fs/open.c", "name_only": True}, "name_only"),
     ],
     ids=["missing_rev", "option_like_rev", "name_only_with_object_spec"],
