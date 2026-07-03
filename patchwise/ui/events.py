@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 # Event kinds (string constants — no enum, to keep this module dependency-free
 # and the payloads trivially serialisable).
 RUN_START = "run_start"          # pipeline, target, model
+INDEX = "index"                  # phase (start|progress|done), done, total, files, seconds
 PHASE = "phase"                  # name  (plan|execution|filter|engineer|maintainer)
 ITERATION = "iteration"          # label, n, cap, tokens, budget, peak
 TOOL_CALL = "tool_call"          # label, iter, name, args, ok

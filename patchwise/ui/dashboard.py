@@ -343,6 +343,20 @@ class Dashboard:
                 meta.add_row("model", self.model)
             self._emit(meta, indent=3)
 
+        elif kind == events.INDEX:
+            # Pin a transient status while the tree-sitter index builds (a long,
+            # otherwise-silent wait on a large downstream workspace); clear it
+            # when the daemon is ready.
+            if f.get("phase") == "done":
+                self.set_status(None)
+            else:
+                total = f.get("total") or 0
+                done = f.get("done") or 0
+                self.set_status(
+                    f"building code index… {done}/{total} files"
+                    if total else "building code index…"
+                )
+
         elif kind == events.PHASE:
             with self._lock:
                 self.phase = f.get("name", "") or self.phase

@@ -235,6 +235,13 @@ mail:
 > Running any other review (static analysis, etc.) against such a tree is
 > undefined. Standalone `.git` kernels (upstream) support the full set of reviews
 > and are reset to the commit under review.
+>
+> Because a downstream tree is indexed in place, remove build artifacts (e.g. the
+> `out/` tree) or point at a clean checkout before running `--rca`/`AiCodeReview`;
+> a stale build output can be orders of magnitude larger than the kernel and
+> makes the tree-sitter index slow to build. PatchWise skips the paths listed
+> under `indexing.blocklist` in the config (default: `kernel_platform/{out,prebuilts,external}`);
+> override that list in `~/.config/patchwise_config.yaml` for your layout.
 
 ### Ai Review Options
 

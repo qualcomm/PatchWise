@@ -1,4 +1,13 @@
 log_level: "INFO"
+# Workspace-relative directory paths (as in .repo/project.list) pruned when
+# building the tree-sitter code index, so a downstream workspace does not index
+# toolchain/prebuilt/bootloader trees. Override in
+# ~/.config/patchwise_config.yaml. grep still covers every file.
+indexing:
+    blocklist:
+        - kernel_platform/out
+        - kernel_platform/prebuilts
+        - kernel_platform/external
 # Placeholder identity used inside the patchwise container for git commits.
 git_committer:
     name: "Patchwise"

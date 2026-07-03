@@ -11,8 +11,9 @@ Protocol:
     host -> daemon: {"op": "constructs_in_file", "path": <kernel-relative str>}
     daemon -> host: {"constructs": [{"name","kind","start_line","end_line"}, ...]}
 
-A `{"ready": true, ...}` line is emitted once the index finishes building, so
-the host can block on first stdout readline() before issuing requests.
+While building, `{"progress": <done>, "total": <n>}` lines stream on stdout; a
+`{"ready": true, ...}` line is emitted once the index finishes, so the host
+reads progress lines until `ready` before issuing requests.
 """
 # TODO: Move this to a better place because Agent is the one using this now.
 import json
@@ -20,12 +21,12 @@ import multiprocessing
 import os
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import tree_sitter_c
 from tree_sitter import Language, Parser, Query, QueryCursor
 
-SKIP_DIRS = {".git", "Documentation"}
+SKIP_DIRS = {"Documentation"}
 KERNEL: Path
 
 _C_LANGUAGE = Language(tree_sitter_c.language())
@@ -201,13 +202,15 @@ def _parse_one(path_str: str) -> Optional[Tuple[str, List[Dict[str, Any]]]]:
         return None
 
 
-def build_index() -> Tuple[
+def build_index(blocklist: Set[str]) -> Tuple[
     Dict[str, List[Dict[str, Any]]],
     Dict[str, List[Dict[str, Any]]],
     int,
     int,
 ]:
     """Return (by_name, constructs_by_file, files_parsed, files_skipped).
+
+    ``blocklist`` holds workspace-relative directory paths to prune.
 
     constructs_by_file holds EVERY captured construct per file — functions,
     structs, unions, enums, typedefs, macros, and aggregate initializers — with
@@ -216,18 +219,33 @@ def build_index() -> Tuple[
     """
     files: List[str] = []
     for dirpath, dirnames, filenames in os.walk(KERNEL):
-        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
+        rel = os.path.relpath(dirpath, KERNEL)
+        # Prune dot-dirs, the always-skip basenames, and blocklisted paths.
+        dirnames[:] = [
+            d for d in dirnames
+            if not d.startswith(".")
+            and d not in SKIP_DIRS
+            and (d if rel == "." else f"{rel}/{d}") not in blocklist
+        ]
         for fn in filenames:
-            if fn.endswith((".c", ".h")):
+            if not fn.startswith(".") and fn.endswith((".c", ".h")):
                 files.append(os.path.join(dirpath, fn))
-    print(f"ts-indexer: parsing {len(files)} files", file=sys.stderr)
+    total = len(files)
+    print(f"ts-indexer: parsing {total} files", file=sys.stderr)
 
     by_name: Dict[str, List[Dict[str, Any]]] = {}
     constructs_by_file: Dict[str, List[Dict[str, Any]]] = {}
     skipped = 0
 
+    # Stream progress ahead of the final `ready` line so the host can show it.
+    done = 0
+    step = max(1, min(total // 200, 2000))
+    _write({"progress": 0, "total": total})
     with multiprocessing.Pool() as pool:
         for result in pool.imap_unordered(_parse_one, files, chunksize=32):
+            done += 1
+            if done % step == 0:
+                _write({"progress": done, "total": total})
             if result is None:
                 skipped += 1
                 continue
@@ -258,16 +276,17 @@ def _write(obj: Dict[str, Any]) -> None:
 
 def main() -> int:
     global KERNEL
-    if len(sys.argv) != 2:
-        print(f"usage: {sys.argv[0]} <kernel-path>", file=sys.stderr)
+    if len(sys.argv) < 2:
+        print(f"usage: {sys.argv[0]} <kernel-path> [blocked-dir ...]", file=sys.stderr)
         return 2
     KERNEL = Path(sys.argv[1]).resolve()
     if not KERNEL.is_dir():
         print(f"ts-indexer: kernel path not found: {KERNEL}", file=sys.stderr)
         return 1
-    print(f"ts-indexer: kernel={KERNEL}", file=sys.stderr)
+    blocklist = set(sys.argv[2:])
+    print(f"ts-indexer: kernel={KERNEL} blocklist={sorted(blocklist)}", file=sys.stderr)
 
-    by_name, constructs_by_file, parsed, skipped = build_index()
+    by_name, constructs_by_file, parsed, skipped = build_index(blocklist)
     total_entries = sum(len(v) for v in by_name.values())
     _write(
         {

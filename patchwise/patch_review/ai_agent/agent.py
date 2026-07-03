@@ -21,6 +21,7 @@ from patchwise import PACKAGE_NAME, SANDBOX_PATH
 from patchwise.docker import DockerManager
 from patchwise.patch_review.ai_agent.tool_definitions import TOOLS
 from patchwise.ui import events
+from patchwise.utils.config import parse_config
 from patchwise.utils.decorators import retry
 
 urllib3.disable_warnings()
@@ -504,37 +505,53 @@ class Agent:
         if getattr(self, "ts_daemon", None) is not None:
             return
         kernel_dir = self.docker_manager.sandbox_path / "kernel"
+        blocklist = parse_config().get("indexing", {}).get("blocklist") or []
         self.logger.info("tree-sitter: starting index daemon in container")
         start = time.time()
         self.ts_daemon = self.docker_manager.run_interactive_command(
-            ["python3", TS_INDEXER_PATH, str(kernel_dir)],
+            ["python3", TS_INDEXER_PATH, str(kernel_dir), *map(str, blocklist)],
             cwd=str(kernel_dir),
         )
-        # Block on the `ready` line the daemon emits after it finishes building.
-        ready_line = self.ts_daemon.stdout.readline() if self.ts_daemon.stdout else ""
-        if not ready_line:
-            # The daemon has exited, so its stderr is drained to EOF without
-            # blocking; surface it so the real cause (missing file, ImportError,
-            # …) is visible instead of an opaque generic failure.
-            stderr = self.ts_daemon.stderr.read() if self.ts_daemon.stderr else ""
-            raise RuntimeError(
-                "ts_indexer daemon exited before ready signal"
-                + (f":\n{stderr.strip()}" if stderr.strip() else "")
-            )
-        try:
-            ready = json.loads(ready_line)
-        except json.JSONDecodeError as e:
-            raise RuntimeError(
-                f"ts_indexer ready signal not JSON: {e}\nline: {ready_line!r}"
-            )
-        if not ready.get("ready"):
-            raise RuntimeError(f"ts_indexer ready signal malformed: {ready}")
+        events.emit(events.INDEX, phase="start")
+        # The daemon streams {"progress", "total"} lines while building, then a
+        # {"ready": true, ...} line. Surface progress; block until ready.
+        ready: Dict[str, Any] = {}
+        while True:
+            line = self.ts_daemon.stdout.readline() if self.ts_daemon.stdout else ""
+            if not line:
+                # EOF: the daemon exited before ready. Drain its stderr so the real
+                # cause (missing file, ImportError, …) is visible instead of an
+                # opaque generic failure.
+                stderr = self.ts_daemon.stderr.read() if self.ts_daemon.stderr else ""
+                raise RuntimeError(
+                    "ts_indexer daemon exited before ready signal"
+                    + (f":\n{stderr.strip()}" if stderr.strip() else "")
+                )
+            try:
+                msg = json.loads(line)
+            except json.JSONDecodeError as e:
+                raise RuntimeError(f"ts_indexer signal not JSON: {e}\nline: {line!r}")
+            if msg.get("ready"):
+                ready = msg
+                break
+            if "progress" in msg:
+                events.emit(
+                    events.INDEX, phase="progress",
+                    done=msg.get("progress", 0), total=msg.get("total", 0),
+                )
+                continue
+            raise RuntimeError(f"ts_indexer signal malformed: {msg}")
+        elapsed = time.time() - start
         self.logger.info(
-            f"tree-sitter: daemon ready in {time.time() - start:.1f}s — "
+            f"tree-sitter: daemon ready in {elapsed:.1f}s — "
             f"{ready.get('unique_names', 0)} unique names, "
             f"{ready.get('entries', 0)} entries, "
             f"{ready.get('files_parsed', 0)} parsed, "
             f"{ready.get('files_skipped', 0)} skipped"
+        )
+        events.emit(
+            events.INDEX, phase="done",
+            files=ready.get("files_parsed", 0), seconds=round(elapsed, 1),
         )
 
     def _ts_query(self, **req: Any) -> Dict[str, Any]:
