@@ -51,7 +51,12 @@ from patchwise.patch_review.ai_agent.agent import (
 )
 from patchwise.patch_review.ai_agent.crashdump_agent import CrashdumpAgent
 from patchwise.ui import events
-from patchwise.utils.repo_workspace import resolve_git_tree, project_layout_note
+from patchwise.utils.repo_workspace import (
+    is_repo_managed,
+    resolve_git_tree,
+    project_layout_note,
+    repo_project_note,
+)
 
 _DOCKERFILES_PATH = PACKAGE_PATH / "dockerfiles"
 
@@ -380,12 +385,8 @@ record it with `record_finding`.
         crashdump_dir: str,
         additional_context: str = "",
         repo_path: Optional[str] = None,
-        kernel_tree: str = "",
     ):
         self.logger = logger
-        # The git subtree to load (relative to / inside repo_path), or "" when
-        # repo_path is itself the git tree. See _build_docker_manager.
-        self.kernel_tree = kernel_tree
         self.crashdump_dir = Path(crashdump_dir).resolve()
         if not self.crashdump_dir.is_dir():
             raise NotADirectoryError(
@@ -397,9 +398,6 @@ record it with `record_finding`.
                 "to ground the fix (pass --repo-path, e.g. sandbox/kernel)."
             )
         self.additional_context = additional_context
-        # The tree the container mounts and the engineer navigates. With
-        # --kernel-tree it can be a broad workspace whose kernel git tree is a
-        # subdirectory; otherwise it is the kernel tree itself.
         self.repo_path = str(Path(repo_path).resolve())
         docker_manager = self._build_docker_manager(self.repo_path)
         self.agent = CrashdumpAgent(
@@ -413,22 +411,28 @@ record it with `record_finding`.
     def _build_docker_manager(self, repo_path: str) -> DockerManager:
         """Stand up a kernel container over `repo_path` (mirrors PatchReview's
         docker setup), so the agent's navigation tools run against the real
-        kernel source. HEAD of the kernel tree is used as the 'commit' (RCA has
-        no patch).
+        kernel source. RCA has no patch, so the 'commit' identifying the
+        container is the kernel tree HEAD (upstream) or the workspace's manifest
+        revision (downstream).
 
         Builds from CrashdumpAgent.Dockerfile (a stage-2 layer on patchwise-base)
         so the tree-sitter index daemon (ts_indexer.py) + tree-sitter packages
         are present."""
-        # The container mounts `repo_path` (what the engineer navigates); the git
-        # tree the docker prep resets is `self.kernel_tree` — a subdirectory of it
-        # (e.g. --repo-path kernel_platform --kernel-tree common) or the mount root
-        # itself when unset. This lets the engineer read across sibling projects
-        # (out-of-tree modules) while git still loads a real tree.
-        root, git_tree, git_subdir = resolve_git_tree(repo_path, self.kernel_tree)
+        # RCA has no commit under review, so it can't locate a project by a diff;
+        # the agent detects the kernel/docs tree itself.
+        self._repo_managed = is_repo_managed(repo_path)
+        if self._repo_managed:
+            # Downstream: mount the whole .repo workspace read-only. There is no
+            # single kernel .git at the root, so identify the workspace by its
+            # synced manifest revision.
+            root = Path(repo_path).resolve()
+            git_subdir = ""
+            commit_sha = Repo(str(root / ".repo" / "manifests")).head.commit.hexsha
+        else:
+            # Upstream: --repo-path is the kernel .git tree itself.
+            root, git_tree, git_subdir = resolve_git_tree(repo_path)
+            commit_sha = Repo(str(git_tree)).head.commit.hexsha
         self.git_subdir = git_subdir
-
-        repo = Repo(str(git_tree))
-        commit_sha = repo.head.commit.hexsha
         image_tag = "patchwise-crashdumpagent"
         dockerfile = _DOCKERFILES_PATH / "CrashdumpAgent.Dockerfile"
         container_name = f"patchwise-rca-{commit_sha}"
@@ -442,8 +446,7 @@ record it with `record_finding`.
         if container_name not in CONTAINERS_BUILT:
             self.logger.info(
                 "[docker] building base + crashdump image, starting kernel container "
-                f"(repo={repo_path}, kernel_tree={git_subdir or '.'}, "
-                f"commit={commit_sha[:12]})..."
+                f"(repo={repo_path}, commit={commit_sha[:12]})..."
             )
             dm.build_image(dockerfile)
             CONTAINERS_BUILT[container_name] = dm
@@ -948,9 +951,10 @@ record it with `record_finding`.
         self.manifest = self._build_manifest(artifacts)
         self.overview = self._build_overview(artifacts)
 
-        # When the kernel tree sits under a subdirectory of the mounted root
-        # (--project), tell the engineer the path prefix up front, ahead of any
-        # analyst-supplied context.
+        # Orient the engineer to the workspace layout up front, ahead of any
+        # analyst-supplied context. Downstream the whole .repo workspace is
+        # mounted with no diff, so the project list is the layout; upstream the
+        # root is the kernel tree itself.
         ctx_block = (
             self.ADDITIONAL_CONTEXT_TEMPLATE.format(
                 additional_context=self.additional_context
@@ -958,7 +962,10 @@ record it with `record_finding`.
             if self.additional_context
             else ""
         )
-        additional_context = project_layout_note(self.git_subdir) + ctx_block
+        layout_note = "" if self._repo_managed else project_layout_note(self.git_subdir)
+        additional_context = (
+            layout_note + repo_project_note(self.repo_path) + ctx_block
+        )
         shared_user = self.PROMPT_TEMPLATE.format(
             folder=str(self.crashdump_dir),
             manifest=self.manifest,
@@ -1048,7 +1055,6 @@ def run_rca_mode(args: argparse.Namespace) -> None:
         crashdump_dir=args.dump or None,
         additional_context=args.additional_context,
         repo_path=args.repo_path,
-        kernel_tree=args.kernel_tree,
     )
     report = rca.run()
     out_dir = Path(args.output_dir)
@@ -1094,15 +1100,6 @@ def main() -> None:
         ),
     )
     parser.add_argument(
-        "--kernel-tree",
-        default="",
-        help=(
-            "Kernel git subtree (has .git) when --repo-path is a broader workspace "
-            "dir; the engineer still navigates the whole --repo-path. Relative to "
-            "--repo-path or absolute. Defaults to --repo-path."
-        ),
-    )
-    parser.add_argument(
         "-o",
         "--output",
         default="",
@@ -1118,7 +1115,6 @@ def main() -> None:
         args.crashdump_dir,
         additional_context=args.additional_context,
         repo_path=args.repo_path or None,
-        kernel_tree=args.kernel_tree,
     )
     report = rca.run()
     if args.output:

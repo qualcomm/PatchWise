@@ -131,7 +131,7 @@ def review_commit(
     commit: Commit,
     repo_path: str,
     additional_context: str = "",
-    kernel_tree: str = "",
+    commit_dir: str = "",
 ) -> PatchReviewResults:
     all_reviews = {cls.__name__: cls for cls in AVAILABLE_PATCH_REVIEWS}
 
@@ -148,7 +148,7 @@ def review_commit(
     for selected_review in selected_reviews:
         logger.debug(f"Initializing review: {selected_review.__name__}")
         cur_review = selected_review(
-            repo_path, commit, additional_context, kernel_tree
+            repo_path, commit, additional_context, commit_dir
         )
 
         logger.debug(f"Running review: {selected_review.__name__}")

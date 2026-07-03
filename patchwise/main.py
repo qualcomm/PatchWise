@@ -64,15 +64,15 @@ def parse_args(config: Dict) -> argparse.Namespace:
         help="Path to the kernel workspace containing the patch(es) to review. Uses CWD if not specified. (default: CWD)",
     )
     review_group.add_argument(
-        "--kernel-tree",
+        "--commit-dir",
         default="",
         metavar="<path>",
         help=(
-            "Kernel git subtree (has .git) when --repo-path is a broader workspace "
-            "directory, e.g. --repo-path .../kernel_platform --kernel-tree common. "
-            "Relative to --repo-path or absolute, and inside it. The agent navigates "
-            "the whole --repo-path (so it can read out-of-tree modules) while git "
-            "operations and the diff use this subtree. Defaults to --repo-path."
+            "Git subtree (has .git) holding the commit under review when --repo-path "
+            "is a broader workspace, e.g. --repo-path .../kp6.0 --commit-dir "
+            "kernel_platform/soc-repo. Relative to --repo-path or absolute, and "
+            "inside it. The agent navigates the whole --repo-path while the diff and "
+            "the reviewed commit use this subtree. Defaults to --repo-path."
         ),
     )
 
@@ -159,10 +159,10 @@ def get_commits(repo: Repo, commits: list[str]) -> list[Commit]:
 def run_local_mode(args: argparse.Namespace) -> None:
     reviews = get_selected_reviews_from_args(args)
 
-    # With --kernel-tree, --repo-path is a broader workspace and the commits live
-    # in the kernel git subtree; resolve it so commit lookup uses the right repo.
+    # With --commit-dir, --repo-path is a broader workspace and the commit lives
+    # in a subtree; resolve it so commit lookup uses the right repo.
     from patchwise.utils.repo_workspace import resolve_git_tree
-    _, git_tree, _ = resolve_git_tree(args.repo_path, args.kernel_tree)
+    _, git_tree, _ = resolve_git_tree(args.repo_path, args.commit_dir)
     repo = Repo(str(git_tree))
     commits = get_commits(repo, args.commits)
 
@@ -174,7 +174,7 @@ def run_local_mode(args: argparse.Namespace) -> None:
             commit,
             args.repo_path,
             additional_context=args.additional_context,
-            kernel_tree=args.kernel_tree,
+            commit_dir=args.commit_dir,
         )
 
         fix_results = fix_reported_issues(results) if args.fix else {}

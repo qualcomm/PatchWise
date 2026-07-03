@@ -30,14 +30,12 @@ class PatchReview(abc.ABC):
         repo_path: str,
         commit: Commit,
         additional_context: str = "",
-        kernel_tree: str = "",
+        commit_dir: str = "",
     ):
         self.logger = self.get_logger()
-        # The container mounts `repo_path` (what the agent navigates); the git tree
-        # holding the patch is `kernel_tree` — a subdirectory of it when reviewing
-        # inside a broader workspace, or the mount root itself when unset. `self.repo`
-        # is the git tree (diff/commit), `self.git_subdir` its path within the mount.
-        mount_root, git_tree, self.git_subdir = resolve_git_tree(repo_path, kernel_tree)
+        # `self.repo` is the git tree holding the commit under review (diff source);
+        # `self.git_subdir` is its path within the mounted --repo-path.
+        mount_root, git_tree, self.git_subdir = resolve_git_tree(repo_path, commit_dir)
         self.repo = Repo(str(git_tree))
         self.commit = commit
         self.additional_context = additional_context
