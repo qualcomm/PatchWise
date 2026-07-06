@@ -125,6 +125,15 @@ class RootCauseAnalysis:
     # is accepted. Override: PATCHWISE_MAINTAINER_ITER_CAP.
     MAINTAINER_ITER_CAP = 250
 
+    # Each role gets its OWN token share (cumulative across the engineer's initial
+    # run + resumes, and across all maintainer rounds) rather than one shared pool
+    # the heavy engineer would drain before the maintainer runs. The engineer both
+    # investigates and re-investigates every round, so it carries the larger share.
+    # Override: PATCHWISE_ENGINEER_TOKEN_BUDGET / PATCHWISE_MAINTAINER_TOKEN_BUDGET
+    # (0/none disables that role's cap).
+    ENGINEER_TOKEN_BUDGET = 20_000_000
+    MAINTAINER_TOKEN_BUDGET = 10_000_000
+
     # Tool split — the heart of this design
     ENGINEER_TOOLS = [
         "list_crash_files", "read_crash_file", "search_crash",
@@ -140,11 +149,6 @@ class RootCauseAnalysis:
         "git_log", "git_show", "git_cat_file",
         "get_subsystem_review_guide",
     ]
-
-    # Per-analysis token ceiling (runaway backstop). Override with
-    # PATCHWISE_AI_TOKEN_BUDGET (0/none disables); per-loop iteration caps bound
-    # spend even when this is disabled.
-    DEFAULT_TOKEN_BUDGET = 50_000_000  # TODO: Revise
 
     # shared prompt fragments
 
@@ -435,7 +439,11 @@ record it with `record_finding`.
         self.git_subdir = git_subdir
         image_tag = "patchwise-crashdumpagent"
         dockerfile = _DOCKERFILES_PATH / "CrashdumpAgent.Dockerfile"
-        container_name = f"patchwise-rca-{commit_sha}"
+        # Stamp the container name so concurrent RCA runs over the same tree don't
+        # collide on one container (and its derived overlay/backing volumes). PID
+        # guards against two runs landing in the same second.
+        stamp = f"{datetime.datetime.now():%Y%m%d%H%M%S}-{os.getpid()}"
+        container_name = f"patchwise-rca-{commit_sha[:12]}-{stamp}"
         dm = DockerManager(
             image_tag=image_tag,
             container_name=container_name,
@@ -690,6 +698,26 @@ record it with `record_finding`.
         return int(raw) if raw and raw.isdigit() and int(raw) > 0 else self.MAINTAINER_ITER_CAP
 
     @staticmethod
+    def _token_budget_env(var: str, default: int) -> Optional[int]:
+        # 0/none disables the cap (returns None); unset falls back to the default.
+        raw = os.environ.get(var)
+        if raw is None:
+            return default
+        if raw.strip().lower() in ("0", "none", ""):
+            return None
+        return int(raw)
+
+    def _engineer_token_budget(self) -> Optional[int]:
+        return self._token_budget_env(
+            "PATCHWISE_ENGINEER_TOKEN_BUDGET", self.ENGINEER_TOKEN_BUDGET
+        )
+
+    def _maintainer_token_budget(self) -> Optional[int]:
+        return self._token_budget_env(
+            "PATCHWISE_MAINTAINER_TOKEN_BUDGET", self.MAINTAINER_TOKEN_BUDGET
+        )
+
+    @staticmethod
     def _read_findings(findings_path: Path, result: str) -> str:
         """Prefer the engineer's concluding message; fall back to the streamed
         record_finding file only if it returned nothing."""
@@ -779,10 +807,11 @@ record it with `record_finding`.
         conversation (full history retained) with the maintainer's questions
         appended, so it re-investigates and answers them.
 
-        The engineer may use up to `EXEC_ITER_CAP` (500) iterations TOTAL across its
-        initial run and every resume; the maintainer draws from its own
-        `MAINTAINER_ITER_CAP` (100). Stops when the maintainer accepts, either budget is
-        spent, or the token budget is exhausted. Returns (final answer text, all
+        The engineer and the maintainer each draw from their own iteration cap
+        (`EXEC_ITER_CAP` / `MAINTAINER_ITER_CAP`) AND their own token share
+        (`ENGINEER_TOKEN_BUDGET` / `MAINTAINER_TOKEN_BUDGET`), each cumulative
+        across that role's runs. Stops when the maintainer accepts or any of the
+        acting role's budgets is spent. Returns (final answer text, all
         verdicts)."""
         findings_path = self.agent.findings_path_for("engineer")
         findings_path.unlink(missing_ok=True)
@@ -791,10 +820,17 @@ record it with `record_finding`.
             {"role": "user", "content": self.EXECUTION_DIRECTIVE + shared_user},
         ]
         remaining = self._exec_iter_cap()  # engineer's TOTAL iteration budget
+        engineer_tokens = self._engineer_token_budget()  # TOTAL token share; None = uncapped
 
         def _run_engineer(label: str) -> str:
-            nonlocal remaining
+            nonlocal remaining, engineer_tokens
             self.agent.current_label = label
+            tokens_before = self.agent.tokens_used
+            # Cap this run at the engineer's remaining share, measured from where
+            # its cumulative spend stands now (the maintainer spends in between).
+            self.agent.token_budget = (
+                tokens_before + engineer_tokens if engineer_tokens is not None else None
+            )
             self.logger.info(f"[engineer] {label}: up to {remaining} iteration(s) left.")
             out = self.agent.run_agent_loop(
                 messages,
@@ -805,6 +841,8 @@ record it with `record_finding`.
             )
             used = max(1, self.agent.current_iteration)
             remaining -= used
+            if engineer_tokens is not None:
+                engineer_tokens = max(0, engineer_tokens - (self.agent.tokens_used - tokens_before))
             self.logger.info(f"[engineer] {label}: used {used}, {remaining} left.")
             return out
 
@@ -816,20 +854,32 @@ record it with `record_finding`.
         vround = 0
         maintainer_messages: List[dict] = []
         maintainer_remaining = self._maintainer_iter_cap()
+        maintainer_tokens = self._maintainer_token_budget()  # TOTAL token share; None = uncapped
 
-        # Only challenge while BOTH the engineer still has iterations to act on a
-        # refutation AND the maintainer has iterations to judge. Once the engineer's
-        # budget is spent it can't resume, so keep its final answer as-is; once the
-        # maintainer's budget is spent, accept the answer.
-        while remaining > 0 and maintainer_remaining > 0 and self.agent.budget_remaining():
+        # Challenge only while the acting role still has budget: the engineer needs
+        # iterations and tokens left to act on a refutation, the maintainer needs
+        # them to judge. When either role is spent, keep the engineer's current
+        # answer.
+        while (
+            remaining > 0
+            and maintainer_remaining > 0
+            and (engineer_tokens is None or engineer_tokens > 0)
+            and (maintainer_tokens is None or maintainer_tokens > 0)
+        ):
             vround += 1
             self.logger.info(
                 f"[maintainer] round {vround}: judging answer "
                 f"({len(answer)} chars): {self._oneline(answer, 280)}"
             )
+            tokens_before = self.agent.tokens_used
+            self.agent.token_budget = (
+                tokens_before + maintainer_tokens if maintainer_tokens is not None else None
+            )
             verdict = self._maintainer_phase(maintainer_messages, answer, maintainer_remaining, vround)
             maintainer_used = max(1, self.agent.current_iteration)
             maintainer_remaining -= maintainer_used
+            if maintainer_tokens is not None:
+                maintainer_tokens = max(0, maintainer_tokens - (self.agent.tokens_used - tokens_before))
             refuted = self._is_refuted(verdict)
             questions = verdict.get("questions") or []
             round_tools = (
@@ -890,17 +940,7 @@ record it with `record_finding`.
         self._dump("maintainer_verdicts.json", json.dumps(verdicts, indent=2))
         return answer, verdicts
 
-    # budget + observability
-
-    def _configure_budget(self) -> None:
-        raw = os.environ.get("PATCHWISE_AI_TOKEN_BUDGET")
-        if raw is None:
-            self.agent.token_budget = self.DEFAULT_TOKEN_BUDGET
-        elif raw.strip().lower() in ("0", "none", ""):
-            self.agent.token_budget = None
-        else:
-            self.agent.token_budget = int(raw)
-        self.agent.tokens_used = 0
+    # observability
 
     def _dump(self, name: str, content: str) -> None:
         with open(os.path.join(SANDBOX_PATH, name), "w") as f:
@@ -973,7 +1013,6 @@ record it with `record_finding`.
             additional_context=additional_context,
         )
         self._dump("prompt.md", shared_user)
-        self._configure_budget()
 
         events.emit(events.RUN_START, pipeline="rca",
                     target=str(self.crashdump_dir), model=self.agent.model)
@@ -1019,7 +1058,8 @@ record it with `record_finding`.
                 "chars": len(answer),
             },
             "tokens_used": self.agent.tokens_used,
-            "token_budget": self.agent.token_budget,
+            "engineer_token_budget": self._engineer_token_budget(),
+            "maintainer_token_budget": self._maintainer_token_budget(),
             "peak_prompt_tokens": self.agent.peak_prompt_tokens,
         }
         self._dump("observability.json", json.dumps(observability, indent=2))

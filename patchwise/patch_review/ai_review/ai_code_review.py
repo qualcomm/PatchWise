@@ -61,10 +61,6 @@ class AiCodeReview(AiReview):
     # Reviewer loads guides and streams findings; the filter records verdicts.
     EXEC_TOOLS = NAVIGATION_TOOLS + ["get_subsystem_review_guide", "record_finding"]
     FP_FILTER_TOOLS = NAVIGATION_TOOLS + ["get_subsystem_review_guide", "record_verdict"]
-    # Per-review token ceiling (runaway backstop). Override with
-    # PATCHWISE_AI_TOKEN_BUDGET (set to 0/none to disable). The per-loop
-    # iteration caps bound spend even when this is disabled.
-    DEFAULT_TOKEN_BUDGET = 15_000_000
 
     PROMPT_TEMPLATE = """
 # Patch under review
@@ -758,8 +754,6 @@ finding with record_verdict as you work through them.
         # Critic critiques; planner revises. Repeat until the critic has no
         # material feedback (convergence) or the iteration cap is hit.
         for round_no in range(1, self.MAX_PLAN_ITERATIONS + 1):
-            if not self.agent.budget_remaining():
-                break
             self.agent.current_label = f"critic:r{round_no}"
             events.emit(events.PHASE, name="critique")
             verdict = self._critique_plan(critic_loaded, commit_text, tasks)
@@ -879,13 +873,10 @@ finding with record_verdict as you work through them.
         self.logger.info(f"[exec] reviewing {n} unit(s) sequentially.")
 
         # Execution is single-unit by invariant: there is exactly one merged
-        # unit covering every analysis dimension. The loop and budget check are
-        # kept general, but n is always 1.
+        # unit covering every analysis dimension. The loop is kept general, but
+        # n is always 1.
         results: List[Tuple[Dict[str, Any], str]] = []
         for idx, task in enumerate(tasks, 1):
-            if not self.agent.budget_remaining():
-                self.logger.warning("[exec] token budget exhausted; stopping execution.")
-                break
             try:
                 _, t, text = self._run_unit(idx, n, task, shared_user)
             except Exception as e:
@@ -1065,16 +1056,6 @@ finding with record_verdict as you work through them.
         super().setup()
         self.kernel_path = Path(self.repo.working_dir)
 
-    def _configure_budget(self) -> None:
-        raw = os.environ.get("PATCHWISE_AI_TOKEN_BUDGET")
-        if raw is None:
-            self.agent.token_budget = self.DEFAULT_TOKEN_BUDGET
-        elif raw.strip().lower() in ("0", "none", ""):
-            self.agent.token_budget = None
-        else:
-            self.agent.token_budget = int(raw)
-        self.agent.tokens_used = 0
-
     def _dump(self, name: str, content: str) -> None:
         with open(os.path.join(SANDBOX_PATH, name), "w") as f:
             f.write(content)
@@ -1099,7 +1080,6 @@ finding with record_verdict as you work through them.
             additional_context=additional_context,
         )
         self._dump("prompt.md", shared_user)
-        self._configure_budget()
 
         events.emit(
             events.RUN_START, pipeline="review",
@@ -1121,21 +1101,10 @@ finding with record_verdict as you work through them.
             tasks = [self._merge_units(tasks)]
             self.logger.info("[plan] collapsed to 1 combined execution unit.")
 
-        # Worker-only token budget: bound the EXECUTION phase alone (the
-        # planner/critic above are not charged against it). Lifted before the
-        # filter so consolidation isn't starved.
-        worker_budget = os.environ.get("PATCHWISE_WORKER_TOKEN_BUDGET")
-        prev_budget = self.agent.token_budget
-        if worker_budget and worker_budget.isdigit():
-            self.agent.token_budget = self.agent.tokens_used + int(worker_budget)
-            self.logger.info(
-                f"[exec] worker cumulative-token budget: {worker_budget} "
-                f"(ceiling {self.agent.token_budget})."
-            )
         # Context-window guard: bound the worker's per-request INPUT size so it
-        # stays under the model's context limit (e.g. <1M). This is the right
-        # knob for "don't overflow context" — distinct from the cumulative
-        # cost budget above.
+        # stays under the model's context limit (e.g. <1M). This is a per-request
+        # safety so a long execution phase can't overflow the model's context;
+        # it is not a total token budget.
         worker_ctx = os.environ.get("PATCHWISE_WORKER_CONTEXT_LIMIT")
         if worker_ctx and worker_ctx.isdigit():
             self.agent.context_token_limit = int(worker_ctx)
@@ -1144,8 +1113,6 @@ finding with record_verdict as you work through them.
         # Phase 2: EXECUTION (single combined unit)
         events.emit(events.PHASE, name="execute")
         findings = self._execution_phase(tasks, shared_user)
-        if worker_budget and worker_budget.isdigit():
-            self.agent.token_budget = prev_budget  # restore for the filter
         self.agent.context_token_limit = None  # filter not context-bounded
         self._dump(
             "findings.md",
@@ -1175,7 +1142,6 @@ finding with record_verdict as you work through them.
             ],
             "issues_after_filter": kept_blocks,
             "tokens_used": self.agent.tokens_used,
-            "token_budget": self.agent.token_budget,
             "peak_prompt_tokens": self.agent.peak_prompt_tokens,
         }
         self._dump("observability.json", json.dumps(observability, indent=2))

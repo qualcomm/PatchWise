@@ -35,6 +35,11 @@ DEFAULT_MODEL = "openai/Pro"
 DEFAULT_API_BASE = "https://api.openai.com/v1"
 AGENT_MAX_ITERATIONS = 50
 
+# Per-completion output-token cap. A 4096 default may truncate a full final
+# synthesis (root cause + unified diff) mid-generation and leave
+# run_agent_loop with an empty answer.
+AGENT_MAX_OUTPUT_TOKENS = int(os.environ.get("PATCHWISE_MAX_OUTPUT_TOKENS") or 16384)
+
 # Container-side tree-sitter indexer path
 TS_INDEXER_PATH = "/home/patchwise/bin/ts_indexer.py"
 
@@ -89,11 +94,12 @@ class Agent:
         self.ts_daemon: Optional[subprocess.Popen[Any]] = None
         self.seen_files: Set[str] = set()
 
-        # Per-review token ceiling shared across every run_agent_loop call on this
-        # Agent (the multi-phase review fans out many loops). None means unbounded;
-        # iteration caps still bound each loop. Aborts gracefully when exhausted.
-        self.token_budget: Optional[int] = None
+        # Summed for observability; there is no run-wide token cap.
         self.tokens_used: int = 0
+
+        # Per-phase ceiling on tokens_used, deliberately not a run-wide total: a
+        # shared total lets a heavy phase starve a later one. None disables it.
+        self.token_budget: Optional[int] = None
 
         # Context-window guard (distinct from token_budget, which is cumulative
         # cost). context_token_limit caps the *per-request input size* — the
@@ -142,8 +148,25 @@ class Agent:
         return response
 
     def budget_remaining(self) -> bool:
-        """True while the per-review token budget is unset or not yet exhausted."""
+        """True while the current phase's token ceiling is unset or not yet hit."""
         return self.token_budget is None or self.tokens_used < self.token_budget
+
+    def _log_final_response(self, response: Any, content: str) -> None:
+        """Record the terminating turn's finish_reason + token usage so an empty
+        final answer is diagnosable."""
+        choice = response.choices[0]
+        usage = getattr(response, "usage", None)
+        reasoning = getattr(choice.message, "reasoning_content", None) or ""
+        detail = (
+            f"[{self.current_label}] final answer: "
+            f"finish_reason={getattr(choice, 'finish_reason', None)}, "
+            f"content_chars={len(content)}, reasoning_chars={len(reasoning)}, "
+            f"completion_tokens={getattr(usage, 'completion_tokens', None)}"
+        )
+        if content.strip():
+            self.logger.info(detail)
+        else:
+            self.logger.warning(f"empty final answer — {detail}")
 
     # TODO: rename to loop()
     def run_agent_loop(
@@ -188,6 +211,7 @@ class Agent:
         completion_kwargs: dict = {
             "messages": messages,
             "stream": False,
+            "max_tokens": AGENT_MAX_OUTPUT_TOKENS,
         }
 
         if tools:
@@ -209,7 +233,7 @@ class Agent:
 
             if not self.budget_remaining():
                 self.logger.warning(
-                    f"Token budget exhausted ({self.tokens_used}/{self.token_budget}). "
+                    f"Phase token budget hit ({self.tokens_used}/{self.token_budget}). "
                     "Forcing final response without tools."
                 )
                 break
@@ -240,7 +264,9 @@ class Agent:
             messages.append(msg.model_dump())
 
             if not msg.tool_calls:
-                return msg.content or ""
+                content = msg.content or ""
+                self._log_final_response(response, content)
+                return content
 
             if force_tool_usage and iteration == 1:
                 completion_kwargs["tool_choice"] = "auto"
@@ -290,7 +316,9 @@ class Agent:
         )
 
         response = self.completion_with_retry(**completion_kwargs)
-        return response.choices[0].message.content or ""
+        content = response.choices[0].message.content or ""
+        self._log_final_response(response, content)
+        return content
 
     # TODO: read from docker container / use docker_manager.read_file()
     def _read_file_safely(self, file_path: str) -> Optional[str]:
