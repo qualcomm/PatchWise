@@ -12,22 +12,22 @@ from patchwise.patch_review.decorators import register_fix
 class AiPatchFix(AiFix):
     """AI-powered patch fix based on AI code review findings.
 
-    The AI uses the write_file_str / write_file tools to edit files directly
-    inside the Docker container. Those working-tree edits are then folded
-    into HEAD via ``git commit --amend`` and emitted as an mbox patch via
+    The AI uses the write_file_str tool to edit files directly inside the
+    Docker container. Those working-tree edits are then folded into HEAD via
+    ``git commit --amend`` and emitted as an mbox patch via
     ``git format-patch``.
 
     Returns patch fix output.
     """
 
     # Navigate the source, then apply the review's fixes with the write tools.
-    FIX_TOOLS = NAVIGATION_TOOLS + ["write_file_str", "write_file"]
+    FIX_TOOLS = NAVIGATION_TOOLS + ["write_file_str"]
 
     PATCH_SUGGEST_PROMPT_TEMPLATE = """
 # User Prompt
 
 The following patch diff has been reviewed by a Linux kernel maintainer.
-Use the write tools to apply fixes that address the reviewer's feedback
+Use the write tool to apply fixes that address the reviewer's feedback
 directly to the source files in the kernel tree.
 
 ## Commit text
@@ -52,14 +52,13 @@ directly to the source files in the kernel tree.
 
 You will receive a patch diff, its commit text, and code review feedback.
 Use the read-only tools to explore the kernel source as needed, then use
-write_file_str (preferred) or write_file to apply the corrections.
+write_file_str to apply the corrections.
 
 The review identifies concrete problems. Your job is to address each one
 with a targeted edit.
 
 ## Rules
 
-- Prefer write_file_str (exact-text match) over write_file (line range).
 - Make small, targeted changes — one logical fix per tool call.
 - Only change lines necessary to address the review feedback.
 - Do not redesign or extend the patch beyond what the review requests.

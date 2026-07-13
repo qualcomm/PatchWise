@@ -38,13 +38,13 @@ class CheckpatchFixer(AiFix):
     )
 
     # checkpatch reports file:line, so edit and re-verify; no navigation needed.
-    FIX_TOOLS = ["read_file", "run_checkpatch", "write_file_str", "write_file"]
+    FIX_TOOLS = ["read_file", "run_checkpatch", "write_file_str"]
 
     """AI-powered checkpatch fixer based on checkpatch findings.
 
     This fixer uses a two-stage approach:
     1. Apply script-based fixes for common issues (whitespace, SPDX, etc.)
-    2. Use AI with write_file_str/write_file tools AND verification tools
+    2. Use AI with write_file_str tool AND verification tools
     
     The AI can run checkpatch to verify fixes, enabling self-correction.
     
@@ -60,7 +60,7 @@ class CheckpatchFixer(AiFix):
 
 The following patch diff has checkpatch errors and warnings that need to be fixed.
 Script-based fixes have already been applied for simple issues.
-Use the write tools to apply fixes for the remaining checkpatch issues
+Use the write tool to apply fixes for the remaining checkpatch issues
 directly to the source files in the kernel tree.
 
 **IMPORTANT**: After making changes, use the `run_checkpatch` tool to verify 
@@ -82,7 +82,7 @@ that the issues are fixed. If issues remain, iterate and fix them.
 
 ## Available Tools
 
-1. **write_file_str** / **write_file**: Edit source files
+1. **write_file_str**: Edit source files
 2. **run_checkpatch**: Verify your fixes by running checkpatch
 3. **read_file**: Read file contents to understand context
 
@@ -107,14 +107,13 @@ You will receive a patch diff, its commit text, and remaining checkpatch issues.
 Script-based fixes have already been applied for simple issues.
 
 Use the read-only tools to explore the kernel source as needed, then use
-write_file_str (preferred) or write_file to apply the corrections.
+write_file_str to apply the corrections.
 
-**CRITICAL**: After making changes, use the `run_checkpatch` tool to verify 
+**CRITICAL**: After making changes, use the `run_checkpatch` tool to verify
 that your fixes actually resolved the issues. This is a self-correction loop.
 
 ## Rules
 
-- Prefer write_file_str (exact-text match) over write_file (line range).
 - Make small, targeted changes — one logical fix per tool call.
 - **Always verify** your fixes with `run_checkpatch` after making changes.
 - If checkpatch still reports issues, analyze and fix them iteratively.
@@ -126,7 +125,7 @@ that your fixes actually resolved the issues. This is a self-correction loop.
 
 ## Self-Correction Loop
 
-1. Make a fix using write_file_str/write_file
+1. Make a fix using write_file_str
 2. Run `run_checkpatch` to verify
 3. If issues remain:
    - Analyze the remaining issues
