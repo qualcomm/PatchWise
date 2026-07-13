@@ -38,7 +38,14 @@ where = ["."]
 include = ["patchwise*"]
 
 [tool.setuptools.package-data]
-patchwise = ["patches/**", "default_config.yaml", "dockerfiles/*"]
+patchwise = [
+    "patches/**",
+    "default_config.yaml",
+    "dockerfiles/*",
+    "../thirdparty/review-prompts/kernel/technical-patterns.md",
+    "../thirdparty/review-prompts/kernel/false-positive-guide.md",
+    "../thirdparty/review-prompts/kernel/subsystem/*.md",
+]
 
 [tool.pytest.ini_options]
 norecursedirs = ["tests/linux", ".venv", ".git"]
