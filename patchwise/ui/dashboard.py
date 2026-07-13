@@ -306,8 +306,8 @@ class Dashboard:
             s = len(task.get("symbols") or [])
             meta = f"  ({n}f/{s}s)" if (n or s) else ""
             t.add_row(str(task.get("id", "")),
-                      _oneline(task.get("dimension", ""), 16),
-                      Text.assemble((_oneline(task.get("focus", ""), 76), "default"),
+                      _oneline(task.get("dimension", "")),
+                      Text.assemble((_oneline(task.get("focus", "")), "default"),
                                     (meta, "dim")))
         return t
 

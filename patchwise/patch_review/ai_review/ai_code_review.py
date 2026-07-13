@@ -53,7 +53,6 @@ class AiCodeReview(AiReview):
     """
 
     MAX_PLAN_ITERATIONS = 10
-    PLAN_ITER_CAP = 12  # TODO: remove as the planner does not loop
     CRITIC_ITER_CAP = 10
     EXEC_ITER_CAP = 100
     FP_ITER_CAP = 50
@@ -608,6 +607,18 @@ finding with record_verdict as you work through them.
             raise RuntimeError("No tasks returned by planner.")
         return norm
 
+    def _max_plan_iterations(self) -> int:
+        raw = os.environ.get("PATCHWISE_MAX_PLAN_ITERATIONS")
+        return int(raw) if raw and raw.isdigit() and int(raw) > 0 else self.MAX_PLAN_ITERATIONS
+
+    def _critic_iter_cap(self) -> int:
+        raw = os.environ.get("PATCHWISE_CRITIC_ITER_CAP")
+        return int(raw) if raw and raw.isdigit() and int(raw) > 0 else self.CRITIC_ITER_CAP
+
+    def _fp_iter_cap(self) -> int:
+        raw = os.environ.get("PATCHWISE_FP_ITER_CAP")
+        return int(raw) if raw and raw.isdigit() and int(raw) > 0 else self.FP_ITER_CAP
+
     def _critique_plan(
         self, critic_loaded: OrderedDict[str, str], commit_text: str,
         tasks: List[Dict[str, Any]]
@@ -645,7 +656,7 @@ finding with record_verdict as you work through them.
         raw = self.agent.run_agent_loop(
             critic_messages,
             force_tool_usage=False,
-            max_iterations=self.CRITIC_ITER_CAP,
+            max_iterations=self._critic_iter_cap(),
             allowed_tools=[
                 "get_subsystem_review_guide",
                 "read_doc",
@@ -713,7 +724,6 @@ finding with record_verdict as you work through them.
         raw = self.agent.run_agent_loop(
             plan_messages,
             force_tool_usage=False,
-            max_iterations=self.PLAN_ITER_CAP,
             use_tools=False,
         )
         revised = self._finalize_json(plan_messages, raw, "revised unit list (a JSON array)")
@@ -731,7 +741,6 @@ finding with record_verdict as you work through them.
         raw = self.agent.run_agent_loop(
             plan_messages,
             force_tool_usage=False,
-            max_iterations=self.PLAN_ITER_CAP,
             use_tools=False,
         )
         tasks = self._finalize_json(plan_messages, raw, "unit list (a JSON array)")
@@ -753,7 +762,7 @@ finding with record_verdict as you work through them.
 
         # Critic critiques; planner revises. Repeat until the critic has no
         # material feedback (convergence) or the iteration cap is hit.
-        for round_no in range(1, self.MAX_PLAN_ITERATIONS + 1):
+        for round_no in range(1, self._max_plan_iterations() + 1):
             self.agent.current_label = f"critic:r{round_no}"
             events.emit(events.PHASE, name="critique")
             verdict = self._critique_plan(critic_loaded, commit_text, tasks)
@@ -981,7 +990,7 @@ finding with record_verdict as you work through them.
         raw = self.agent.run_agent_loop(
             fp_messages,
             force_tool_usage=False,
-            max_iterations=self.FP_ITER_CAP,
+            max_iterations=self._fp_iter_cap(),
             allowed_tools=self.FP_FILTER_TOOLS,
         )
 

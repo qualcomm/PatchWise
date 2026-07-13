@@ -29,7 +29,7 @@
 - **Flexible Review Selection**: Choose which review checks to run.
 - **Rich Logging**: Colorized and file-based logging for easy debugging.
 - **LLM Integration**: Uses Artificial Intelligence for commit message analysis and suggestions.
-- **AI Code Review**: Leverages artificial intelligence to provide insights on code quality and potential issues. Integrated with Language Server Protocol (LSP) for context-aware code review. Support for multiple LLMs and providers, including OpenAI.
+- **AI Code Review**: Leverages artificial intelligence to provide insights on code quality and potential issues. Uses tree-sitter + ripgrep for context-aware code navigation. Support for multiple LLMs and providers, including OpenAI.
 - **Crashdump Root-Cause Analysis** (`--rca`): Given a kernel crashdump folder (dmesg + parser output) instead of a patch, an *engineer* agent investigates from the evidence and proposes a single root cause and a fix (as a kernel-source diff), and a *maintainer* agent adversarially reviews that conclusion until it holds. Seed it with known debugging via `--additional-context`.
 
 ---
@@ -108,86 +108,41 @@
 
 ### AI Code Review pipeline
 
-`AiCodeReview` runs as three phases on **one** shared `Agent` (the tree-sitter
-daemon, the per-commit container, and the `seen_files` ranking state start once
-and are reused). Code navigation is pure tree-sitter + ripgrep — the kernel is
-never built — so the review sees every `#ifdef` variant, not just what one
-defconfig compiles. Pipeline: **PLAN → EXEC → FILTER**, then a cleanup render.
+`AiCodeReview` reviews a diff in three phases: **PLAN** (a planner ↔ critic
+loop splits the diff into analysis angles), **EXEC** (a focused reviewer works
+those angles as a checklist against the real code), and **FILTER** (each
+finding is proven-or-dropped as a false positive) before rendering the final
+inline review.
 
 ```mermaid
-flowchart TD
-    START([run]) --> PROMPT["build shared_user prompt<br/>(commit_text + diff + context)"]
+flowchart LR
+    A["Diff + context"] --> B
 
-    %% ---------------- PHASE 1: PLAN ----------------
-    PROMPT --> PLANNER
-
-    subgraph PLAN["Phase 1 — PLAN (planner ↔ critic loop)"]
-        direction TB
-        PLANNER["<b>Planner</b><br/>splits diff into per-dimension units<br/>no taxonomy / no guides / no docs<br/>(tools off)"]
-        PLANNER --> CRITIC
-
-        CRITIC{"<b>Critic</b> (fresh each round)<br/>holds taxonomy + subsystem index<br/>+ Documentation/ + coding-style<br/>tools: get_subsystem_review_guide, read_doc<br/><i>no code-search tools</i>"}
-
-        CRITIC -->|"material == true<br/>& feedback present"| REVISE["<b>Planner revises</b><br/>(same conversation)<br/>add / merge / split / rescope"]
-        REVISE --> CRITIC
-
-        CRITIC -->|"not material<br/>or no feedback<br/>or cap hit / budget out"| DONE_PLAN["plan converged"]
+    subgraph PLAN["PLAN"]
+        direction LR
+        P["Planner"] --> C["Critic"]
+        C -->|feedback| P
     end
 
-    DONE_PLAN --> NORM["_normalize_tasks<br/>(assign ids)"]
-    NORM --> MERGE["<b>_merge_units</b><br/>collapse ALL units → 1 combined unit<br/>(union files/symbols; angles as checklist)"]
-
-    %% ---------------- PHASE 2: EXEC ----------------
-    MERGE --> EXEC
-
-    subgraph EXEC_P["Phase 2 — EXECUTION (single combined unit)"]
-        direction TB
-        EXEC["<b>Focused Reviewer</b> (read-only)<br/>works every angle as a checklist<br/>traces real code; loads matching guides<br/>tools: NAV + get_subsystem_review_guide + record_finding"]
-        EXEC -->|"streams findings"| FINDINGS[("record_finding<br/>→ findings file")]
-    end
-
-    FINDINGS --> ANY{"any findings?"}
-    ANY -->|no| EMPTY["return '' (no issues)"]
-
-    %% ---------------- PHASE 3: FILTER ----------------
-    ANY -->|yes| FILTER
-
-    subgraph FILTER_P["Phase 3 — FALSE-POSITIVE FILTER (prove-or-drop)"]
-        direction TB
-        FILTER["<b>FP Filter</b><br/>judge each finding, keep by default<br/>rate impact high/medium/low<br/>tools: NAV + get_subsystem_review_guide + record_verdict"]
-        FILTER -->|"one verdict per finding"| VERDICTS[("record_verdict<br/>→ verdicts file")]
-    end
-
-    VERDICTS --> GATE{"_is_dropped?<br/>proven drop (drop verdict<br/>+ concrete proof ≥10 chars)<br/><b>AND</b> impact not high"}
-    GATE -->|yes| DROP["drop finding"]
-    GATE -->|"no — kept"| KEEP["keep finding"]
-    GATE -->|"proven-drop BUT high-impact<br/>(recall floor)"| FLOOR["keep, prefix<br/>[likely false positive]"]
-
-    KEEP --> CLEANUP
-    FLOOR --> CLEANUP
-
-    CLEANUP["<b>format_chat_response</b><br/>cleanup pass → plaintext inline review"] --> OUT([final inline review])
+    B(( )) --> P
+    C -->|converged| D["EXEC\n(focused review)"]
+    D --> E["FILTER\n(drop false positives)"]
+    E --> F(["Inline review"])
 ```
 
-#### Key invariants & caps
+Each phase has its own iteration budget (a heavy phase can't starve a later
+one), each overridable via env:
 
-| Phase | Iteration cap | Tools | Notes |
-|-------|---------------|-------|-------|
-| Planner | `PLAN_ITER_CAP = 12` | none (`use_tools=False`) | example-free; no taxonomy/guides/docs |
-| Critic loop | `MAX_PLAN_ITERATIONS = 10` rounds, `CRITIC_ITER_CAP = 10`/round | `get_subsystem_review_guide`, `read_doc` | fresh conversation each round; `critic_loaded` refs pasted forward; critic gives feedback only, never edits the list |
-| Execution | `EXEC_ITER_CAP = 100` (env `PATCHWISE_EXEC_ITER_CAP`) | `NAVIGATION_TOOLS` + `get_subsystem_review_guide` + `record_finding` | **always exactly one merged unit** (invariant); read-only — no `record_verdict`, no `run_checkpatch`, no writes |
-| FP filter | `FP_ITER_CAP = 50` | `NAVIGATION_TOOLS` + `get_subsystem_review_guide` + `record_verdict` | prove-or-drop; unproven drop is kept |
+| Phase | Default cap | Override env |
+|-------|-------------|---------------|
+| Critic loop | `MAX_PLAN_ITERATIONS = 10` rounds | `PATCHWISE_MAX_PLAN_ITERATIONS` |
+| Critic (per round) | `CRITIC_ITER_CAP = 10` | `PATCHWISE_CRITIC_ITER_CAP` |
+| Execution | `EXEC_ITER_CAP = 100` | `PATCHWISE_EXEC_ITER_CAP` |
+| FP filter | `FP_ITER_CAP = 50` | `PATCHWISE_FP_ITER_CAP` |
 
-- **No run-wide token cap:** each phase is bounded by its own iteration cap
-  (above); there is deliberately no single total-token budget spanning the run (it
-  would let a heavy phase starve a later one). Total `tokens_used` and
-  `peak_prompt_tokens` are still summed for observability. The execution phase can
-  optionally be held under the model's context window with
-  `PATCHWISE_WORKER_CONTEXT_LIMIT` (a per-request input-size guard, not a budget).
-- **Drop gate (`_is_dropped`):** a finding leaves the review only if it is a *proven* false positive (drop verdict + proof ≥10 chars) **and** its impact is not `high`. Missing/garbled impact defaults to high → kept.
-- **Recall floor:** a high-impact finding the filter proved-to-drop is kept anyway, prefixed `[likely false positive]` (proof retained in `fp_verdicts.json`).
-- **No-verdict fallback:** if the filter records no verdicts, all findings are kept.
-- **Artifacts dumped to `SANDBOX_PATH`:** `prompt.md`, `plan_evolution.json`, `plan.json`, `findings.md`, `fp_verdicts.json`, `observability.json`.
+Artifacts land in `SANDBOX_PATH`:
+`prompt.md`, `plan.json`, `findings.md`, `fp_verdicts.json`,
+`observability.json`.
 
 ### Crashdump Root-Cause Analysis
 
@@ -219,50 +174,23 @@ it re-investigates rather than starting over. The engineer's final accepted
 answer **is** the report — there is no separate synthesis pass.
 
 ```mermaid
-flowchart TD
-    START([patchwise --rca]) --> INGEST["ingest crashdump folder<br/>manifest + primary-log overview<br/>(head/tail + signature windows)"]
-    INGEST --> PROMPT["build shared_user prompt<br/>(folder + manifest + overview<br/>+ repo layout + additional_context)"]
-
-    PROMPT --> ENGINEER
-
-    %% ---------------- ENGINEER ----------------
-    subgraph ENG_P["ENGINEER — single analyst (force_tool_usage)"]
-        direction TB
-        ENGINEER["<b>Engineer</b> — root-cause from evidence<br/>example-free: no taxonomy / guides / index<br/>tools: crash (list/read/search) + NAV<br/>+ git + read_doc + record_finding"]
-        ENGINEER -->|"final: 1 root cause + 1 fix diff"| ANSWER[("record_finding / concluding msg<br/>→ answer")]
-    end
-
-    ANSWER --> MAINT
-
-    %% ---------------- MAINTAINER ----------------
-    subgraph MAINT_P["MAINTAINER — adversary (one persistent conversation)"]
-        direction TB
-        MAINT{"<b>Maintainer</b> — challenge the answer<br/>holds failure taxonomy + subsystem index<br/>+ false-positive guide<br/>tools: crash + NAV + git + read_doc<br/>+ get_subsystem_review_guide"}
-        MAINT -->|"emits JSON {verdict, questions, reason}"| VERDICT[("→ maintainer_verdicts.json")]
-    end
-
-    VERDICT --> GATE{"refuted?<br/>(explicit refute, or questions present)<br/><b>accept-by-default</b>"}
-    GATE -->|"accept / no questions"| REPORT
-    GATE -->|"engineer or maintainer<br/>iters spent / token budget out"| REPORT
-    GATE -->|"refute + questions<br/>& budgets remain"| RESUME
-
-    RESUME["<b>Resume engineer</b><br/>(same conversation, full history)<br/>append questions → re-investigate<br/>fix ORIGINATING cause, not symptom"] --> ANSWER
-
-    REPORT["engineer's final accepted answer<br/><i>IS</i> the report (no synthesis pass)"] --> OUT([rca_report.md])
+flowchart LR
+    A["Crashdump"] --> B["Engineer\n(root-cause from evidence)"]
+    B -->|"1 root cause + 1 fix"| C["Maintainer\n(challenges the answer)"]
+    C -->|refuted, budget remains| B
+    C -->|accepted / budget spent| D(["rca_report.md"])
 ```
 
-#### Key invariants & caps
+Each role draws from its own iteration/token budget (cumulative across resumes), overridable via env:
 
-| Role | Budgets (each TOTAL for the role) | Tools | Notes |
-|------|-----------------------------------|-------|-------|
-| Engineer | `EXEC_ITER_CAP = 500` iters + `ENGINEER_TOKEN_BUDGET = 40M` tokens — across the initial run **and** every resume (envs `PATCHWISE_EXEC_ITER_CAP` / `PATCHWISE_ENGINEER_TOKEN_BUDGET`) | crash (`list_crash_files`/`read_crash_file`/`search_crash`) + `NAVIGATION` + git + `read_doc` + `record_finding` | example-free; `force_tool_usage=True`; no taxonomy/guides/index |
-| Maintainer | `MAINTAINER_ITER_CAP = 250` iters + `MAINTAINER_TOKEN_BUDGET = 10M` tokens — across all rounds, not per-round (envs `PATCHWISE_MAINTAINER_ITER_CAP` / `PATCHWISE_MAINTAINER_TOKEN_BUDGET`) | crash + `NAVIGATION` + git + `read_doc` + `get_subsystem_review_guide` | holds taxonomy + subsystem index + FP guide; emits JSON verdict; no `record_finding` |
+| Role | Default cap | Override env |
+|------|-------------|---------------|
+| Engineer | `EXEC_ITER_CAP = 500` iters, `ENGINEER_TOKEN_BUDGET = 20M` tokens | `PATCHWISE_EXEC_ITER_CAP`, `PATCHWISE_ENGINEER_TOKEN_BUDGET` |
+| Maintainer | `MAINTAINER_ITER_CAP = 250` iters, `MAINTAINER_TOKEN_BUDGET = 10M` tokens | `PATCHWISE_MAINTAINER_ITER_CAP`, `PATCHWISE_MAINTAINER_TOKEN_BUDGET` |
 
-- **Per-role token shares (no shared total):** the engineer and maintainer each draw from their own token budget, cumulative across that role's runs, rather than one pool the heavy engineer would drain before the maintainer runs. The engineer both investigates and re-investigates every round, so it carries the larger share (40M vs 10M). A per-role env set to `0`/`none` disables that role's token cap. Total `tokens_used` / `peak_prompt_tokens` are still summed for observability.
-- **accept-by-default (`_is_refuted`):** an ambiguous, missing, or unparseable verdict **accepts** the answer — a sound conclusion is not bounced for want of more evidence.
-- **Refute → resume loop** continues only while the acting role still has budget — the engineer needs iterations **and** tokens left to act on a refutation, the maintainer needs them to judge; when either is spent the engineer's current answer is accepted.
-- **Report:** the engineer's final accepted answer (a fallback message if none was produced).
-- **Artifacts dumped to `SANDBOX_PATH`:** `prompt.md`, `maintainer_verdicts.json`, `rca_report.md`, `observability.json`.
+An ambiguous or unparseable maintainer verdict accepts the engineer's answer
+by default. Artifacts land in `SANDBOX_PATH`: `prompt.md`,
+`maintainer_verdicts.json`, `rca_report.md`, `observability.json`.
 
 ### Note: The default sandbox location is at /tmp/patchwise/sandbox. To override, set PATCHWISE_SANDBOX_PATH=<path/to/sandbox>
 
