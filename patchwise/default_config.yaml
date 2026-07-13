@@ -15,6 +15,13 @@ git_committer:
 ai:
     model: "openai/Pro"
     provider: "https://api.openai.com/v1"
+    # Maps LiteLLM model strings to human-friendly display names shown in
+    # mail replies (see get_model_name()). Override in
+    # ~/.config/patchwise_config.yaml, e.g.:
+    #   ai:
+    #     models:
+    #       openai/Pro: "GPT-5"
+    models: {}
 api_key_disclaimer:
     message: "PatchWise uses LiteLLM to interact with your preferred model provider (default: OpenAI). LiteLLM will automatically retrieve the API key from your environment variables if it is set based on the API URL provided to LiteLLM (default: OpenAI). Please confirm that you acknowledge that your API key may be used, if set in your environment. Select 'Yes' to proceed, 'No' to abort, and 'Yes. Don't show again' to proceed and disable this prompt."
     options: ["Yes", "No", "Yes. Don't show again"]
