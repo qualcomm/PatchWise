@@ -1,0 +1,28 @@
+{
+  "$schema": "https://raw.githubusercontent.com/todogroup/repolinter/master/rulesets/schema.json",
+  "extends": "https://raw.githubusercontent.com/qualcomm/.github/main/repolint.json",
+  "rules": {
+    "source-license-headers-exist": {
+      "rule": {
+        "options": {
+          "skip-paths-matching": {
+            "patterns": [
+              "thirdparty\/"
+            ]
+          }
+        }
+      }
+    },
+    "source-qualcomm-license-headers-exist": {
+      "rule": {
+        "options": {
+          "skip-paths-matching": {
+            "patterns": [
+              "thirdparty\/"
+            ]
+          }
+        }
+      }
+    }
+  }
+}
