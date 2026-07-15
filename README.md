@@ -70,6 +70,13 @@
 
    Add this line to your shell profile (e.g., `~/.bashrc` or `~/.zshrc`) for persistence.
 
+   Alternatively, set `ai.api_key` in `~/.config/patchwise_config.yaml`:
+
+   ```yaml
+   ai:
+       api_key: "<your-api-key>"
+   ```
+
 1. **Run help message:**
 
    ```bash

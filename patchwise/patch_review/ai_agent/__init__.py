@@ -30,10 +30,11 @@ def add_ai_arguments(
     )
 
 
-def apply_ai_args(args: argparse.Namespace) -> None:
+def apply_ai_args(args: argparse.Namespace, config: Dict) -> None:
     """
     Applies AI-related arguments to the AiReview class.
     This function is called after parsing command line arguments.
     """
     Agent.model = args.model
     Agent.api_base = args.provider
+    Agent.api_key = config.get("ai", {}).get("api_key") or None

@@ -218,7 +218,7 @@ def main():
 
     setup_logger(log_file=args.log_file, log_level=args.log_level)
 
-    apply_ai_args(args)
+    apply_ai_args(args, config)
 
     # Install signal handling for every mode (not just review): the first Ctrl-C
     # triggers a clean exit that runs container cleanup via atexit, and further

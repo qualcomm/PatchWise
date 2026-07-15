@@ -73,6 +73,7 @@ def uri_to_path(uri: str) -> str:
 class Agent:
     model: str = DEFAULT_MODEL
     api_base: str = DEFAULT_API_BASE
+    api_key: Optional[str] = None
 
     @classmethod
     def get_logger(cls) -> logging.Logger:
@@ -135,6 +136,7 @@ class Agent:
     def completion_with_retry(self, **kwargs) -> Any:
         kwargs.setdefault("model", Agent.model)
         kwargs.setdefault("api_base", Agent.api_base)
+        kwargs.setdefault("api_key", Agent.api_key)
         self.logger.debug(
             f"Making API call with model: {self.model}, api_base: {Agent.api_base}"
         )
