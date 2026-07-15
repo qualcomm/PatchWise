@@ -11,8 +11,17 @@ while git operations + the diff use the `--project` subtree. These helpers do th
 path resolution and produce the note that tells the agent the in-tree path
 prefix."""
 
+import re
 from pathlib import Path
 from typing import Tuple
+
+
+def sanitize_additional_context(additional_context: str) -> str:
+    """Strip any ``</additional_context>`` closing tag so submitter/analyst text
+    can't break out of the prompt's <additional_context> wrapper."""
+    return re.sub(
+        r"</\s*additional_context\s*>", "", additional_context, flags=re.IGNORECASE
+    )
 
 
 def resolve_git_tree(mount_path: str, project: str = "") -> Tuple[Path, Path, str]:

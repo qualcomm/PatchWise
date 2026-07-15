@@ -19,7 +19,11 @@ from patchwise.patch_review.decorators import register_llm_review, register_long
 
 from patchwise.patch_review.ai_review.ai_review import AiReview
 from patchwise.ui import events
-from patchwise.utils.repo_workspace import project_layout_note, repo_project_note
+from patchwise.utils.repo_workspace import (
+    project_layout_note,
+    repo_project_note,
+    sanitize_additional_context,
+)
 
 
 @register_llm_review
@@ -1073,7 +1077,7 @@ finding with record_verdict as you work through them.
         """Execute the multi-phase AI code review (plan -> execution -> filter)."""
         ctx_block = (
             self.ADDITIONAL_CONTEXT_TEMPLATE.format(
-                additional_context=self.additional_context
+                additional_context=sanitize_additional_context(self.additional_context)
             )
             if self.additional_context
             else ""

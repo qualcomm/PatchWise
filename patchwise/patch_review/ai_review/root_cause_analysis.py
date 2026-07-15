@@ -56,6 +56,7 @@ from patchwise.utils.repo_workspace import (
     resolve_git_tree,
     project_layout_note,
     repo_project_note,
+    sanitize_additional_context,
 )
 
 _DOCKERFILES_PATH = PACKAGE_PATH / "dockerfiles"
@@ -997,7 +998,7 @@ record it with `record_finding`.
         # root is the kernel tree itself.
         ctx_block = (
             self.ADDITIONAL_CONTEXT_TEMPLATE.format(
-                additional_context=self.additional_context
+                additional_context=sanitize_additional_context(self.additional_context)
             )
             if self.additional_context
             else ""
