@@ -13,12 +13,14 @@ git_committer:
     name: "Patchwise"
     email: "patchwise@qualcomm.com"
 ai:
+    # The `openai/` prefix is the LiteLLM provider hint; keep it in the value.
     model: "openai/Pro"
     provider: "https://api.openai.com/v1"
     # API key for the AI model API. Leave empty to fall back to the provider's
     # usual environment variable (e.g. OPENAI_API_KEY). Override in
     # ~/.config/patchwise_config.yaml.
     api_key: ""
+    max_tokens: 32000
     # Maps LiteLLM model strings to human-friendly display names shown in
     # mail replies (see get_model_name()). Override in
     # ~/.config/patchwise_config.yaml, e.g.:
@@ -26,6 +28,19 @@ ai:
     #     models:
     #       openai/Pro: "GPT-5"
     models: {}
+    fp_tools:
+        embedding_model: "huggingface/sentence-transformers/all-MiniLM-L6-v2"
+        embedding_provider: "https://api-inference.huggingface.co/v1"
+        verify_max_tokens: 32000
+        # ChromaDB path for confirmed false positives.
+        # Defaults to the sandbox path (SANDBOX_PATH/fp_vector_db).
+        # Override with an absolute path to persist across runs.
+        vector_db_path: ""
+        similarity_threshold: 0.65
+        # Higher threshold = stricter match required = fewer but more relevant
+        # false positive hits returned. Lower = more hits, less precise.
+        default_top_k: 3
+
 api_key_disclaimer:
     message: "PatchWise uses LiteLLM to interact with your preferred model provider (default: OpenAI). LiteLLM will automatically retrieve the API key from your environment variables if it is set based on the API URL provided to LiteLLM (default: OpenAI). Please confirm that you acknowledge that your API key may be used, if set in your environment. Select 'Yes' to proceed, 'No' to abort, and 'Yes. Don't show again' to proceed and disable this prompt."
     options: ["Yes", "No", "Yes. Don't show again"]
