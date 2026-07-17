@@ -18,6 +18,7 @@ from patchwise import SANDBOX_PATH
 from patchwise.logger_setup import LOG_PATH
 from patchwise.mail_handler.ai_models import get_model_name
 from patchwise.mail_handler.config import DeprecatedList, MailConfig
+from patchwise.mail_handler.patch_issue_collector import PatchIssueCollector, is_approval_reply, _message_date
 from patchwise.mail_handler.utils import (
     decode_header_value,
     domain_in,
@@ -29,6 +30,9 @@ from patchwise.patch_review import (
     fix_reported_issues,
     review_commit,
     PatchReviewResults,
+)
+from patchwise.patch_review.ai_review.fp_tools.unfixed_issue_collector import (
+    UnfixedIssueCollector,
 )
 from patchwise.patch_review.decorators import (
     LLM_REVIEWS,
@@ -81,7 +85,6 @@ def find_deprecated_list(
     return None
 
 
-# List of checks to determine if we should completely ignore the message
 def should_ignore(msg: EmailMessage, config: MailConfig) -> bool:
     if not domain_in(msg["From"], config.accepted_sender_domains):
         logger.info(f"Sender domain not accepted: {msg['From']}")
@@ -97,10 +100,6 @@ def should_ignore(msg: EmailMessage, config: MailConfig) -> bool:
 
     if subject_is_empty(msg):
         logger.info(f"Empty subject: {msg['Message-Id']}")
-        return True
-
-    if subject_is_reply(msg.get("Subject")):
-        logger.info(f"Subject is a reply: {msg['Message-Id']}")
         return True
 
     if msg.get("From"):
@@ -276,7 +275,7 @@ def get_patch_series(
         else:
             patches.append(sibling)
 
-    patches.sort(key=lambda m: utils.parsedate_to_datetime(m["Date"]))
+    patches.sort(key=_message_date)
 
     base_commit: Optional[str] = None
     if cover:
@@ -356,6 +355,27 @@ def decode_single_header(contents):
     return None
 
 
+def _process_approval_for_patch_issues(
+    approval_msg: EmailMessage,
+    evidence_collector: "PatchIssueCollector",
+    unfixed_collector,
+) -> None:
+    """Extract FP evidence from *approval_msg* and hand off to the FP pipeline.
+
+    mail_handler responsibility ends here — extract PatchReviewHistory and
+    pass to UnfixedIssueCollector which owns dedup, LLM call, and DB storage.
+    """
+    patch_review_history_list = evidence_collector.collect_patch_review_history(approval_msg)
+    for patch_review_history in patch_review_history_list:
+        logger.info(
+            "FP: '%s'  versions=%d  diff_lines=%d — passing to FP pipeline",
+            patch_review_history.patch_title,
+            len(patch_review_history.ai_issues),
+            patch_review_history.final_diff.count("\n"),
+        )
+        unfixed_collector.extract_and_store(patch_review_history)
+
+
 def process_mail(
     criteria,
     reviews: set[str],
@@ -366,7 +386,9 @@ def process_mail(
     logger.info(f"IMAP: {config.imap.server}:{config.imap.port}")
     logger.info(f"SMTP: {config.smtp.server}:{config.smtp.port}")
 
+    unfixed_collector = UnfixedIssueCollector()
     mail_client = MailClient(config, send=send)
+    evidence_collector = PatchIssueCollector(mail_client)
 
     search_ids = mail_client.search(criteria)
 
@@ -375,8 +397,14 @@ def process_mail(
         message_id = decode_single_header(msg["Message-Id"])
         logger.info(f"Handling {message_id} ({msg['Subject']})")
 
-        # Check if we can handle the message
         if should_ignore(msg, config):
+            mail_client.mark_as_processed(search_id)
+            continue
+
+        # Reply emails are skipped, but approval trailers trigger FP collection first.
+        if subject_is_reply(msg.get("Subject")):
+            if is_approval_reply(msg):
+                _process_approval_for_patch_issues(msg, evidence_collector, unfixed_collector)
             mail_client.mark_as_processed(search_id)
             continue
 
