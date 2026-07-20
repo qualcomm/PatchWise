@@ -449,6 +449,20 @@ TOOLS = [
                         "type": "string",
                         "description": "The analysis dimension this finding came from.",
                     },
+                    "confidence": {
+                        "type": "string",
+                        "description": (
+                            "How sure you are this is a genuine, correctly-diagnosed "
+                            "defect — not its severity, its likelihood of being real: "
+                            "'high' (you traced the actual behaviour and the code "
+                            "plainly does what you describe), 'medium' (likely real "
+                            "but you have not fully traced every condition), or "
+                            "'low' (a possible concern flagged defensively, not one "
+                            "grounded in code you actually read). Optional: only "
+                            "reviewers instructed to rate their confidence need to "
+                            "set it; a finding with none is always kept."
+                        ),
+                    },
                 },
                 "required": ["location", "finding"],
             },
