@@ -388,19 +388,25 @@ finding with record_verdict as you work through them.
 
     # ---- prompt-bundle loaders ---------------------------------------------
 
-    @staticmethod
-    def _load_prompt_bundle(docs: List[Dict[str, Any]]) -> str:
+    def _load_prompt_bundle(
+        self, docs: List[Dict[str, Any]], from_docker_container: bool = False
+    ) -> str:
         """Concatenate a list of {name, path} docs into a bundle."""
         bundle = ""
         for doc in docs:
-            bundle += f"## {doc['name']}:\n\n"
-            with open(doc["path"], "r") as f:
-                bundle += f.read()
+            if from_docker_container:
+                content = self.docker_manager.read_file(str(doc["path"]))
+                if content is False:
+                    raise FileNotFoundError(doc["path"])
+            else:
+                with open(doc["path"], "r") as f:
+                    content = f.read()
+            bundle += f"## {doc['name']}:\n\n{content}"
         return bundle
 
     @property
     def docs_kernel_path(self) -> Path:
-        return Path(self.docker_manager.repo_path) / self.agent._docs_subdir
+        return self.docker_manager.kernel_dir / self.agent._docs_subdir
 
     def get_kernel_coding_style(self) -> str:
         """Load kernel coding style guidelines from documentation."""
@@ -408,24 +414,25 @@ finding with record_verdict as you work through them.
             [
                 {
                     "name": "Kernel Coding Style Guidelines",
-                    "path": os.path.join(
-                        self.docs_kernel_path, "Documentation/process/coding-style.rst"
+                    "path": str(
+                        self.docs_kernel_path / "Documentation/process/coding-style.rst"
                     ),
                 },
                 {
                     "name": "Devicetree Coding Style Guidelines",
-                    "path": os.path.join(
-                        self.docs_kernel_path,
-                        "Documentation/devicetree/bindings/dts-coding-style.rst",
+                    "path": str(
+                        self.docs_kernel_path
+                        / "Documentation/devicetree/bindings/dts-coding-style.rst"
                     ),
                 },
                 {
                     "name": "Kernel Rust Coding Style Guidelines",
-                    "path": os.path.join(
-                        self.docs_kernel_path, "Documentation/rust/coding-guidelines.rst"
+                    "path": str(
+                        self.docs_kernel_path / "Documentation/rust/coding-guidelines.rst"
                     ),
                 },
-            ]
+            ],
+            from_docker_container=True,
         )
 
     def get_submitting_patches(self) -> str:
@@ -434,12 +441,13 @@ finding with record_verdict as you work through them.
             [
                 {
                     "name": "Submitting Patches Guidelines",
-                    "path": os.path.join(
-                        self.docs_kernel_path,
-                        "Documentation/process/submitting-patches.rst",
+                    "path": str(
+                        self.docs_kernel_path
+                        / "Documentation/process/submitting-patches.rst"
                     ),
                 },
-            ]
+            ],
+            from_docker_container=True,
         )
 
     def get_technical_patterns(self) -> str:
