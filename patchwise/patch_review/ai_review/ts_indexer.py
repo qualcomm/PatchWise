@@ -23,6 +23,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+import pathspec
 import tree_sitter_c
 from tree_sitter import Language, Parser, Query, QueryCursor
 
@@ -210,22 +211,27 @@ def build_index(blocklist: Set[str]) -> Tuple[
 ]:
     """Return (by_name, constructs_by_file, files_parsed, files_skipped).
 
-    ``blocklist`` holds workspace-relative directory paths to prune.
+    ``blocklist`` holds workspace-relative directory path patterns to prune
+    (gitignore-style; matched with ``pathspec``).
 
     constructs_by_file holds EVERY captured construct per file — functions,
     structs, unions, enums, typedefs, macros, and aggregate initializers — with
     its kind and line range, so a hit can be attributed to the innermost
     construct of any kind, not just functions.
     """
+    blockspec = pathspec.PathSpec.from_lines("gitignore", blocklist)
     files: List[str] = []
     for dirpath, dirnames, filenames in os.walk(KERNEL):
         rel = os.path.relpath(dirpath, KERNEL)
         # Prune dot-dirs, the always-skip basenames, and blocklisted paths.
+        # A trailing "/" tells pathspec this is a directory, so a pattern like
+        # "**/out/" matches without needing a file underneath it.
         dirnames[:] = [
-            d for d in dirnames
+            d
+            for d in dirnames
             if not d.startswith(".")
             and d not in SKIP_DIRS
-            and (d if rel == "." else f"{rel}/{d}") not in blocklist
+            and not blockspec.match_file(f"{d if rel == '.' else f'{rel}/{d}'}/")
         ]
         for fn in filenames:
             if not fn.startswith(".") and fn.endswith((".c", ".h")):

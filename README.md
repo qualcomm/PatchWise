@@ -303,11 +303,12 @@ mail:
 >
 > Because a downstream tree is indexed in place, a large build-artifact tree
 > (e.g. `out/`) can be orders of magnitude bigger than the kernel and make the
-> tree-sitter index slow to build. PatchWise already skips the paths listed
-> under `indexing.blocklist` in the config (default:
-> `kernel_platform/{out,prebuilts,external}`); add your own build/output
-> directories to that list in `~/.config/patchwise_config.yaml` if indexing is
-> slow for your layout.
+> tree-sitter index slow to build. PatchWise already skips the paths/patterns
+> listed under `indexing.blocklist` in the config (default: `**/out/`,
+> `**/prebuilts/`, `**/external/`, `**/bazel-*/`); add your own build/output
+> directory patterns to that list in `~/.config/patchwise_config.yaml` if
+> indexing is slow for your layout. Patterns follow gitignore-style glob
+> syntax.
 
 ### Mail Options (require `--mail`)
 

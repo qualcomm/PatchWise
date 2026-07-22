@@ -8,7 +8,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     perl \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip3 install "tree-sitter>=0.24" "tree-sitter-c>=0.23"
+RUN pip3 install "tree-sitter>=0.24" "tree-sitter-c>=0.23" "pathspec>=0.12"
 
 # Tree-sitter kernel indexer is invoked by AiCodeReview as `python3 ts_indexer.py`,
 # so it must be world-readable. Pin the mode explicitly: BuildKit preserves the
