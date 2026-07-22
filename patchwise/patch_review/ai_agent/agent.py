@@ -322,21 +322,6 @@ class Agent:
         self._log_final_response(response, content)
         return content
 
-    # TODO: read from docker container / use docker_manager.read_file()
-    def _read_file_safely(self, file_path: str) -> Optional[str]:
-        """Safely read a file and return its contents, or None on error."""
-        try:
-            with open(file_path, "r") as f:
-                return f.read()
-        except Exception as e:
-            self.logger.error(f"Failed to read {file_path}: {e}")
-            return None
-
-    def _get_file_lines(self, file_path: str) -> List[str]:
-        """Get file lines as a list, or empty list on error."""
-        content = self._read_file_safely(file_path)
-        return content.splitlines(keepends=True) if content else []
-
     def _kernel_rel(self, path_or_uri: str) -> str:
         """Normalize any path/URI to a kernel-relative POSIX string."""
         s = path_or_uri
@@ -514,10 +499,15 @@ class Agent:
     ) -> str:
         """Return lines [start-ctx, end+ctx] for a kernel-relative path, capped at 200 lines."""
         try:
-            path = self._abs_in_kernel(rel_path)
+            self._abs_in_kernel(rel_path)
         except Exception:
             return ""
-        lines = self._get_file_lines(str(path))
+        rel = self._kernel_rel(rel_path)
+        container_path = str(self.docker_manager.kernel_dir / rel)
+        content = self.docker_manager.read_file(container_path)
+        if content is False:
+            return ""
+        lines = content.splitlines(keepends=True)
         if not lines:
             return ""
         lo = max(0, start_line - 1 - ctx)
