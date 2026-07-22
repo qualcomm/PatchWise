@@ -398,6 +398,10 @@ finding with record_verdict as you work through them.
                 bundle += f.read()
         return bundle
 
+    @property
+    def docs_kernel_path(self) -> Path:
+        return Path(self.docker_manager.repo_path) / self.agent._docs_subdir
+
     def get_kernel_coding_style(self) -> str:
         """Load kernel coding style guidelines from documentation."""
         return self._load_prompt_bundle(
@@ -405,20 +409,20 @@ finding with record_verdict as you work through them.
                 {
                     "name": "Kernel Coding Style Guidelines",
                     "path": os.path.join(
-                        self.kernel_path, "Documentation/process/coding-style.rst"
+                        self.docs_kernel_path, "Documentation/process/coding-style.rst"
                     ),
                 },
                 {
                     "name": "Devicetree Coding Style Guidelines",
                     "path": os.path.join(
-                        self.kernel_path,
+                        self.docs_kernel_path,
                         "Documentation/devicetree/bindings/dts-coding-style.rst",
                     ),
                 },
                 {
                     "name": "Kernel Rust Coding Style Guidelines",
                     "path": os.path.join(
-                        self.kernel_path, "Documentation/rust/coding-guidelines.rst"
+                        self.docs_kernel_path, "Documentation/rust/coding-guidelines.rst"
                     ),
                 },
             ]
@@ -431,7 +435,7 @@ finding with record_verdict as you work through them.
                 {
                     "name": "Submitting Patches Guidelines",
                     "path": os.path.join(
-                        self.kernel_path,
+                        self.docs_kernel_path,
                         "Documentation/process/submitting-patches.rst",
                     ),
                 },
@@ -1064,10 +1068,6 @@ finding with record_verdict as you work through them.
         if review.strip() == "No issues found.":
             return ""
         return super().format_chat_response(review)
-
-    def setup(self) -> None:
-        super().setup()
-        self.kernel_path = Path(self.repo.working_dir)
 
     def _dump(self, name: str, content: str) -> None:
         with open(os.path.join(SANDBOX_PATH, name), "w") as f:
