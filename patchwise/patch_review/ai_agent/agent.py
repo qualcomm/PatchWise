@@ -936,6 +936,9 @@ class Agent:
             globs = [g.strip() for g in glob.split(",")] if glob else ["*.c", "*.h"]
             for g in globs:
                 rg_cmd += ["--glob", g]
+            blocklist = parse_config().get("indexing", {}).get("blocklist") or []
+            for entry in blocklist:
+                rg_cmd += ["--glob", f"!{entry}"]
         rg_cmd += ["-e", pattern]
         if file_paths:
             rg_cmd += [str(kernel_dir / p) for p in file_paths]
