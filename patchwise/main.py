@@ -12,7 +12,7 @@ from git import Repo
 from git.objects.commit import Commit
 from rich_argparse import RichHelpFormatter
 
-from patchwise import OUTPUT_PATH
+from patchwise import OUTPUT_PATH, __version__
 from .docker import check_docker_available
 from .logger_setup import add_logging_arguments, setup_logger
 from .mail_handler.cli import add_mail_arguments, run_mail_mode
@@ -35,6 +35,12 @@ logger = logging.getLogger(__name__)
 def parse_args(config: Dict) -> argparse.Namespace:
     parser = argparse.ArgumentParser(formatter_class=RichHelpFormatter)
 
+    parser.add_argument(
+        "-v",
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
+    )
     parser.add_argument(
         "--mail",
         action="store_true",
