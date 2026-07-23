@@ -211,7 +211,11 @@ def main():
 
     api_key_conf = config["api_key_disclaimer"]
 
-    if not api_key_conf["no_reprompt"]:
+    wants_help_or_version = bool(
+        {"-h", "--help", "-v", "--version"} & set(sys.argv[1:])
+    )
+
+    if not api_key_conf["no_reprompt"] and not wants_help_or_version:
         selected_option = display_prompt_with_options(
             api_key_conf["message"], api_key_conf["options"]
         )
