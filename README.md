@@ -61,6 +61,12 @@
    pip install patchwise
    ```
 
+   To install the latest unreleased code from `main` instead:
+
+   ```bash
+   pip install git+https://github.com/qualcomm/PatchWise.git@main
+   ```
+
 1. **Set up your API key:**
 
    Obtain your API key from your provider and set it as an environment variable:
