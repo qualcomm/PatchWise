@@ -17,6 +17,7 @@
   - [AI Code Review](#ai-code-review)
   - [Crashdump Root-Cause Analysis](#crashdump-root-cause-analysis)
   - [Mail Mode](#mail-mode)
+- [Configuration](#configuration)
 - [Command-Line Options](#command-line-options)
 - [Development](#development)
 - [Getting in Contact](#getting-in-contact)
@@ -274,6 +275,10 @@ mail:
 - `2`: reply to the sender, CC the original To/Cc recipients (filtered to `accepted_sender_domains`) plus `always_cc` plus `additional_cc`
 
 ---
+
+## Configuration
+
+PatchWise merges [`patchwise/default_config.yaml`](patchwise/default_config.yaml) (shipped defaults) under `~/.config/patchwise_config.yaml` (user overrides) — see that file for all available options.
 
 ## Command-Line Options
 
