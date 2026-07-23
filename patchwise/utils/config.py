@@ -5,6 +5,7 @@ from platformdirs import user_config_dir
 from patchwise import PACKAGE_PATH
 from pathlib import Path
 from typing import Dict, Any, cast
+import shutil
 import yaml
 
 CONFIG_DIR = Path(user_config_dir())
@@ -55,5 +56,9 @@ def parse_config() -> Dict[str, Any]:
 
 
 def update_user_config(dict: Dict[str, Any]) -> None:
+    if not USER_CONFIG_PATH.exists():
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        shutil.copy(DEFAULT_CONFIG_PATH, USER_CONFIG_PATH)
+
     with open(USER_CONFIG_PATH, "w") as file:
         yaml.dump(dict, file)
