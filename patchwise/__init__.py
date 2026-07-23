@@ -2,12 +2,18 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import os
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 # Get the path of the patchwise package
 PACKAGE_PATH = Path(__file__).resolve().parent
 
 PACKAGE_NAME = __name__.split(".")[0]
+
+try:
+    __version__ = version(PACKAGE_NAME)
+except PackageNotFoundError:
+    __version__ = "unknown"
 
 # Define the sandbox/workspace path.
 # Honor PATCHWISE_SANDBOX_PATH so operators can locate the sandbox to a

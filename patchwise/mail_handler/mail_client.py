@@ -13,6 +13,7 @@ from typing import List, Optional
 from imapclient import FLAGGED, IMAPClient
 from imapclient.response_types import SearchIds
 
+from patchwise import __version__
 from patchwise.mail_handler.config import MailConfig
 from patchwise.mail_handler.utils import DummySmtp, domain_in
 from patchwise.utils.decorators import retry
@@ -193,7 +194,10 @@ class MailClient:
         self._apply_threading(reply, message, reply_to)
 
         reply.set_content(
-            response, subtype="plain", charset="utf-8", cte="quoted-printable"
+            f"{response}\n\n-- \nPatchwise {__version__}",
+            subtype="plain",
+            charset="utf-8",
+            cte="quoted-printable",
         )
         if attachment:
             with open(attachment) as f:
