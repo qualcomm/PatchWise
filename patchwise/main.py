@@ -13,6 +13,7 @@ from git.objects.commit import Commit
 from rich_argparse import RichHelpFormatter
 
 from patchwise import OUTPUT_PATH
+from .docker import check_docker_available
 from .logger_setup import add_logging_arguments, setup_logger
 from .mail_handler.cli import add_mail_arguments, run_mail_mode
 from .patch_review.ai_review.root_cause_analysis import add_rca_arguments, run_rca_mode
@@ -217,6 +218,8 @@ def main():
     args = parse_args(config)
 
     setup_logger(log_file=args.log_file, log_level=args.log_level)
+
+    check_docker_available()
 
     apply_ai_args(args, config)
 
