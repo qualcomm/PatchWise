@@ -402,13 +402,15 @@ class Dashboard:
                 n = self.findings
             loc = f.get("location") or ""
             dim = f.get("dimension") or ""
+            confidence = f.get("confidence") or ""
             text = (f.get("text", "") or "").strip()
             self._finding_rows.append((n, loc, text))
             self._section("EXECUTE")
             self._print()  # separate consecutive findings with a blank line
             self._emit(Text.assemble((f"#{n}  ", "bold red"),
                                      (f"[{dim}] " if dim else "", "dim"),
-                                     (loc, "cyan")))
+                                     (loc, "cyan"),
+                                     (f"  ({confidence})" if confidence else "", "dim")))
             self._emit(Text(text, style="default"), indent=6)
 
         elif kind == events.VERDICT:

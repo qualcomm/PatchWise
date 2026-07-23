@@ -65,6 +65,15 @@ class AiCodeReview(AiReview):
     EXEC_TOOLS = NAVIGATION_TOOLS + ["get_subsystem_review_guide", "record_finding"]
     FP_FILTER_TOOLS = NAVIGATION_TOOLS + ["get_subsystem_review_guide", "record_verdict"]
 
+    # Findings below this self-reported confidence are dropped before the (costly)
+    # false-positive filter phase ever sees them — see _filter_by_confidence. Only
+    # "low" is cut by default: the reviewer's own least-sure tier is the closest
+    # thing to a signal for the "hesitates to say nothing" noise this exists to
+    # cut, while "medium"/"high" are left for the filter phase to judge on
+    # evidence, same as before this existed.
+    MIN_FINDING_CONFIDENCE = "medium"
+    _CONFIDENCE_RANK = {"low": 0, "medium": 1, "high": 2}
+
     PROMPT_TEMPLATE = """
 # Patch under review
 
@@ -295,10 +304,22 @@ to confirm how the code behaves.
 The Kernel Technical Patterns below catalog common kernel defect classes.
 
 Report every issue you can ground in the code by calling `record_finding(location,
-finding)` as you confirm it. Record findings as you go rather than saving them all
-for a final message — a recorded finding is preserved even if the review is cut
-short, and lets you move on to the next dimension without carrying it. Recording a
-finding does not mean you stop; work through every dimension in your assignment.
+finding, confidence)` as you confirm it. Record findings as you go rather than
+saving them all for a final message — a recorded finding is preserved even if the
+review is cut short, and lets you move on to the next dimension without carrying
+it. Recording a finding does not mean you stop; work through every dimension in
+your assignment.
+
+Rate your own `confidence` that a finding is a genuine, correctly-diagnosed
+defect — this is about how sure you are it is real, not how severe it is:
+- `high`: you traced the actual execution path and the code plainly does what
+  you describe.
+- `medium`: likely real, but you have not fully traced every condition.
+- `low`: a possible concern you are flagging defensively, not one you have
+  grounded in the code you actually read.
+Only record a finding you can point to real code for — `confidence` rates a
+grounded finding's certainty, it is not a substitute for grounding. If you are
+not confident enough to defend a finding at all, do not record it.
 """
 
     # Phase 3 (FALSE-POSITIVE FILTER) prompt
@@ -610,6 +631,58 @@ finding with record_verdict as you work through them.
         if not norm:
             raise RuntimeError("No tasks returned by planner.")
         return norm
+
+    def _min_finding_confidence(self) -> str:
+        raw = os.environ.get("PATCHWISE_MIN_FINDING_CONFIDENCE", "").strip().lower()
+        return raw if raw in self._CONFIDENCE_RANK else self.MIN_FINDING_CONFIDENCE
+
+    @classmethod
+    def _confidence_rank(cls, value: str) -> int:
+        """Rank a self-reported confidence value for threshold comparison. A
+        missing, empty, or unrecognised value ranks as high (never dropped) —
+        the same defensive default `_impact_is_high` uses for a missing
+        `impact`: ambiguous signal must never be what silently drops a finding.
+        """
+        return cls._CONFIDENCE_RANK.get(
+            str(value).strip().lower(), cls._CONFIDENCE_RANK["high"]
+        )
+
+    @staticmethod
+    def _split_finding_blocks(findings_text: str) -> List[str]:
+        """Split accumulated findings text back into the individual '### header
+        \\n\\n body' blocks written by Agent._tool_record_finding. `location` is
+        a required record_finding parameter, so every block always starts with
+        a '### ' header line — that is the split delimiter."""
+        text = findings_text.strip()
+        if not text:
+            return []
+        return [b.strip() for b in re.split(r"\n(?=### )", text) if b.strip()]
+
+    @classmethod
+    def _block_confidence(cls, block: str) -> str:
+        """Extract the '(confidence: x)' tag Agent._tool_record_finding puts in
+        a finding block's header line. Returns '' if the block predates this
+        tag or the model omitted it despite the tool schema requiring it."""
+        first_line = block.splitlines()[0] if block else ""
+        m = re.search(r"\(confidence:\s*([A-Za-z]+)\)", first_line)
+        return m.group(1) if m else ""
+
+    @classmethod
+    def _filter_by_confidence(cls, findings_text: str, min_confidence: str) -> str:
+        """Drop finding blocks whose self-reported confidence ranks below
+        `min_confidence`, before they reach the false-positive filter phase —
+        cutting the lowest-confidence noise without spending an LLM call per
+        finding to prove each one out. A block with no parseable confidence
+        (see `_block_confidence`) is always kept (see `_confidence_rank`)."""
+        blocks = cls._split_finding_blocks(findings_text)
+        if not blocks:
+            return findings_text
+        threshold = cls._confidence_rank(min_confidence)
+        kept = [
+            b for b in blocks
+            if cls._confidence_rank(cls._block_confidence(b)) >= threshold
+        ]
+        return "\n\n".join(kept)
 
     def _max_plan_iterations(self) -> int:
         raw = os.environ.get("PATCHWISE_MAX_PLAN_ITERATIONS")
@@ -967,11 +1040,13 @@ finding with record_verdict as you work through them.
     ) -> Tuple[str, int]:
         """Run the filter. Returns (final_review, kept_count).
 
-        The filter judges the findings one at a time and streams a verdict per
-        finding via record_verdict ({finding, impact, verdict, reason, proof}).
-        A finding leaves the review only as a proven false positive that is not
-        high-impact (see `_is_dropped`): every unproven drop and every high-impact
-        finding is kept.
+        Findings below MIN_FINDING_CONFIDENCE (self-rated by the reviewer, see
+        `_filter_by_confidence`) are dropped first, before the LLM-judged pass:
+        the filter then judges the remaining findings one at a time and streams
+        a verdict per finding via record_verdict ({finding, impact, verdict,
+        reason, proof}). A finding leaves the review only as a proven false
+        positive that is not high-impact (see `_is_dropped`): every unproven
+        drop and every high-impact finding is kept.
         """
         if not findings:
             self.logger.info("[filter] no findings to filter.")
@@ -979,6 +1054,18 @@ finding with record_verdict as you work through them.
         findings_text = "\n\n".join(text for _, text in findings).strip()
         if not findings_text:
             self.logger.info("[filter] no findings to filter.")
+            return "", 0
+        min_confidence = self._min_finding_confidence()
+        before = len(self._split_finding_blocks(findings_text))
+        findings_text = self._filter_by_confidence(findings_text, min_confidence)
+        after = len(self._split_finding_blocks(findings_text))
+        if after < before:
+            self.logger.info(
+                f"[filter] dropped {before - after}/{before} finding(s) below "
+                f"confidence '{min_confidence}' before the false-positive filter."
+            )
+        if not findings_text:
+            self.logger.info("[filter] no findings survived the confidence threshold.")
             return "", 0
         fp_user = self.FP_FILTER_USER_TEMPLATE.format(
             diff=self.diff, findings=findings_text

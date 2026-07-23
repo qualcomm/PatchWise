@@ -1653,20 +1653,34 @@ class Agent:
         return path
 
     def _tool_record_finding(
-        self, finding: str, location: str = "", dimension: str = ""
+        self,
+        finding: str,
+        location: str = "",
+        dimension: str = "",
+        confidence: str = "",
     ) -> dict:
         """Append one confirmed review finding to the per-phase findings file in
         the sandbox, so findings are persisted as the reviewer works rather than
         only returned in one block at the end. The file is keyed by the active
         phase/subtask label (the same label `_log_tool_call` uses), so a single
-        reviewer's findings accumulate in one file."""
+        reviewer's findings accumulate in one file.
+
+        `confidence` (high/medium/low, self-rated by the reviewer) is folded into
+        the header line as `(confidence: x)`, which is how the false-positive
+        filter phase later parses it back out to apply a confidence threshold
+        before a finding reaches the (expensive) filter pass — see
+        AiCodeReview._filter_by_confidence."""
         path = self.findings_path_for(self.current_label or "unit")
-        head = " ".join(p for p in (f"[{dimension}]" if dimension else "", location) if p)
+        head_parts = [p for p in (f"[{dimension}]" if dimension else "", location) if p]
+        if confidence:
+            head_parts.append(f"(confidence: {confidence})")
+        head = " ".join(head_parts)
         block = f"### {head}\n\n{finding}\n\n" if head else f"{finding}\n\n"
         with open(path, "a") as f:
             f.write(block)
         events.emit(events.FINDING, label=self.current_label,
-                    dimension=dimension, location=location, text=finding)
+                    dimension=dimension, location=location, text=finding,
+                    confidence=confidence)
         return {"ok": True, "recorded": location or dimension or "finding"}
 
     @staticmethod
