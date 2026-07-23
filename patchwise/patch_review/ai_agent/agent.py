@@ -342,7 +342,7 @@ class Agent:
         rel_norm = self._kernel_rel(rel)
         target = (Path(self.kernel_path) / rel_norm).resolve()
         base = Path(self.kernel_path).resolve()
-        if not str(target).startswith(str(base)):
+        if target != base and base not in target.parents:
             raise ValueError(f"Path escapes kernel tree: {rel}")
         return target
 
@@ -498,9 +498,11 @@ class Agent:
         self, rel_path: str, start_line: int, end_line: int, ctx: int = 2
     ) -> str:
         """Return lines [start-ctx, end+ctx] for a kernel-relative path, capped at 200 lines."""
+        # TODO: silently returns "" on a path-escape/missing-path failure; the
+        # model gets an empty snippet with no indication of why.
         try:
             self._abs_in_kernel(rel_path)
-        except Exception:
+        except ValueError:
             return ""
         rel = self._kernel_rel(rel_path)
         container_path = str(self.docker_manager.kernel_dir / rel)
@@ -1598,9 +1600,6 @@ class Agent:
             self.logger.error(f"Error running checkpatch: {e}")
             return {"ok": False, "error": f"Error running checkpatch: {e}"}
 
-    def _container_path(self, file: str) -> str:
-        return f"{self.docker_manager.kernel_dir}/{file}"
-
     def _read(self, container_path: str) -> str:
         text = self.docker_manager.read_file(container_path)
         if text is False:
@@ -1615,7 +1614,8 @@ class Agent:
         self, file: str, old_content: str, new_content: str
     ) -> dict:
         """Replace old_content with new_content in a container file (exact match)."""
-        container_path = self._container_path(file)
+        self._abs_in_kernel(file)
+        container_path = self._container_kernel_path(self._kernel_rel(file))
         existing = self._read(container_path)
 
         count = existing.count(old_content)
@@ -1766,4 +1766,3 @@ class Agent:
             f"{prefix}/{f}" if prefix else f
             for f in stdout.strip().splitlines()
         }
-
