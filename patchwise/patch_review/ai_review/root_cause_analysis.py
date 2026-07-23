@@ -599,7 +599,11 @@ record it with `record_finding`.
                 ),
             }
         ]
+        self.logger.debug(
+                f"Making API call with model: {self.model}, api_base: {Agent.api_base}"
+            )
         response = self.agent.completion_with_retry(messages=repair_messages, stream=False)
+        self.agent._update_token_usage(response)
         raw2 = response.choices[0].message.content or ""
         return self._extract_json(raw2)
 

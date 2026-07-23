@@ -282,6 +282,38 @@ class MailClient:
         exceptions=(imaplib.IMAP4.error, imaplib.IMAP4.abort, OSError, ConnectionError),
         on_retry=_imap_noop_or_reconnect,
     )
+    def fetch_message_by_id(self, message_id: str) -> Optional[EmailMessage]:
+        """Fetch a single message by its exact ``Message-Id`` header value."""
+        search_ids = self._imap.search(["HEADER", "Message-Id", message_id])
+        if not search_ids:
+            return None
+        return self.fetch_message(search_ids[0])
+
+    @retry(
+        max_retries=_MAX_IMAP_RETRIES,
+        exceptions=(imaplib.IMAP4.error, imaplib.IMAP4.abort, OSError, ConnectionError),
+        on_retry=_imap_noop_or_reconnect,
+    )
+    def search_by_subject(self, *fragments: str) -> List[EmailMessage]:
+        """Return all messages whose subject contains every fragment (AND).
+
+        Each positional argument becomes a separate IMAP ``SUBJECT`` criterion;
+        IMAP implicitly ANDs multiple criteria.
+        """
+        criteria: List = []
+        for fragment in fragments:
+            criteria.extend(["SUBJECT", fragment])
+        search_ids = self._imap.search(criteria)
+        messages = []
+        for search_id in search_ids:
+            messages.append(self.fetch_message(search_id))
+        return messages
+
+    @retry(
+        max_retries=_MAX_IMAP_RETRIES,
+        exceptions=(imaplib.IMAP4.error, imaplib.IMAP4.abort, OSError, ConnectionError),
+        on_retry=_imap_noop_or_reconnect,
+    )
     def mark_as_processed(self, search_id) -> None:
         if self._send:
             self._imap.add_flags([search_id], [FLAGGED])

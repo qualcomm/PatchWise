@@ -587,6 +587,7 @@ finding with record_verdict as you work through them.
         response = self.agent.completion_with_retry(
             messages=messages, stream=False
         )
+        self.agent._update_token_usage(response)
         raw2 = response.choices[0].message.content or ""
         return self._extract_json(raw2)
 
@@ -962,6 +963,20 @@ finding with record_verdict as you work through them.
                 out.append(obj)
         return out
 
+    @staticmethod
+    def _latest_verdicts_by_finding(
+        entries: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        latest: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
+        without_finding: List[Dict[str, Any]] = []
+        for entry in entries:
+            finding = str(entry.get("finding") or "").strip()
+            if not finding:
+                without_finding.append(entry)
+                continue
+            latest[finding] = entry
+        return without_finding + list(latest.values())
+
     def _fp_filter_phase(
         self, findings: List[Tuple[Dict[str, Any], str]]
     ) -> Tuple[str, int]:
@@ -988,6 +1003,7 @@ finding with record_verdict as you work through them.
             {"role": "user", "content": fp_user},
         ]
         self.agent.current_label = "fp-filter"
+        self.agent.initialize_fp_db()
         # Reset the verdicts file so a re-run in the same sandbox starts clean.
         verdicts_path = self.agent.verdicts_path_for("fp-filter")
         verdicts_path.unlink(missing_ok=True)
@@ -1007,6 +1023,7 @@ finding with record_verdict as you work through them.
             if not isinstance(parsed, list):
                 parsed = self._finalize_json(fp_messages, raw, "verdict array")
             entries = [v for v in parsed if isinstance(v, dict)] if isinstance(parsed, list) else []
+        entries = self._latest_verdicts_by_finding(entries)
         if not entries:
             # No verdicts at all: keep everything rather than risk dropping a real
             # defect. The cleanup pass still renders the raw findings.
@@ -1060,6 +1077,7 @@ finding with record_verdict as you work through them.
             "stream": False,
         }
         response = self.agent.completion_with_retry(**completion_kwargs)
+        self.agent._update_token_usage(response)
         review = response.choices[0].message.content or ""
         if review.strip() == "No issues found.":
             return ""

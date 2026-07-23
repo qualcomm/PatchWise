@@ -23,6 +23,7 @@ from patchwise.patch_review.ai_agent.tool_definitions import TOOLS
 from patchwise.ui import events
 from patchwise.utils.config import parse_config
 from patchwise.utils.decorators import retry
+from patchwise.patch_review.ai_review.fp_tools.false_positive_issue_db import get_fp_db
 
 urllib3.disable_warnings()
 
@@ -119,11 +120,23 @@ class Agent:
         self.current_label: str = ""
         self.current_iteration: int = 0
 
+        # FP database injected by the review pipeline before the filter phase.
+        self.fp_db = None                             # Optional[FalsePositiveDB]
+        self._fp_db_initialized: bool = False
+        self._seen_verdicts: set = set()                # key → "warned" | "accepted"
+
         self.seen_files |= self._files_in_diff()
 
         self.kernel_path = kernel_path
         self._docs_subdir = self._detect_docs_tree()
 
+    def initialize_fp_db(self):
+        if not self._fp_db_initialized:
+            self.fp_db = get_fp_db()
+            self._fp_db_initialized = True
+
+
+    @classmethod
     @retry(
         max_retries=10,
         exceptions=(
@@ -133,21 +146,20 @@ class Agent:
             litellm.OpenAIError,
         ),
     )
-    def completion_with_retry(self, **kwargs) -> Any:
-        kwargs.setdefault("model", Agent.model)
-        kwargs.setdefault("api_base", Agent.api_base)
-        kwargs.setdefault("api_key", Agent.api_key)
-        self.logger.debug(
-            f"Making API call with model: {self.model}, api_base: {Agent.api_base}"
-        )
-        response = litellm.completion(**kwargs)
+    def completion_with_retry(cls, **kwargs) -> Any:
+        kwargs.setdefault("model", cls.model)
+        kwargs.setdefault("api_base", cls.api_base)
+        kwargs.setdefault("api_key", cls.api_key)
+        return litellm.completion(**kwargs)
+
+    def _update_token_usage(self, response: Any) -> None:
+        """Extract token usage from a completion response and update instance counters."""
         usage = getattr(response, "usage", None)
         if usage is not None:
             self.tokens_used += getattr(usage, "total_tokens", 0) or 0
             pt = getattr(usage, "prompt_tokens", 0) or 0
             self.last_prompt_tokens = pt
             self.peak_prompt_tokens = max(self.peak_prompt_tokens, pt)
-        return response
 
     def budget_remaining(self) -> bool:
         """True while the current phase's token ceiling is unset or not yet hit."""
@@ -255,7 +267,11 @@ class Agent:
                 )
                 break
 
+            self.logger.debug(
+                f"Making API call with model: {self.model}, api_base: {Agent.api_base}"
+            )
             response = self.completion_with_retry(**completion_kwargs)
+            self._update_token_usage(response)
             msg = response.choices[0].message
             # Bedrock rejects toolUse.name outside [a-zA-Z0-9_-]; scrub here so a
             # hallucinated name with invalid chars cannot poison replayed history.
@@ -317,7 +333,11 @@ class Agent:
             }
         )
 
+        self.logger.debug(
+            f"Making API call with model: {self.model}, api_base: {Agent.api_base}"
+        )
         response = self.completion_with_retry(**completion_kwargs)
+        self._update_token_usage(response)
         content = response.choices[0].message.content or ""
         self._log_final_response(response, content)
         return content
@@ -1681,6 +1701,26 @@ class Agent:
             raise ValueError(f"verdicts path escapes sandbox: {path}")
         return path
 
+    def _check_fp_database(self, finding: str) -> list:
+        """Search the FP vector DB for findings similar to *finding*.
+
+        Returns a list of match dicts (keys: issue_description, code_snippet,
+        reason) sorted by similarity.  Empty list when no match exists or the
+        DB is unavailable. Uses the configured default top_k so the embedder has
+        enough context to surface relevant stored patterns.
+        """
+        if self.fp_db is None or not self.fp_db.is_available():
+            return []
+        return self.fp_db.search_similar_issues(code_snippet="", issue_text=finding)
+
+    def _write_verdict(self, finding: str, impact: str, verdict: str, reason: str, proof: str) -> None:
+        record = {"finding": finding, "impact": impact, "verdict": verdict, "reason": reason, "proof": proof}
+        path = self.verdicts_path_for(self.current_label or "unit")
+        with open(path, "a") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        events.emit(events.VERDICT, label=self.current_label, finding=finding,
+                impact=impact, verdict=verdict, reason=reason)
+
     def _tool_record_verdict(
         self,
         finding: str,
@@ -1694,21 +1734,45 @@ class Agent:
         the per-phase verdicts file, so verdicts are durable and read back
         reliably (no giant array to parse, no markdown to re-split).
         `impact` is its severity; `verdict` is keep/drop; `proof` substantiates a
-        drop. The keep/drop policy is applied by the review."""
-        path = self.verdicts_path_for(self.current_label or "unit")
-        record = {
-            "finding": finding,
-            "impact": impact,
-            "verdict": verdict,
-            "reason": reason,
-            "proof": proof,
-        }
-        with open(path, "a") as f:
-            f.write(json.dumps(record, ensure_ascii=False) + "\n")
-        events.emit(events.VERDICT, label=self.current_label, finding=finding,
-                    impact=impact, verdict=verdict, reason=reason)
-        return {"ok": True, "recorded": verdict or "verdict"}
+        drop. The keep/drop policy is applied by the review.
 
+        When verdict is "keep", the FP database is queried for a semantically
+        similar stored false positive. If one is found the tool returns ok=False
+        with a warning so the AI re-examines. A second call with the same
+        finding is accepted unconditionally (accepted_on_try=True) to prevent
+        infinite loops. The JSONL line is always written first so the verdict
+        is durable regardless of the warning path.
+        """
+        if verdict.strip().lower() == "keep":
+            matches = self._check_fp_database(finding)
+            if not matches or finding in self._seen_verdicts:
+                self._write_verdict(finding, impact, verdict, reason, proof)
+                return {"ok": True, "recorded": verdict, "accepted_on_try": True}
+            else:
+                self._seen_verdicts.add(finding)
+                self._write_verdict(finding, impact, verdict, reason, proof)
+                match_lines = [
+                    f"  issue_description: {m.get('issue_description', '')}\n"
+                    f"  code_snippet:      {m.get('code_snippet', '') or '(none)'}\n"
+                    f"  reason:            {m.get('reason', '')}"
+                    for m in matches
+                ]
+                return {
+                    "ok": False,
+                    "recorded": verdict,
+                    "warning": (
+                        f"{len(matches)} semantically similar finding(s) were previously "
+                        "confirmed as false positives:\n\n"
+                        + "\n\n".join(match_lines)
+                        + "\n\nFinding was recorded as keep for safety. "
+                        "If this is actually a false positive, call record_verdict "
+                        "again with verdict='drop' and proof."
+                    ),
+                }
+
+        # drop (or any non-keep verdict): write directly without FP check
+        self._write_verdict(finding, impact, verdict, reason, proof)
+        return {"ok": True, "recorded": verdict}
     def dispatch_tool(self, name: str, args: dict) -> dict:
         """Dispatch an agent tool by name. Returns {ok, ...}."""
         read_tools = {
@@ -1773,4 +1837,3 @@ class Agent:
             f"{prefix}/{f}" if prefix else f
             for f in stdout.strip().splitlines()
         }
-
