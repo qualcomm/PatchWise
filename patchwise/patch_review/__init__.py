@@ -224,12 +224,6 @@ def add_review_arguments(
         help=f"Run only short reviews: [`{_review_list_str(SHORT_REVIEWS)}`]. Overrides --reviews.",
     )
 
-    parser_or_group.add_argument(
-        "--install",
-        action="store_true",
-        help="Install missing dependencies for the specified reviews. This will not run any reviews, only install dependencies.",
-    )
-
     # TODO: Output a single diff that fixes all the issues
     # This needs using a single docker container and fixing issue incrementally
     parser_or_group.add_argument(
