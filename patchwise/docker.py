@@ -15,6 +15,30 @@ from patchwise.utils.repo_workspace import is_repo_managed, require_workspace_ro
 _GIT_COMMITTER = parse_config()["git_committer"]
 
 
+def check_docker_available() -> None:
+    """Fail fast with a clear message if `docker` can't be used at all."""
+    try:
+        result = subprocess.run(
+            ["docker", "container", "ls"], capture_output=True, text=True
+        )
+    except FileNotFoundError:
+        sys.exit(
+            "docker is not installed or not on PATH. "
+            "Install Docker: https://docs.docker.com/engine/install/"
+        )
+
+    if result.returncode != 0:
+        stderr = result.stderr.strip()
+        if "permission denied" in stderr.lower():
+            sys.exit(
+                "Permission denied when talking to the Docker daemon. "
+                "Add your user to the 'docker' group (sudo usermod -aG docker "
+                "$USER, then log out/in) or run patchwise with sufficient "
+                f"privileges.\n{stderr}"
+            )
+        sys.exit(f"Unable to reach the Docker daemon:\n{stderr}")
+
+
 class DockerManager:
     # Class-level tracking for initialization
     build_volume_initialized = False
