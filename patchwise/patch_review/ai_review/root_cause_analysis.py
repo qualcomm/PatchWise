@@ -963,6 +963,9 @@ record it with `record_finding`.
                 existing = [existing]
         except (FileNotFoundError, json.JSONDecodeError):
             existing = []
+        entry.setdefault(
+            "timestamp", datetime.datetime.now().isoformat(timespec="seconds")
+        )
         existing.append(entry)
         with open(obs_path, "w") as f:
             f.write(json.dumps(existing, indent=2))

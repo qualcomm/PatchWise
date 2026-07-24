@@ -75,8 +75,6 @@ def retry(
                 try:
                     return func(*args, **kwargs)
                 except exceptions as exc:
-                    if args and hasattr(args[0], "api_retries"):
-                        args[0].api_retries += 1
                     logger.warning(
                         "%s failed (attempt %d/%d): %s",
                         func.__qualname__,
@@ -85,6 +83,8 @@ def retry(
                         exc,
                     )
                     if attempt < max_retries - 1:
+                        if args and hasattr(args[0], "api_retries"):
+                            args[0].api_retries += 1
                         time.sleep(2**attempt)
                         if on_retry is not None:
                             on_retry(*args, **kwargs)

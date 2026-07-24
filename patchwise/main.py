@@ -13,6 +13,7 @@ from git.objects.commit import Commit
 from rich_argparse import RichHelpFormatter
 
 from patchwise import OUTPUT_PATH, __version__
+from .stats.dashboard import add_dashboard_arguments, run_dashboard_mode
 from .docker import check_docker_available
 from .logger_setup import add_logging_arguments, setup_logger
 from .mail_handler.cli import add_mail_arguments, run_mail_mode
@@ -56,6 +57,11 @@ def parse_args(config: Dict) -> argparse.Namespace:
         action="store_true",
         help="Disable the live dashboard and use plain log output.",
     )
+    parser.add_argument(
+        "--stats",
+        action="store_true",
+        help="Serve the observability web dashboard instead of running a review.",
+    )
 
     review_group = parser.add_argument_group("Patch Review Options")
 
@@ -91,6 +97,9 @@ def parse_args(config: Dict) -> argparse.Namespace:
     rca_group = parser.add_argument_group("Crashdump RCA Options (require --rca)")
     add_rca_arguments(rca_group)
 
+    dashboard_group = parser.add_argument_group("Dashboard Options (require --stats)")
+    add_dashboard_arguments(dashboard_group)
+
     ai_group = parser.add_argument_group("AI Review Options")
     add_ai_arguments(ai_group, config)
 
@@ -116,9 +125,18 @@ def parse_args(config: Dict) -> argparse.Namespace:
         for action in rca_group._group_actions
         if getattr(args, action.dest) != action.default
     ]
+    used_dashboard_args = [
+        action.option_strings[0]
+        for action in dashboard_group._group_actions
+        if getattr(args, action.dest) != action.default
+    ]
 
     if args.mail and args.rca:
         parser.error("--mail and --rca are mutually exclusive")
+    if args.stats and (args.mail or args.rca):
+        parser.error("--stats cannot be combined with --mail or --rca")
+    if not args.stats and used_dashboard_args:
+        parser.error(f"{', '.join(used_dashboard_args)} may only be used with --stats")
     if not args.mail and used_mail_args:
         parser.error(f"{', '.join(used_mail_args)} may only be used with --mail")
     if args.mail and args.repo_path is not None:
@@ -169,6 +187,7 @@ def run_local_mode(args: argparse.Namespace) -> None:
     # With --commit-dir, --repo-path is a broader workspace and the commit lives
     # in a subtree; resolve it so commit lookup uses the right repo.
     from patchwise.utils.repo_workspace import resolve_git_tree
+
     _, git_tree, _ = resolve_git_tree(args.repo_path, args.commit_dir)
     repo = Repo(str(git_tree))
     commits = get_commits(repo, args.commits)
@@ -214,8 +233,13 @@ def main():
     wants_help_or_version = bool(
         {"-h", "--help", "-v", "--version"} & set(sys.argv[1:])
     )
+    wants_dashboard = "--stats" in sys.argv[1:]
 
-    if not api_key_conf["no_reprompt"] and not wants_help_or_version:
+    if (
+        not api_key_conf["no_reprompt"]
+        and not wants_help_or_version
+        and not wants_dashboard
+    ):
         selected_option = display_prompt_with_options(
             api_key_conf["message"], api_key_conf["options"]
         )
@@ -228,6 +252,11 @@ def main():
     args = parse_args(config)
 
     setup_logger(log_file=args.log_file, log_level=args.log_level)
+
+    # The dashboard only reads on-disk artifacts — no Docker, no API key.
+    if args.stats:
+        run_dashboard_mode(args)
+        return
 
     check_docker_available()
 
@@ -259,6 +288,7 @@ def main():
     )
     if use_ui:
         from patchwise.ui.dashboard import live_dashboard
+
         dashboard_cm = live_dashboard(args)
     else:
         dashboard_cm = contextlib.nullcontext()

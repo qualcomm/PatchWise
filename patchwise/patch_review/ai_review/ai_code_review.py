@@ -972,7 +972,8 @@ finding with record_verdict as you work through them.
     def _fp_filter_phase(
         self, findings: List[Tuple[Dict[str, Any], str]]
     ) -> Tuple[str, int, int, int]:
-        """Run the filter. Returns (final_review, kept_count).
+        """Run the filter. Returns
+        (final_review, kept_count, issues_before_filter, likely_false_positives).
 
         The filter judges the findings one at a time and streams a verdict per
         finding via record_verdict ({finding, impact, verdict, reason, proof}).
@@ -987,6 +988,9 @@ finding with record_verdict as you work through them.
         if not findings_text:
             self.logger.warning("[filter] no findings to filter.")
             return "", 0, 0, 0
+        # Issues found before filtering = the '### '-headed finding blocks the
+        # exec phase streamed to findings.md.
+        issues_before = findings_text.count("\n### ") + 1
         fp_user = self.FP_FILTER_USER_TEMPLATE.format(
             diff=self.diff, findings=findings_text
         )
@@ -1018,8 +1022,7 @@ finding with record_verdict as you work through them.
             # No verdicts at all: keep everything rather than risk dropping a real
             # defect. The cleanup pass still renders the raw findings.
             self.logger.warning("[filter] no verdicts recorded; keeping all findings.")
-            kept_count = findings_text.count("\n### ") + 1
-            return self.format_chat_response(findings_text), kept_count, kept_count, 0
+            return self.format_chat_response(findings_text), issues_before, issues_before, 0
 
         kept: List[str] = []
         dropped: List[Dict[str, Any]] = []
@@ -1051,7 +1054,7 @@ finding with record_verdict as you work through them.
             f"{len(dropped)} drop(s)."
         )
         kept_text = "\n\n".join(kept).strip()
-        return (self.format_chat_response(kept_text) if kept_text else ""), len(kept), len(entries), floored
+        return (self.format_chat_response(kept_text) if kept_text else ""), len(kept), issues_before, floored
 
     # output cleanup (unchanged)
 
@@ -1092,6 +1095,9 @@ finding with record_verdict as you work through them.
                 existing = [existing]
         except (FileNotFoundError, json.JSONDecodeError):
             existing = []
+        entry.setdefault(
+            "timestamp", datetime.datetime.now().isoformat(timespec="seconds")
+        )
         existing.append(entry)
         with open(obs_path, "w") as f:
             f.write(json.dumps(existing, indent=2))
