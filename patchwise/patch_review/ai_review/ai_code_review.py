@@ -5,11 +5,12 @@ import datetime
 import json
 import os
 import re
+import time
 from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from patchwise import SANDBOX_PATH
+from patchwise import SANDBOX_PATH, __version__
 from patchwise.patch_review.ai_agent.agent import (
     KERNEL_REVIEW_PROMPTS_PATH,
     SUBSYSTEM_REVIEW_PROMPTS_PATH,
@@ -745,7 +746,7 @@ finding with record_verdict as you work through them.
         revised = self._finalize_json(plan_messages, raw, "revised unit list (a JSON array)")
         return revised if isinstance(revised, list) and revised else None
 
-    def _plan_phase(self, shared_user: str, commit_text: str) -> List[Dict[str, Any]]:
+    def _plan_phase(self, shared_user: str, commit_text: str) -> Tuple[List[Dict[str, Any]], int, bool]:
         # Planner: split the diff into units, with no taxonomy/subsystem priors.
         # The conversation is reused across rounds so the planner revises its own
         # plan in light of the critic's feedback (planner -> critic -> planner).
@@ -762,14 +763,8 @@ finding with record_verdict as you work through them.
         tasks = self._finalize_json(plan_messages, raw, "unit list (a JSON array)")
         if not isinstance(tasks, list):
             tasks = []
-        self.logger.info(f"[plan] planner proposed {len(tasks)} unit(s).")
+        self.logger.debug(f"[plan] planner proposed {len(tasks)} unit(s).")
         events.emit(events.PLAN, tasks=tasks)
-
-        # Record the plan's evolution (initial -> critic feedback -> revised ...)
-        # for observability into how the planner↔critic loop shaped the units.
-        evolution: List[Dict[str, Any]] = [
-            {"round": 0, "stage": "planner_initial", "tasks": tasks}
-        ]
 
         # The critic starts fresh each round (so it never assumes a prior round
         # already closed a gap), but references it has read accumulate here and get
@@ -778,22 +773,26 @@ finding with record_verdict as you work through them.
 
         # Critic critiques; planner revises. Repeat until the critic has no
         # material feedback (convergence) or the iteration cap is hit.
+        plan_rounds = 0
+        # Converged means the critic ran out of material feedback before the
+        # iteration cap. It stays False only if the loop below exhausts every
+        # allowed round without the critic ever going quiet (cap hit).
+        plan_converged = False
         for round_no in range(1, self._max_plan_iterations() + 1):
+            plan_rounds = round_no
             self.agent.current_label = f"critic:r{round_no}"
             events.emit(events.PHASE, name="critique")
             verdict = self._critique_plan(critic_loaded, commit_text, tasks)
             material = bool(verdict.get("material"))
             feedback = verdict.get("feedback") or []
-            evolution.append(
-                {"round": round_no, "stage": "critic", "material": material, "feedback": feedback}
-            )
-            self.logger.info(
+            self.logger.debug(
                 f"[plan] critic round {round_no}: material={material}, "
                 f"{len(feedback)} point(s): {feedback}"
             )
             events.emit(events.CRITIC, round=round_no, material=material,
                         feedback=feedback)
             if not material or not feedback:
+                plan_converged = True
                 break
             # Planner revises its own work-list in light of the feedback.
             self.agent.current_label = f"planner:r{round_no}"
@@ -802,18 +801,13 @@ finding with record_verdict as you work through them.
             revised = self._revise_plan(plan_messages, feedback)
             if revised:
                 tasks = revised
-            evolution.append(
-                {"round": round_no, "stage": "planner_revised", "tasks": tasks}
-            )
-            self.logger.info(
+            self.logger.debug(
                 f"[plan] planner revised (round {round_no}): units {before}->{len(tasks)}."
             )
 
         final = self._normalize_tasks(tasks)
-        evolution.append({"round": "final", "stage": "final", "tasks": final})
-        self._dump("plan_evolution.json", json.dumps(evolution, indent=2))
         events.emit(events.PLAN, tasks=final)
-        return final
+        return final, plan_rounds, plan_converged
 
     # Phase 2: EXECUTION
 
@@ -883,6 +877,7 @@ finding with record_verdict as you work through them.
         result = (result or "").strip()
         # Prefer the findings the reviewer streamed to disk as it worked; fall back
         # to the returned text only if it recorded nothing via record_finding.
+        # TODO: Give a final chance to record findings after budget expires
         recorded = findings_path.read_text().strip() if findings_path.exists() else ""
         text = recorded or result
         self.logger.info(
@@ -895,7 +890,7 @@ finding with record_verdict as you work through them.
         self, tasks: List[Dict[str, Any]], shared_user: str
     ) -> List[Tuple[Dict[str, Any], str]]:
         n = len(tasks)
-        self.logger.info(f"[exec] reviewing {n} unit(s) sequentially.")
+        self.logger.debug(f"[exec] reviewing {n} unit(s) sequentially.")
 
         # Execution is single-unit by invariant: there is exactly one merged
         # unit covering every analysis dimension. The loop is kept general, but
@@ -976,7 +971,7 @@ finding with record_verdict as you work through them.
 
     def _fp_filter_phase(
         self, findings: List[Tuple[Dict[str, Any], str]]
-    ) -> Tuple[str, int]:
+    ) -> Tuple[str, int, int, int]:
         """Run the filter. Returns (final_review, kept_count).
 
         The filter judges the findings one at a time and streams a verdict per
@@ -986,12 +981,12 @@ finding with record_verdict as you work through them.
         finding is kept.
         """
         if not findings:
-            self.logger.info("[filter] no findings to filter.")
-            return "", 0
+            self.logger.warning("[filter] no findings to filter.")
+            return "", 0, 0, 0
         findings_text = "\n\n".join(text for _, text in findings).strip()
         if not findings_text:
-            self.logger.info("[filter] no findings to filter.")
-            return "", 0
+            self.logger.warning("[filter] no findings to filter.")
+            return "", 0, 0, 0
         fp_user = self.FP_FILTER_USER_TEMPLATE.format(
             diff=self.diff, findings=findings_text
         )
@@ -1023,7 +1018,8 @@ finding with record_verdict as you work through them.
             # No verdicts at all: keep everything rather than risk dropping a real
             # defect. The cleanup pass still renders the raw findings.
             self.logger.warning("[filter] no verdicts recorded; keeping all findings.")
-            return self.format_chat_response(findings_text), findings_text.count("\n### ") + 1
+            kept_count = findings_text.count("\n### ") + 1
+            return self.format_chat_response(findings_text), kept_count, kept_count, 0
 
         kept: List[str] = []
         dropped: List[Dict[str, Any]] = []
@@ -1055,7 +1051,7 @@ finding with record_verdict as you work through them.
             f"{len(dropped)} drop(s)."
         )
         kept_text = "\n\n".join(kept).strip()
-        return (self.format_chat_response(kept_text) if kept_text else ""), len(kept)
+        return (self.format_chat_response(kept_text) if kept_text else ""), len(kept), len(entries), floored
 
     # output cleanup (unchanged)
 
@@ -1077,12 +1073,32 @@ finding with record_verdict as you work through them.
             return ""
         return super().format_chat_response(review)
 
+    _SUBDIR = "ai_code_review"
+
     def _dump(self, name: str, content: str) -> None:
-        with open(os.path.join(SANDBOX_PATH, name), "w") as f:
+        path = SANDBOX_PATH / self._SUBDIR
+        path.mkdir(parents=True, exist_ok=True)
+        with open(path / name, "w") as f:
             f.write(content)
+
+    def _append_observability(self, entry: dict) -> None:
+        path = SANDBOX_PATH / self._SUBDIR
+        path.mkdir(parents=True, exist_ok=True)
+        obs_path = path / "observability.json"
+        try:
+            with open(obs_path) as f:
+                existing = json.load(f)
+            if not isinstance(existing, list):
+                existing = [existing]
+        except (FileNotFoundError, json.JSONDecodeError):
+            existing = []
+        existing.append(entry)
+        with open(obs_path, "w") as f:
+            f.write(json.dumps(existing, indent=2))
 
     def run(self) -> str:
         """Execute the multi-phase AI code review (plan -> execution -> filter)."""
+        t_start = time.monotonic()
         ctx_block = (
             self.ADDITIONAL_CONTEXT_TEMPLATE.format(
                 additional_context=sanitize_additional_context(self.additional_context)
@@ -1110,9 +1126,12 @@ finding with record_verdict as you work through them.
 
         # Phase 1: PLAN (planner splits, critic refines with taxonomy + guides).
         events.emit(events.PHASE, name="plan")
-        tasks = self._plan_phase(shared_user, self.commit_message)
+        tasks, plan_rounds, plan_converged = self._plan_phase(shared_user, self.commit_message)
         self._dump("plan.json", json.dumps(tasks, indent=2))
-        self.logger.info(f"[plan] final plan: {len(tasks)} unit(s).")
+        # Count the dimensions in the final plan before they are merged into the
+        # single execution unit below (else len(tasks) would always read 1).
+        planned_dimensions = len(tasks)
+        self.logger.info(f"[plan] final plan: {planned_dimensions} unit(s).")
 
         # Execution is always a single combined unit: one worker covers every
         # planned analysis angle as a checklist. This is an invariant of the
@@ -1120,7 +1139,7 @@ finding with record_verdict as you work through them.
         # the review and multiplies tokens for no recall gain.
         if tasks:
             tasks = [self._merge_units(tasks)]
-            self.logger.info("[plan] collapsed to 1 combined execution unit.")
+            self.logger.debug("[plan] collapsed to 1 combined execution unit.")
 
         # Context-window guard: bound the worker's per-request INPUT size so it
         # stays under the model's context limit (e.g. <1M). This is a per-request
@@ -1145,30 +1164,36 @@ finding with record_verdict as you work through them.
 
         # Phase 3: FALSE-POSITIVE FILTER -> existing inline-review output.
         events.emit(events.PHASE, name="filter")
-        final, kept_blocks = self._fp_filter_phase(findings)
+        final, kept_blocks, issues_before_filter, likely_fps = self._fp_filter_phase(findings)
 
-        # Observability: per-unit findings, filter result, tokens.
+        total_time = time.monotonic() - t_start
         observability = {
-            "units_planned": len(tasks),
-            "units_with_findings": len(findings),
-            "per_unit": [
-                {
-                    "id": t.get("id"),
-                    "dimension": t.get("dimension"),
-                    "focus": t.get("focus"),
-                    "source": t.get("source"),
-                    "chars": len(text),
-                }
-                for t, text in findings
-            ],
+            "patchwise_version": __version__,
+            "model": self.agent.model,
+            "commit_id": str(self.commit.hexsha),
+            "total_plan_rounds": plan_rounds,
+            "plan_converged": plan_converged,
+            "total_planner_tasks": planned_dimensions,
+            "issues_before_filter": issues_before_filter,
             "issues_after_filter": kept_blocks,
-            "tokens_used": self.agent.tokens_used,
+            "total_likely_false_positives": likely_fps,
+            "exec_iter_cap_hit": self.agent.exec_iter_cap_hit,
+            "tokens_used": {
+                "input": self.agent.input_tokens,
+                "cached": self.agent.cached_tokens,
+                "reasoning": self.agent.reasoning_tokens,
+                "output": self.agent.output_tokens,
+                "total": self.agent.tokens_used,
+            },
             "peak_prompt_tokens": self.agent.peak_prompt_tokens,
+            "total_time": round(total_time, 2),
+            "time_waiting_for_ai_response": round(self.agent.time_waiting_for_ai_response, 2),
+            "api_retries": self.agent.api_retries,
         }
-        self._dump("observability.json", json.dumps(observability, indent=2))
+        self._append_observability(observability)
         self.logger.info(
-            f"[review] units={len(tasks)} with_findings={len(findings)} "
-            f"issues_kept={kept_blocks} (filter); "
+            f"[review] tasks={len(tasks)} issues_before={issues_before_filter} "
+            f"issues_kept={kept_blocks} likely_fps={likely_fps}; "
             f"tokens_used={self.agent.tokens_used}."
         )
         events.emit(events.RUN_DONE, summary={

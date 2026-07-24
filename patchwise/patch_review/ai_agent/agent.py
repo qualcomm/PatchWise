@@ -97,6 +97,15 @@ class Agent:
 
         # Summed for observability; there is no run-wide token cap.
         self.tokens_used: int = 0
+        self.input_tokens: int = 0
+        self.cached_tokens: int = 0
+        self.reasoning_tokens: int = 0
+        self.output_tokens: int = 0
+        self.api_retries: int = 0
+        self.exec_iter_cap_hit: bool = False
+
+        # Cumulative wall-clock seconds spent waiting for API responses.
+        self.time_waiting_for_ai_response: float = 0.0
 
         # Per-phase ceiling on tokens_used, deliberately not a run-wide total: a
         # shared total lets a heavy phase starve a later one. None disables it.
@@ -140,13 +149,21 @@ class Agent:
         self.logger.debug(
             f"Making API call with model: {self.model}, api_base: {Agent.api_base}"
         )
+        t0 = time.monotonic()
         response = litellm.completion(**kwargs)
+        self.time_waiting_for_ai_response += time.monotonic() - t0
         usage = getattr(response, "usage", None)
         if usage is not None:
             self.tokens_used += getattr(usage, "total_tokens", 0) or 0
             pt = getattr(usage, "prompt_tokens", 0) or 0
             self.last_prompt_tokens = pt
             self.peak_prompt_tokens = max(self.peak_prompt_tokens, pt)
+            self.input_tokens += pt
+            ct = getattr(usage, "prompt_tokens_details", None)
+            self.cached_tokens += (getattr(ct, "cached_tokens", 0) or 0) if ct else 0
+            cd = getattr(usage, "completion_tokens_details", None)
+            self.reasoning_tokens += (getattr(cd, "reasoning_tokens", 0) or 0) if cd else 0
+            self.output_tokens += getattr(usage, "completion_tokens", 0) or 0
         return response
 
     def budget_remaining(self) -> bool:
@@ -166,7 +183,7 @@ class Agent:
             f"completion_tokens={getattr(usage, 'completion_tokens', None)}"
         )
         if content.strip():
-            self.logger.info(detail)
+            self.logger.debug(detail)
         else:
             self.logger.warning(f"empty final answer — {detail}")
 
@@ -307,6 +324,8 @@ class Agent:
         self.logger.warning(
             f"Agent reached max iterations ({max_iters}) or budget. Forcing final response without tools."
         )
+        if self.current_label.startswith("exec:"):
+            self.exec_iter_cap_hit = True
 
         completion_kwargs["tool_choice"] = "none"
 
