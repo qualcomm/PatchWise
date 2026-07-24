@@ -32,7 +32,9 @@ dependencies = [
     "requests>=2.31.0",
     "sentence-transformers>=5.6.0",
     "chromadb>=1.5.9",
-    "imapclient>=3.0.0"
+    "imapclient>=3.0.0",
+    "fastapi>=0.110",
+    "uvicorn>=0.29"
 ]
 readme = "README.md"
 classifiers = [

@@ -292,6 +292,7 @@ PatchWise merges [`patchwise/default_config.yaml`](patchwise/default_config.yaml
 - `--mail`: Run the mail-handler loop instead of reviewing local commits. See [Mail Mode](#mail-mode).
 - `--rca`: Root-cause a kernel crashdump folder instead of reviewing commits. See [Crashdump Root-Cause Analysis](#crashdump-root-cause-analysis).
 - `--plain`: Disable the live dashboard and use plain log output.
+- `--stats`: Serve the observability web dashboard instead of running a review, computed from the artifacts under the sandbox.
 - `--output-dir`: Directory to save the review/RCA results. (default: `/tmp/patchwise/output`, overridable via `PATCHWISE_OUTPUT_PATH`)
 
 ### Patch Review Options
