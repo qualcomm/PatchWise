@@ -37,12 +37,13 @@ import json
 import logging
 import os
 import re
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from git import Repo
 
-from patchwise import PACKAGE_PATH, SANDBOX_PATH
+from patchwise import PACKAGE_PATH, SANDBOX_PATH, __version__
 from patchwise.docker import CONTAINERS_BUILT, DockerManager
 from patchwise.patch_review.ai_agent.agent import (
     Agent,
@@ -943,9 +944,28 @@ record it with `record_finding`.
 
     # observability
 
+    _SUBDIR = "rca"
+
     def _dump(self, name: str, content: str) -> None:
-        with open(os.path.join(SANDBOX_PATH, name), "w") as f:
+        path = SANDBOX_PATH / self._SUBDIR
+        path.mkdir(parents=True, exist_ok=True)
+        with open(path / name, "w") as f:
             f.write(content)
+
+    def _append_observability(self, entry: dict) -> None:
+        path = SANDBOX_PATH / self._SUBDIR
+        path.mkdir(parents=True, exist_ok=True)
+        obs_path = path / "observability.json"
+        try:
+            with open(obs_path) as f:
+                existing = json.load(f)
+            if not isinstance(existing, list):
+                existing = [existing]
+        except (FileNotFoundError, json.JSONDecodeError):
+            existing = []
+        existing.append(entry)
+        with open(obs_path, "w") as f:
+            f.write(json.dumps(existing, indent=2))
 
     @staticmethod
     def _oneline(text: Any, limit: int) -> str:
@@ -988,6 +1008,7 @@ record it with `record_finding`.
     def run(self) -> str:
         """Execute the RCA: engineer -> maintainer (refute -> resume the engineer with
         its questions) -> the engineer's final accepted answer as the report."""
+        t_start = time.monotonic()
         artifacts = self._list_artifacts()
         self.manifest = self._build_manifest(artifacts)
         self.overview = self._build_overview(artifacts)
@@ -1050,7 +1071,11 @@ record it with `record_finding`.
             }
             for v in verdicts
         ]
+        total_time = time.monotonic() - t_start
+        a = self.agent
         observability = {
+            "patchwise_version": __version__,
+            "model": a.model,
             "maintainer_rounds": len(verdicts),
             "refuted_rounds": sum(1 for v in verdicts if v.get("refuted")),
             "verdicts": verdicts_summary,
@@ -1058,12 +1083,21 @@ record it with `record_finding`.
                 "tools_used": engineer_tools,
                 "chars": len(answer),
             },
-            "tokens_used": self.agent.tokens_used,
+            "tokens_used": {
+                "input": a.input_tokens,
+                "cached": a.cached_tokens,
+                "reasoning": a.reasoning_tokens,
+                "output": a.output_tokens,
+                "total": a.tokens_used,
+            },
             "engineer_token_budget": self._engineer_token_budget(),
             "maintainer_token_budget": self._maintainer_token_budget(),
-            "peak_prompt_tokens": self.agent.peak_prompt_tokens,
+            "peak_prompt_tokens": a.peak_prompt_tokens,
+            "total_time": round(total_time, 2),
+            "time_waiting_for_ai_response": round(a.time_waiting_for_ai_response, 2),
+            "api_retries": a.api_retries,
         }
-        self._dump("observability.json", json.dumps(observability, indent=2))
+        self._append_observability(observability)
         self.logger.info(
             f"[rca] maintainer_rounds={len(verdicts)} "
             f"refuted={sum(1 for v in verdicts if v.get('refuted'))}; "
