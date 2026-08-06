@@ -372,6 +372,19 @@ as needed, keeping them disjoint and each scoped to real files/symbols. Output
 the full updated JSON array in the same format as before.
 """
 
+    CRITIC_RESUME_TEMPLATE = """
+The planner revised the work-list in response to your feedback. Re-critique the
+updated version below.
+
+Run the full coverage check again; do not only verify the prior feedback.
+
+## Revised work-list
+
+```json
+{plan}
+```
+"""
+
     FP_FILTER_USER_TEMPLATE = """
 False-positive-filter the findings below for this patch. Record one verdict per
 finding with record_verdict as you work through them.
@@ -637,34 +650,35 @@ finding with record_verdict as you work through them.
         return int(raw) if raw and raw.isdigit() and int(raw) > 0 else self.FP_ITER_CAP
 
     def _critique_plan(
-        self, critic_loaded: OrderedDict[str, str], commit_text: str,
-        tasks: List[Dict[str, Any]]
+        self, commit_text: str, tasks: List[Dict[str, Any]],
+        critic_messages: List[dict],
     ) -> Dict[str, Any]:
         """Critic pass: returns {material: bool, feedback: [str]}. The critic does
         not edit the work-list — it only tells the planner what to fix.
 
-        Each round starts from a FRESH conversation: the critic only ever sees the
-        current work-list, never its own prior critiques, so it re-judges coverage
-        from scratch instead of assuming earlier rounds already closed the gaps.
-        To avoid re-fetching the same references every round, the subsystem guides
-        and Documentation/ files it has already read (`critic_loaded`, accumulated
-        across rounds) are pasted into the prompt up front.
+        The critic keeps one conversation across plan rounds, so it retains the
+        references it fetched and can judge the revised plan with its prior
+        coverage pass still in context.
         """
-        critic_messages: List[dict] = [
-            {"role": "system", "content": self._critic_system_prompt()}
-        ]
-        loaded_block = self._render_loaded_refs(critic_loaded)
-        critic_messages.append(
-            {
+        if critic_messages:
+            critic_messages.append({
                 "role": "user",
-                "content": loaded_block
-                + self.CRITIC_USER_TEMPLATE.format(
+                "content": self.CRITIC_RESUME_TEMPLATE.format(
+                    plan=json.dumps(tasks, indent=2),
+                ),
+            })
+        else:
+            critic_messages.extend([
+                {"role": "system", "content": self._critic_system_prompt()},
+                {
+                    "role": "user",
+                    "content": self.CRITIC_USER_TEMPLATE.format(
                     commit_text=commit_text,
                     diff=self.diff,
                     plan=json.dumps(tasks, indent=2),
                 ),
-            }
-        )
+                },
+            ])
         # The critic keeps get_subsystem_review_guide (subsystem concerns) and
         # read_doc (Documentation/ contracts only). It gets no code-reading or
         # -search tools (read_file/grep/find_*), so it physically cannot hunt
@@ -681,52 +695,12 @@ finding with record_verdict as you work through them.
                 "search_docs",
             ],
         )
-        # Carry whatever it read this round into the next round's prompt.
-        self._harvest_loaded_refs(critic_messages, critic_loaded)
-        verdict = self._finalize_json(critic_messages, raw, "critique (a JSON object)")
+        verdict = self._finalize_json(
+            critic_messages, raw, "critique (a JSON object)"
+        )
         if not isinstance(verdict, dict):
             return {"material": False, "feedback": []}
         return verdict
-
-    @staticmethod
-    def _harvest_loaded_refs(
-        messages: List[dict], critic_loaded: OrderedDict[str, str]
-    ) -> None:
-        """Record read_doc / read_binding / get_subsystem_review_guide contents
-        from a finished critic conversation so later rounds get them pasted in
-        rather than re-fetching. Keyed by doc path / guide name; first read
-        wins."""
-        for m in messages:
-            if m.get("role") != "tool" or m.get("name") not in (
-                "read_doc",
-                "read_binding",
-                "get_subsystem_review_guide",
-            ):
-                continue
-            try:
-                res = json.loads(m.get("content") or "{}").get("result") or {}
-            except (json.JSONDecodeError, AttributeError):
-                continue
-            # read_binding returns several matched bindings under `matches`;
-            # everything else carries a single path/name + content.
-            entries = (
-                res.get("matches")
-                if isinstance(res.get("matches"), list)
-                else [res]
-            )
-            for entry in entries:
-                key = entry.get("path") or entry.get("name")
-                content = entry.get("content")
-                if key and content and key not in critic_loaded:
-                    critic_loaded[key] = content
-
-    @staticmethod
-    def _render_loaded_refs(critic_loaded: OrderedDict[str, str]) -> str:
-        """Render already-read references as a prompt block."""
-        if not critic_loaded:
-            return ""
-        parts = [f"### {key}\n\n{content}\n" for key, content in critic_loaded.items()]
-        return "\n".join(parts) + "\n"
 
     def _revise_plan(
         self, plan_messages: List[dict], feedback: List[str]
@@ -766,10 +740,7 @@ finding with record_verdict as you work through them.
         self.logger.debug(f"[plan] planner proposed {len(tasks)} unit(s).")
         events.emit(events.PLAN, tasks=tasks)
 
-        # The critic starts fresh each round (so it never assumes a prior round
-        # already closed a gap), but references it has read accumulate here and get
-        # pasted into each round's prompt to avoid re-fetching guides/Documentation.
-        critic_loaded: OrderedDict[str, str] = OrderedDict()
+        critic_messages: List[dict] = []
 
         # Critic critiques; planner revises. Repeat until the critic has no
         # material feedback (convergence) or the iteration cap is hit.
@@ -782,7 +753,7 @@ finding with record_verdict as you work through them.
             plan_rounds = round_no
             self.agent.current_label = f"critic:r{round_no}"
             events.emit(events.PHASE, name="critique")
-            verdict = self._critique_plan(critic_loaded, commit_text, tasks)
+            verdict = self._critique_plan(commit_text, tasks, critic_messages)
             material = bool(verdict.get("material"))
             feedback = verdict.get("feedback") or []
             self.logger.debug(
