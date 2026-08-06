@@ -7,6 +7,7 @@ import os
 import re
 import time
 from collections import OrderedDict
+from functools import cached_property
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -14,6 +15,7 @@ from patchwise import SANDBOX_PATH, __version__
 from patchwise.patch_review.ai_agent.agent import (
     KERNEL_REVIEW_PROMPTS_PATH,
     SUBSYSTEM_REVIEW_PROMPTS_PATH,
+    _load_subsystem_guide,
 )
 from patchwise.patch_review.ai_agent.tool_definitions import NAVIGATION_TOOLS
 from patchwise.patch_review.decorators import register_llm_review, register_long_review
@@ -58,6 +60,7 @@ class AiCodeReview(AiReview):
     """
 
     MAX_PLAN_ITERATIONS = 10
+    SUBSYSTEM_SELECTOR_ITER_CAP = 10
     CRITIC_ITER_CAP = 10
     EXEC_ITER_CAP = 100
     FP_ITER_CAP = 50
@@ -185,7 +188,8 @@ Use the file paths from tool results as `file=` hints to disambiguate symbols. P
     SUBSYSTEM_INDEX_BLOCK = """
 ## Subsystem Review Guides
 
-The index below lists subsystem-specific review guides with their triggers (paths, symbols, function regexes). Match your files and symbols against it and call `get_subsystem_review_guide(<file>)` to load each guide whose triggers fire. Load only matching guides; skip this if nothing matches.
+The index below lists subsystem-specific review guides with their triggers
+(paths, symbols, function regexes).
 
 """
 
@@ -649,9 +653,77 @@ finding with record_verdict as you work through them.
         raw = os.environ.get("PATCHWISE_FP_ITER_CAP")
         return int(raw) if raw and raw.isdigit() and int(raw) > 0 else self.FP_ITER_CAP
 
+    def _select_subsystem_guides(self) -> set[str]:
+        """Ask a grep-only agent which subsystem guides apply to this change."""
+        changed_files = list(self.commit.stats.files)
+        subsystem_index = self.get_subsystem_index()
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "Select the subsystem guides with a reverse search. Check path "
+                    "triggers against the changed paths, then grep the changed files "
+                    "for the trigger regexes from every remaining row. Every grep call "
+                    "must pass file=<changed paths> and count_only=true. Batch as many "
+                    "independent grep calls as possible into each response. Cover every "
+                    "remaining subsystem row with its specific trigger regexes. Return "
+                    "only JSON:\n"
+                    '{"subsystem_guides": ["guide.md"]}\n'
+                    + self.SUBSYSTEM_INDEX_BLOCK
+                    + subsystem_index
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    "Classify this change.\n\n"
+                    "<commit_message>\n"
+                    + (self.commit_message or "")
+                    + "\n</commit_message>\n\n"
+                    "Changed files (kernel-relative JSON array):\n"
+                    + json.dumps(changed_files)
+                ),
+            },
+        ]
+
+        raw = self.agent.run_agent_loop(
+            messages,
+            force_tool_usage=False,
+            max_iterations=self.SUBSYSTEM_SELECTOR_ITER_CAP,
+            allowed_tools=["grep"],
+            label="subsystem-selector",
+        )
+        parsed = self._extract_json(raw)
+        requested = (
+            parsed.get("subsystem_guides") if isinstance(parsed, dict) else None
+        )
+        if not isinstance(requested, list):
+            self.logger.warning(
+                "[preload] subsystem selector returned invalid JSON; loading no guides"
+            )
+            return set()
+
+        return {name for name in requested if isinstance(name, str)}
+
+    def _pregather_critic_docs(self) -> OrderedDict[str, str]:
+        gathered: OrderedDict[str, str] = OrderedDict()
+        for guide_file in self._select_subsystem_guides():
+            content = _load_subsystem_guide(guide_file)
+            if content:
+                gathered[guide_file] = content
+            else:
+                self.logger.warning(
+                    f"[preload] selected subsystem guide is missing: {guide_file}"
+                )
+        self.logger.info(
+            f"[preload] gathered {len(gathered)} subsystem guide(s): "
+            f"{list(gathered.keys())}"
+        )
+        return gathered
+
     def _critique_plan(
-        self, commit_text: str, tasks: List[Dict[str, Any]],
-        critic_messages: List[dict],
+        self, preloaded_guides: OrderedDict[str, str], commit_text: str,
+        tasks: List[Dict[str, Any]], critic_messages: List[dict],
     ) -> Dict[str, Any]:
         """Critic pass: returns {material: bool, feedback: [str]}. The critic does
         not edit the work-list — it only tells the planner what to fix.
@@ -672,11 +744,12 @@ finding with record_verdict as you work through them.
                 {"role": "system", "content": self._critic_system_prompt()},
                 {
                     "role": "user",
-                    "content": self.CRITIC_USER_TEMPLATE.format(
-                    commit_text=commit_text,
-                    diff=self.diff,
-                    plan=json.dumps(tasks, indent=2),
-                ),
+                    "content": self._render_loaded_refs(preloaded_guides)
+                    + self.CRITIC_USER_TEMPLATE.format(
+                        commit_text=commit_text,
+                        diff=self.diff,
+                        plan=json.dumps(tasks, indent=2),
+                    ),
                 },
             ])
         # The critic keeps get_subsystem_review_guide (subsystem concerns) and
@@ -701,6 +774,16 @@ finding with record_verdict as you work through them.
         if not isinstance(verdict, dict):
             return {"material": False, "feedback": []}
         return verdict
+
+    @staticmethod
+    def _render_loaded_refs(preloaded_guides: OrderedDict[str, str]) -> str:
+        if not preloaded_guides:
+            return ""
+        parts = [
+            f"### {key}\n\n{content}\n"
+            for key, content in preloaded_guides.items()
+        ]
+        return "\n".join(parts) + "\n"
 
     def _revise_plan(
         self, plan_messages: List[dict], feedback: List[str]
@@ -740,6 +823,7 @@ finding with record_verdict as you work through them.
         self.logger.debug(f"[plan] planner proposed {len(tasks)} unit(s).")
         events.emit(events.PLAN, tasks=tasks)
 
+        preloaded_guides = self._pregather_critic_docs()
         critic_messages: List[dict] = []
 
         # Critic critiques; planner revises. Repeat until the critic has no
@@ -753,7 +837,9 @@ finding with record_verdict as you work through them.
             plan_rounds = round_no
             self.agent.current_label = f"critic:r{round_no}"
             events.emit(events.PHASE, name="critique")
-            verdict = self._critique_plan(commit_text, tasks, critic_messages)
+            verdict = self._critique_plan(
+                preloaded_guides, commit_text, tasks, critic_messages
+            )
             material = bool(verdict.get("material"))
             feedback = verdict.get("feedback") or []
             self.logger.debug(

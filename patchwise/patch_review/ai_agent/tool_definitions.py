@@ -92,6 +92,8 @@ TOOLS = [
                 "entry). read_file(path, start, end) returns the whole construct. "
                 "It is null only outside every indexed construct. "
                 "Capped at 100; 'total' and 'truncated' indicate overflow. "
+                "Set `count_only` to return only the number of matching lines, "
+                "without snippets or enclosing constructs. "
                 "If some scoped paths don't exist, the search still runs over "
                 "the rest and lists the dropped ones in 'skipped_paths'. "
                 "By default searches *.c and *.h only. Use `glob` to widen: "
@@ -117,6 +119,13 @@ TOOLS = [
                         "type": "string",
                         "description": (
                             "Comma-separated ripgrep glob patterns. Defaults to '*.c,*.h'."
+                        ),
+                    },
+                    "count_only": {
+                        "type": "boolean",
+                        "description": (
+                            "Return only {ok, count} instead of individual hits. "
+                            "Use for existence/count checks."
                         ),
                     },
                 },

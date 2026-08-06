@@ -67,6 +67,8 @@ def _load_subsystem_guide(safe_name: str) -> Optional[str]:
     call across reviews, phases, and critic rounds (the critic re-fetches the
     same guide each round). Returns None when the guide does not exist.
     """
+    if os.path.basename(safe_name) != safe_name or not safe_name.endswith(".md"):
+        return None
     try:
         with open(SUBSYSTEM_REVIEW_PROMPTS_PATH / safe_name, "r") as f:
             return f.read()
@@ -924,7 +926,8 @@ class Agent:
         pattern: str,
         file: Optional[Union[str, List[str]]] = None,
         glob: Optional[str] = None,
-    ) -> Tuple[Optional[List[Dict[str, Any]]], Optional[str], List[str]]:
+        count_only: bool = False,
+    ) -> Tuple[Optional[Union[List[Dict[str, Any]], int]], Optional[str], List[str]]:
         """Run ripgrep and attribute each hit to its innermost enclosing construct.
 
         Returns (hits, None, skipped) on success or (None, error_message,
@@ -990,14 +993,17 @@ class Agent:
 
         kernel_dir = self.docker_manager.kernel_dir
 
-        rg_cmd: List[str] = [
-            "rg",
-            "--line-number",
-            "--no-heading",
-            "--with-filename",
-            "--max-count",
-            "500",
-        ]
+        rg_cmd: List[str] = ["rg"]
+        if count_only:
+            rg_cmd += ["--count", "--with-filename"]
+        else:
+            rg_cmd += [
+                "--line-number",
+                "--no-heading",
+                "--with-filename",
+                "--max-count",
+                "500",
+            ]
         # Apply glob filters when searching a directory (or the whole tree). When
         # every path is a concrete file, search them directly so a glob can't
         # filter an explicitly-named file out.
@@ -1022,6 +1028,15 @@ class Agent:
         if proc.returncode == 2:
             detail = (err or "").strip().splitlines()
             return None, f"invalid regex or search error: {detail[0] if detail else ''}", skipped
+
+        if count_only:
+            count = 0
+            for raw in output.splitlines():
+                try:
+                    count += int(raw.rsplit(":", 1)[-1])
+                except ValueError:
+                    continue
+            return count, None, skipped
 
         file_to_constructs: Dict[str, List[Tuple[int, int, str, str]]] = {}
 
@@ -1084,11 +1099,21 @@ class Agent:
         pattern: str,
         file: Optional[Union[str, List[str]]] = None,
         glob: Optional[str] = None,
+        count_only: bool = False,
     ) -> Dict[str, Any]:
-        self._ensure_navigation_stack(need_ts=True)
-        hits, error, skipped = self._rg_search(pattern, file, glob)
+        if not count_only:
+            self._ensure_navigation_stack(need_ts=True)
+        search_result, error, skipped = self._rg_search(
+            pattern, file, glob, count_only=count_only
+        )
         if error is not None:
             return {"ok": False, "error": error}
+        if count_only:
+            out: Dict[str, Any] = {"ok": True, "count": int(search_result or 0)}
+            if skipped:
+                out["skipped_paths"] = skipped
+            return out
+        hits = search_result or []
         total = len(hits)
         # Project to grep's documented schema: `enclosing` gives the innermost
         # construct (name/kind/start/end), so the model can read the whole
