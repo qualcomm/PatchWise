@@ -1619,6 +1619,96 @@ class Agent:
             self.logger.error(f"Error running checkpatch: {e}")
             return {"ok": False, "error": f"Error running checkpatch: {e}"}
 
+    def _tool_run_sparse(self, file_paths: Optional[List[str]] = None) -> Dict[str, Any]:
+        """Run sparse on modified C files to verify fixes."""
+        kernel_dir = self.docker_manager.kernel_dir
+        build_dir = self.docker_manager.build_dir
+
+        # Validate any explicitly requested files and normalize to kernel-relative paths.
+        rel_files: List[str] = []
+        if file_paths:
+            for fp in file_paths:
+                try:
+                    rel_files.append(self._validate_existing_kernel_path(fp))
+                except ValueError as e:
+                    return {"ok": False, "error": str(e)}
+
+        try:
+            proc = self.docker_manager.run_command(
+                ["git", "diff", "--name-only", "HEAD~1"],
+                cwd=str(kernel_dir),
+            )
+            stdout, _ = proc.communicate()
+
+            if proc.returncode != 0:
+                return {"ok": False, "error": "Failed to get modified files"}
+
+            if isinstance(stdout, bytes):
+                lines = stdout.decode().splitlines()
+            else:
+                lines = str(stdout).splitlines()
+
+            modified_files = [f.strip() for f in lines if f.strip()]
+
+            if rel_files:
+                not_in_diff = [f for f in rel_files if f not in modified_files]
+                if not_in_diff:
+                    return {
+                        "ok": False,
+                        "error": (
+                            f"The following file(s) are not part of the diff files: "
+                            f"{not_in_diff}. Modified files are: {modified_files}"
+                        ),
+                    }
+                files_to_check = rel_files
+            else:
+                files_to_check = [
+                    f for f in modified_files if f.endswith((".c", ".h"))
+                ]
+
+            if not files_to_check:
+                return {"ok": True, "result": "No C files to check"}
+
+            # Convert .c/.h paths to their .o targets for make
+            obj_targets = [
+                f.replace(".c", ".o").replace(".h", ".o") for f in files_to_check
+            ]
+
+            sparse_cmd = [
+                "make",
+                "-C", str(kernel_dir),
+                f"O={build_dir}",
+                f"-j{os.cpu_count()}",
+                "ARCH=arm64",
+                "LLVM=1",
+                "C=1",
+                "-s",
+                "CHECK=sparse",
+                *obj_targets,
+            ]
+
+            output = self.docker_manager.run_cmd_with_timer(
+                sparse_cmd,
+                desc="sparse check",
+                cwd=str(build_dir),
+            )
+
+            if "warning:" in output or "error:" in output:
+                return {
+                    "ok": True,
+                    "result": (
+                        f"Sparse output:\n{output}\n\n"
+                        "Issues remain. Please fix them and run sparse again."
+                    ),
+                }
+            return {
+                "ok": True,
+                "result": "✓ SUCCESS: All sparse issues fixed! No warnings or errors remain.",
+            }
+        except Exception as e:
+            self.logger.error(f"Error running sparse: {e}")
+            return {"ok": False, "error": f"Error running sparse: {e}"}
+
     def _read(self, container_path: str) -> str:
         text = self.docker_manager.read_file(container_path)
         if text is False:
@@ -1738,6 +1828,7 @@ class Agent:
             "git_show": self._tool_git_show,
             "git_cat_file": self._tool_git_cat_file,
             "run_checkpatch": self._tool_run_checkpatch,
+            "run_sparse": self._tool_run_sparse,
             "record_finding": self._tool_record_finding,
             "record_verdict": self._tool_record_verdict,
         }
