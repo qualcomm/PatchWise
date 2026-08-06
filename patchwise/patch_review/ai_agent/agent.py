@@ -1651,15 +1651,15 @@ class Agent:
             modified_files = [f.strip() for f in lines if f.strip()]
 
             if rel_files:
-                not_in_diff = [f for f in rel_files if f not in modified_files]
-                if not_in_diff:
-                    return {
-                        "ok": False,
-                        "error": (
-                            f"The following file(s) are not part of the diff files: "
-                            f"{not_in_diff}. Modified files are: {modified_files}"
-                        ),
-                    }
+                for f in rel_files:
+                    if f not in modified_files:
+                        return {
+                            "ok": False,
+                            "error": (
+                                f"The file_path you gave is not part of the diff files: "
+                                f"{modified_files}"
+                            ),
+                        }
                 files_to_check = rel_files
             else:
                 files_to_check = [
