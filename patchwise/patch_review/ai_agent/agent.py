@@ -155,6 +155,7 @@ class Agent:
         kwargs.setdefault("model", Agent.model)
         kwargs.setdefault("api_base", Agent.api_base)
         kwargs.setdefault("api_key", Agent.api_key)
+        self._inject_prompt_caching(kwargs)
         self.logger.debug(
             f"Making API call with model: {self.model}, api_base: {Agent.api_base}"
         )
@@ -174,6 +175,44 @@ class Agent:
             self.reasoning_tokens += (getattr(cd, "reasoning_tokens", 0) or 0) if cd else 0
             self.output_tokens += getattr(usage, "completion_tokens", 0) or 0
         return response
+
+    @staticmethod
+    def _inject_prompt_caching(kwargs: dict) -> None:
+        # Anthropic only caches a prefix ending at an explicit cache_control
+        # breakpoint; without one, Claude re-prefills the whole growing
+        # conversation every turn. OpenAI/Gemini providers cache prefixes on their
+        # own, so we skip them.
+        if "claude" not in kwargs["model"].lower():
+            return
+
+        def mark(message: dict) -> None:
+            content = message.get("content")
+            if isinstance(content, str):
+                message["content"] = [
+                    {
+                        "type": "text",
+                        "text": content,
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ]
+            elif isinstance(content, list) and content and isinstance(content[-1], dict):
+                content[-1]["cache_control"] = {"type": "ephemeral"}
+
+        messages = kwargs["messages"]
+        # The conversation list is reused and grows across turns, so a breakpoint
+        # left on a prior turn's last message persists; left uncleared they soon
+        # exceed Anthropic's cap of 4 cache_control blocks (a hard 400). Clear all,
+        # then re-derive exactly the two we want.
+        for m in messages:
+            c = m.get("content")
+            if isinstance(c, list):
+                for block in c:
+                    if isinstance(block, dict):
+                        block.pop("cache_control", None)
+        # First user turn caches the constant tools+system+patch prefix; the last
+        # message rolls the cache forward over the growing tool-output tail.
+        mark(next(m for m in messages if m["role"] == "user"))
+        mark(messages[-1])
 
     def budget_remaining(self) -> bool:
         """True while the current phase's token ceiling is unset or not yet hit."""
