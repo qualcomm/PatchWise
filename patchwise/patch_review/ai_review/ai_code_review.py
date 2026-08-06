@@ -297,6 +297,9 @@ load each matching guide with `get_subsystem_review_guide(<file>)`. Read kernel
 path through the real code with the navigation tools, reading the actual implementation
 to confirm how the code behaves.
 
+The assigned dimensions are a floor, not a ceiling: follow the code wherever it
+leads and report any issue you can ground in it, even if no dimension named it.
+
 The Kernel Technical Patterns below catalog common kernel defect classes.
 
 Report every issue you can ground in the code by calling `record_finding(location,
