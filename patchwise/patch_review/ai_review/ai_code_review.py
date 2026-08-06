@@ -721,6 +721,143 @@ finding with record_verdict as you work through them.
         )
         return gathered
 
+    @cached_property
+    def _commit_file_diffs(self) -> List[Dict[str, Any]]:
+        if not self.commit.parents:
+            return []
+
+        out: List[Dict[str, Any]] = []
+        for d in self.commit.parents[0].diff(self.commit, create_patch=True):
+            path = d.b_path or d.a_path
+            if not path:
+                continue
+
+            raw = d.diff
+            patch = (
+                raw.decode("utf-8", "replace")
+                if isinstance(raw, bytes)
+                else (raw or "")
+            )
+            ranges: List[Tuple[int, int]] = []
+            contexts: List[str] = []
+            for m in re.finditer(
+                r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@(.*)$",
+                patch,
+                re.M,
+            ):
+                start = int(m.group(1))
+                length = int(m.group(2)) if m.group(2) else 1
+                if length > 0:
+                    ranges.append((start, start + length - 1))
+                context = m.group(3).strip()
+                if context:
+                    contexts.append(context)
+
+            out.append({
+                "path": path,
+                "deleted": d.deleted_file,
+                "ranges": ranges,
+                "contexts": contexts,
+            })
+        return out
+
+    def _digest_callers(self, name: str) -> Tuple[List[str], List[str]]:
+        if len(name) < 4:
+            return [], []
+        try:
+            res = self.agent._tool_find_callers(name)
+        except Exception:
+            return [], []
+        if not res.get("ok"):
+            return [], []
+
+        result = res["result"]
+        callers = sorted({
+            c["function"]
+            for c in result.get("callers", [])
+            if c["function"] != name
+        })
+        wiring = sorted({
+            r["enclosing"]["name"]
+            for r in result.get("references", [])
+            if r.get("enclosing")
+        })
+        return callers, wiring
+
+    @cached_property
+    def _diff_digest_model(self) -> List[Dict[str, Any]]:
+        self.agent._ensure_navigation_stack(need_ts=True)
+
+        files: List[Dict[str, Any]] = []
+        for fd in self._commit_file_diffs:
+            path = fd["path"]
+            if fd["deleted"] or not path.endswith((".c", ".h")) or not fd["ranges"]:
+                continue
+
+            # The index stores paths relative to the mounted repo root.
+            index_path = os.path.join(self.git_subdir, path)
+            try:
+                constructs = self.agent._ts_constructs_in_file(index_path)
+            except RuntimeError:
+                continue
+
+            ranges = fd["ranges"]
+            changed = [
+                c for c in constructs
+                if any(
+                    not (c["end_line"] < lo or c["start_line"] > hi)
+                    for lo, hi in ranges
+                )
+            ]
+            ctx_blob = " ".join(fd["contexts"])
+            census = [
+                c for c in changed
+                if c["name"] not in ctx_blob
+            ]
+
+            funcs: List[Dict[str, Any]] = []
+            for c in changed:
+                if c["kind"] != "function":
+                    continue
+                callers, wiring = self._digest_callers(c["name"])
+                funcs.append({
+                    "name": c["name"],
+                    "callers": callers,
+                    "wiring": wiring,
+                })
+            files.append({"path": path, "census": census, "funcs": funcs})
+        return files
+
+    def _diff_digest_block(self) -> str:
+        file_blocks: List[str] = []
+        for f in self._diff_digest_model:
+            lines: List[str] = []
+            if f["census"]:
+                lines.append("  other hunk constructs: " + ", ".join(
+                    f"{c['name']} ({c['kind']}, L{c['start_line']}-{c['end_line']})"
+                    for c in f["census"]
+                ))
+            for fn in f["funcs"]:
+                parts: List[str] = []
+                if fn["callers"]:
+                    parts.append("callers: " + ", ".join(fn["callers"]))
+                if fn["wiring"]:
+                    parts.append("wired via: " + ", ".join(fn["wiring"]))
+                if parts:
+                    lines.append(f"  {fn['name']} — " + "; ".join(parts))
+            if lines:
+                file_blocks.append(f["path"] + "\n" + "\n".join(lines))
+
+        if not file_blocks:
+            return ""
+        return (
+            "\n\n## Call-graph & structure context (beyond the diff)\n\n"
+            "Derived from the code index: callers, wiring, and other constructs "
+            "overlapping changed hunks (including hunk context).\n\n"
+            + "\n".join(file_blocks)
+            + "\n"
+        )
+
     def _critique_plan(
         self, preloaded_guides: OrderedDict[str, str], commit_text: str,
         tasks: List[Dict[str, Any]], critic_messages: List[dict],
@@ -749,7 +886,8 @@ finding with record_verdict as you work through them.
                         commit_text=commit_text,
                         diff=self.diff,
                         plan=json.dumps(tasks, indent=2),
-                    ),
+                    )
+                    + self._diff_digest_block(),
                 },
             ])
         # The critic keeps get_subsystem_review_guide (subsystem concerns) and
@@ -810,7 +948,7 @@ finding with record_verdict as you work through them.
         self.agent.current_label = "planner"
         plan_messages = [
             {"role": "system", "content": self._planner_system_prompt()},
-            {"role": "user", "content": shared_user},
+            {"role": "user", "content": shared_user + self._diff_digest_block()},
         ]
         raw = self.agent.run_agent_loop(
             plan_messages,
