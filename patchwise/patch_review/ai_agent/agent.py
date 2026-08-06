@@ -40,6 +40,15 @@ AGENT_MAX_ITERATIONS = 50
 # run_agent_loop with an empty answer.
 AGENT_MAX_OUTPUT_TOKENS = int(os.environ.get("PATCHWISE_MAX_OUTPUT_TOKENS") or 16384)
 
+
+def _positive_int_env(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    return int(raw) if raw and raw.isdigit() and int(raw) > 0 else default
+
+
+# @retry binds max_retries at decoration time, so it must be a constant read at import.
+DEFAULT_MAX_API_RETRIES = _positive_int_env("PATCHWISE_MAX_API_RETRIES", 10)
+
 # Container-side tree-sitter indexer path
 TS_INDEXER_PATH = "/home/patchwise/bin/ts_indexer.py"
 
@@ -134,7 +143,7 @@ class Agent:
         self._docs_subdir = self._detect_docs_tree()
 
     @retry(
-        max_retries=10,
+        max_retries=DEFAULT_MAX_API_RETRIES,
         exceptions=(
             litellm.Timeout,
             litellm.RateLimitError,
