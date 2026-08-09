@@ -1660,19 +1660,29 @@ class Agent:
                                 f"{modified_files}"
                             ),
                         }
-                files_to_check = rel_files
+                # Only .c files can be compiled to .o targets; reject .h requests.
+                c_files = [f for f in rel_files if f.endswith(".c")]
+                if not c_files:
+                    return {
+                        "ok": False,
+                        "error": (
+                            "run_sparse only accepts .c files; .h files cannot be "
+                            "compiled directly to object targets. Call run_sparse "
+                            "without arguments to check all modified C files."
+                        ),
+                    }
+                files_to_check = c_files
             else:
+                # When headers changed, run sparse over all modified .c files so
+                # the header's effects on every translation unit are captured.
                 files_to_check = [
-                    f for f in modified_files if f.endswith((".c", ".h"))
+                    f for f in modified_files if f.endswith(".c")
                 ]
 
             if not files_to_check:
                 return {"ok": True, "result": "No C files to check"}
 
-            # Convert .c/.h paths to their .o targets for make
-            obj_targets = [
-                f.replace(".c", ".o").replace(".h", ".o") for f in files_to_check
-            ]
+            obj_targets = [f.replace(".c", ".o") for f in files_to_check]
 
             sparse_cmd = [
                 "make",
@@ -1687,11 +1697,25 @@ class Agent:
                 *obj_targets,
             ]
 
-            output = self.docker_manager.run_cmd_with_timer(
+            proc = self.docker_manager.run_command(
                 sparse_cmd,
-                desc="sparse check",
                 cwd=str(build_dir),
             )
+            raw_stdout, raw_stderr = proc.communicate()
+            output = ""
+            if raw_stdout:
+                output += raw_stdout if isinstance(raw_stdout, str) else raw_stdout.decode(errors="ignore")
+            if raw_stderr:
+                output += raw_stderr if isinstance(raw_stderr, str) else raw_stderr.decode(errors="ignore")
+
+            if proc.returncode != 0:
+                return {
+                    "ok": False,
+                    "error": (
+                        f"make exited with code {proc.returncode}. "
+                        f"Output:\n{output}"
+                    ),
+                }
 
             if "warning:" in output or "error:" in output:
                 return {
