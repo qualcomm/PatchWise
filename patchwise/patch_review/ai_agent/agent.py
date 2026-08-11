@@ -1619,6 +1619,120 @@ class Agent:
             self.logger.error(f"Error running checkpatch: {e}")
             return {"ok": False, "error": f"Error running checkpatch: {e}"}
 
+    def _tool_run_sparse(self, file_paths: Optional[List[str]] = None) -> Dict[str, Any]:
+        """Run sparse on modified C files to verify fixes."""
+        kernel_dir = self.docker_manager.kernel_dir
+        build_dir = self.docker_manager.build_dir
+
+        # Validate any explicitly requested files and normalize to kernel-relative paths.
+        rel_files: List[str] = []
+        if file_paths:
+            for fp in file_paths:
+                try:
+                    rel_files.append(self._validate_existing_kernel_path(fp))
+                except ValueError as e:
+                    return {"ok": False, "error": str(e)}
+
+        try:
+            proc = self.docker_manager.run_command(
+                ["git", "diff", "--name-only", "HEAD~1"],
+                cwd=str(kernel_dir),
+            )
+            stdout, _ = proc.communicate()
+
+            if proc.returncode != 0:
+                return {"ok": False, "error": "Failed to get modified files"}
+
+            if isinstance(stdout, bytes):
+                lines = stdout.decode().splitlines()
+            else:
+                lines = str(stdout).splitlines()
+
+            modified_files = [f.strip() for f in lines if f.strip()]
+
+            if rel_files:
+                for f in rel_files:
+                    if f not in modified_files:
+                        return {
+                            "ok": False,
+                            "error": (
+                                f"The file_path you gave is not part of the diff files: "
+                                f"{modified_files}"
+                            ),
+                        }
+                # Only .c files can be compiled to .o targets; reject .h requests.
+                c_files = [f for f in rel_files if f.endswith(".c")]
+                if not c_files:
+                    return {
+                        "ok": False,
+                        "error": (
+                            "run_sparse only accepts .c files; .h files cannot be "
+                            "compiled directly to object targets. Call run_sparse "
+                            "without arguments to check all modified C files."
+                        ),
+                    }
+                files_to_check = c_files
+            else:
+                # When headers changed, run sparse over all modified .c files so
+                # the header's effects on every translation unit are captured.
+                files_to_check = [
+                    f for f in modified_files if f.endswith(".c")
+                ]
+
+            if not files_to_check:
+                return {"ok": True, "result": "No C files to check"}
+
+            obj_targets = [f.replace(".c", ".o") for f in files_to_check]
+
+            sparse_cmd = [
+                "make",
+                "-C", str(kernel_dir),
+                f"O={build_dir}",
+                f"-j{os.cpu_count()}",
+                "ARCH=arm64",
+                "LLVM=1",
+                "C=1",
+                "-s",
+                "CHECK=sparse",
+                *obj_targets,
+            ]
+
+            proc = self.docker_manager.run_command(
+                sparse_cmd,
+                cwd=str(build_dir),
+            )
+            raw_stdout, raw_stderr = proc.communicate()
+            output = ""
+            if raw_stdout:
+                output += raw_stdout if isinstance(raw_stdout, str) else raw_stdout.decode(errors="ignore")
+            if raw_stderr:
+                output += raw_stderr if isinstance(raw_stderr, str) else raw_stderr.decode(errors="ignore")
+
+            if proc.returncode != 0:
+                return {
+                    "ok": False,
+                    "error": (
+                        f"make exited with code {proc.returncode}. "
+                        f"Output:\n{output}"
+                    ),
+                }
+
+            if "warning:" in output or "error:" in output:
+                return {
+                    "ok": True,
+                    "result": (
+                        f"Sparse output:\n{output}\n\n"
+                        "Issues remain. Please fix them and run sparse again."
+                    ),
+                }
+            return {
+                "ok": True,
+                "result": "✓ SUCCESS: All sparse issues fixed! No warnings or errors remain.",
+            }
+        except Exception as e:
+            self.logger.error(f"Error running sparse: {e}")
+            return {"ok": False, "error": f"Error running sparse: {e}"}
+
     def _read(self, container_path: str) -> str:
         text = self.docker_manager.read_file(container_path)
         if text is False:
@@ -1738,6 +1852,7 @@ class Agent:
             "git_show": self._tool_git_show,
             "git_cat_file": self._tool_git_cat_file,
             "run_checkpatch": self._tool_run_checkpatch,
+            "run_sparse": self._tool_run_sparse,
             "record_finding": self._tool_record_finding,
             "record_verdict": self._tool_record_verdict,
         }

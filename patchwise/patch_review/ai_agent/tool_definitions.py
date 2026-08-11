@@ -529,6 +529,33 @@ TOOLS = [
             },
         },
     },
+
+    {
+        "type": "function",
+        "function": {
+            "name": "run_sparse",
+            "description": (
+                "Run sparse on modified C source/header files to verify that sparse "
+                "warnings and errors have been fixed. Returns human-readable output "
+                "summarizing remaining issues or a success message when none remain."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_paths": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "Optional list of kernel-relative paths to specific files to check. "
+                            "If omitted, all modified C and header files in the diff are checked."
+                        ),
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
+
     # write tools
     {
         "type": "function",
