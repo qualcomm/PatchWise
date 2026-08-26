@@ -59,7 +59,7 @@ class AiCodeReview(AiReview):
                  (format_chat_response) renders them into the inline review.
     """
 
-    MAX_PLAN_ITERATIONS = 10
+    MAX_PLAN_ITERATIONS = 5
     SUBSYSTEM_SELECTOR_ITER_CAP = 10
     CRITIC_ITER_CAP = 10
     EXEC_ITER_CAP = 100
@@ -213,6 +213,11 @@ and name that dimension in its `dimension` field. A single function may warrant
 several dimensions, and one dimension may span several functions. Each unit is a
 dimension the reviewer investigates exhaustively.
 
+Treat the patch's decisions as open questions, not settled facts. Beyond
+dimensions covering whether the change is implemented correctly, create a unit
+directing the reviewer to investigate whether a choice the patch makes is the
+right one.
+
 """
 
     PLANNER_OUTPUT_BLOCK = """
@@ -237,22 +242,65 @@ reviewer applies across the unit's symbols, not a specific bug):
     CRITIC_INSTRUCTIONS = """
 # Plan Critic
 
-You critique a planner's work-list for a kernel patch against three references
-the planner did not have: the kernel failure taxonomy below, the subsystem guide
-index below, and the kernel's own `Documentation/`. Weigh them equally.
+You critique a planner's work-list for a kernel patch. You have access to
+references the planner did not have — the kernel failure taxonomy below, the
+subsystem guide index below, and the kernel's own `Documentation/` — as well
+as the patch itself: its diff and commit message.
 You do **not** edit the work-list. You only give the planner feedback; the
 planner revises its own tasks.
 
 Check the work-list against the diff and report:
 
-1. Coverage gaps: a defect class from the taxonomy, a subsystem-specific concern
-   whose triggers fire in the index, or a documented contract in `Documentation/`
-   the change touches, that this change plausibly affects and no unit would
-   catch. Name the concern and the file/symbol it applies to. Coverage also
-   includes code quality: comments, commit message, spelling/grammar, dead code,
-   or tags that the coding-style or patch-submission guidelines below speak to and
-   no unit covers.
-2. Scoping: a unit whose focus, files, or symbols are too broad or too narrow.
+1. Coverage gaps: consult the failure taxonomy and the subsystem guide the
+   change lands in, and name a defect class they enumerate that this change
+   plausibly touches and no unit would catch. A documented contract in
+   `Documentation/` the change touches counts too. Name the concern and the
+   file/symbol it applies to. Coverage also includes code quality: comments,
+   commit message, spelling/grammar, dead code, or tags that the coding-style or
+   patch-submission guidelines below speak to and no unit covers.
+2. Patch-derived gaps: a question raised by the diff or commit message itself —
+   evidence, examples, or design decisions in the patch that no unit examines.
+3. Variant coverage: whether the work-list spans the config, arch, and hardware
+   variants under which the changed code takes a different path or does not run
+   at all. Name a variant the diff behaves differently under that no unit
+   examines, and the file/symbol it applies to; the subsystem guide carries the
+   detail on which variants matter here.
+4. Design decisions: whether any unit questions a deliberate choice the patch
+   makes over a plausible alternative, rather than assuming it correct. Name the
+   choice and its alternative.
+5. Missing counterparts: whether the work-list checks that each operation the
+   patch adds has its required counterpart. Name a missing counterpart and the
+   symbol it belongs with; the taxonomy enumerates the paired-operation classes.
+6. Task form: a unit whose starting point states a conclusion rather than
+   directing an investigation — it should point toward code to examine, not
+   describe what the examination will reveal.
+
+## Example Units
+
+1. BAD: `{dimension: "input-range check for size_arg", focus: "..."}` and
+   `{dimension: "bounds validation on size_arg", focus: "..."}` — two units
+   restating one dimension in different words.
+   GOOD: `{dimension: "size_arg bounds", focus: "does foo_setup() reject
+   size_arg values outside [1, FOO_MAX] before it is used to index
+   priv->slots at line 312?"}`
+
+2. BAD: `{dimension: "cleanup", focus: "error-code selection in foo_probe(),
+   the comment typo above bar_init(), and Kconfig `select` order for
+   BAZ_FOO"}` — one focus bundling unrelated concerns.
+   GOOD: three units, one per concern —
+   `{dimension: "error-code selection", focus: "does foo_probe() return the
+   errno the caller expects on the new goto err_map path?"}`,
+   `{dimension: "comment quality", focus: "the comment above bar_init() at
+   line 88 — accurate and free of typos?"}`,
+   `{dimension: "Kconfig select ordering", focus: "BAZ_FOO's select list —
+   are dependencies ordered so a `make randconfig` build converges?"}`
+
+3. BAD: `{dimension: "lookup return value", focus: "verify that foo_lookup()
+   returns -ENOENT when the entry is missing"}` — focus states the expected
+   outcome, freezing the reviewer's answer.
+   GOOD: `{dimension: "lookup return value", focus: "what does foo_lookup()
+   return when the entry is missing, and does every caller handle that
+   value correctly?"}`
 
 Set `material` to true if you have feedback the planner should act on, false if
 the work-list already covers the change. Keep each point short and actionable —
@@ -263,8 +311,9 @@ name the concern, do not write the analysis.
 ```json
 { "material": true,
   "feedback": [ "no unit covers the refcount on the new error path in bar()",
-                "t2 is too broad — scope it to the locking paths in foo()",
-                "add a code-quality unit: the commit message misstates X" ] }
+                "add a code-quality unit: the commit message misstates X",
+                "t3 and t7 restate the same dimension (locking on the CFG register) — merge them",
+                "t5 states a conclusion (\"verify foo returns -EINVAL for a NULL arg\") — reframe as an open question about what the NULL path does" ] }
 ```
 """
 
@@ -410,12 +459,24 @@ The planner revised the work-list in response to your feedback. Re-critique the
 updated version below.
 
 Run the full coverage check again; do not only verify the prior feedback.
-
+{bloat_note}
 ## Revised work-list
 
 ```json
 {plan}
 ```
+"""
+
+    CRITIC_BLOAT_NOTE_TEMPLATE = """
+## Unit-count trend
+
+The work-list now has {curr} units (up from {prev} last round). Healthy plans
+converge at ~12 units and rarely exceed 15; past 15 the growth is usually
+near-duplicate fan-out rather than genuine coverage. If recent additions
+restate an existing dimension in different words, say so and tell the planner
+which units to merge; if any single unit's focus bundles unrelated concerns,
+tell the planner to split it. Consolidation is a valid outcome — a shorter,
+sharper list is better than a longer duplicative one.
 """
 
     FP_FILTER_USER_TEMPLATE = """
@@ -891,6 +952,7 @@ finding with record_verdict as you work through them.
     def _critique_plan(
         self, preloaded_guides: OrderedDict[str, str], commit_text: str,
         tasks: List[Dict[str, Any]], critic_messages: List[dict],
+        bloat_note: str = "",
     ) -> Dict[str, Any]:
         """Critic pass: returns {material: bool, feedback: [str]}. The critic does
         not edit the work-list — it only tells the planner what to fix.
@@ -904,6 +966,7 @@ finding with record_verdict as you work through them.
                 "role": "user",
                 "content": self.CRITIC_RESUME_TEMPLATE.format(
                     plan=json.dumps(tasks, indent=2),
+                    bloat_note=bloat_note,
                 ),
             })
         else:
@@ -920,25 +983,42 @@ finding with record_verdict as you work through them.
                     + self._diff_digest_block(),
                 },
             ])
-        # The critic keeps get_subsystem_review_guide (subsystem concerns) and
-        # read_doc (Documentation/ contracts only). It gets no code-reading or
-        # -search tools (read_file/grep/find_*), so it physically cannot hunt
-        # specific bugs in the implementation and feed them back as "gaps" — its
-        # job is coverage and scoping, not bug-finding.
+        # The critic gets get_subsystem_review_guide + read_doc (wired in
+        # _critic_system_prompt) plus read_binding and search_docs. It gets no
+        # code-reading or search tools (read_file/grep/find_*), so it physically
+        # cannot hunt specific bugs in the implementation and feed them back as
+        # "gaps" — its job is coverage and scoping, not bug-finding.
+        allowed = [
+            "get_subsystem_review_guide",
+            "read_doc",
+            "read_binding",
+            "search_docs",
+        ]
         raw = self.agent.run_agent_loop(
             critic_messages,
             force_tool_usage=False,
             max_iterations=self._critic_iter_cap(),
-            allowed_tools=[
-                "get_subsystem_review_guide",
-                "read_doc",
-                "read_binding",
-                "search_docs",
-            ],
+            allowed_tools=allowed,
         )
-        verdict = self._finalize_json(
-            critic_messages, raw, "critique (a JSON object)"
-        )
+        verdict = self._extract_json(raw)
+        if not isinstance(verdict, dict):
+            # Resume the same conversation so the critic repairs with full context.
+            self.logger.warning("[plan] critic verdict unparseable; resuming for repair.")
+            critic_messages.append({
+                "role": "user",
+                "content": (
+                    "Your previous response could not be parsed as JSON. "
+                    "Return ONLY the critique as a single JSON object inside "
+                    "one ```json fence."
+                ),
+            })
+            raw2 = self.agent.run_agent_loop(
+                critic_messages,
+                force_tool_usage=False,
+                max_iterations=1,
+                allowed_tools=[],
+            )
+            verdict = self._extract_json(raw2)
         if not isinstance(verdict, dict):
             return {"material": False, "feedback": []}
         return verdict
@@ -996,21 +1076,33 @@ finding with record_verdict as you work through them.
 
         # Critic critiques; planner revises. Repeat until the critic has no
         # material feedback (convergence) or the iteration cap is hit.
+        # If the plan has grown past ~15 units, tell the critic — on weak
+        # models that regime is usually near-duplicate fan-out rather than
+        # genuine coverage. No hard cap: small-plan runs would drift toward
+        # it just because it exists.
+        BLOAT_THRESHOLD = 15
         plan_rounds = 0
         # Converged means the critic ran out of material feedback before the
         # iteration cap. It stays False only if the loop below exhausts every
         # allowed round without the critic ever going quiet (cap hit).
         plan_converged = False
+        prev_unit_count = len(tasks)
         for round_no in range(1, self._max_plan_iterations() + 1):
             plan_rounds = round_no
             self.agent.current_label = f"critic:r{round_no}"
             events.emit(events.PHASE, name="critique")
+            bloat_note = ""
+            if round_no > 1 and len(tasks) > BLOAT_THRESHOLD:
+                bloat_note = self.CRITIC_BLOAT_NOTE_TEMPLATE.format(
+                    prev=prev_unit_count, curr=len(tasks),
+                )
             verdict = self._critique_plan(
-                preloaded_guides, commit_text, tasks, critic_messages
+                preloaded_guides, commit_text, tasks, critic_messages,
+                bloat_note=bloat_note,
             )
             material = bool(verdict.get("material"))
             feedback = verdict.get("feedback") or []
-            self.logger.debug(
+            self.logger.info(
                 f"[plan] critic round {round_no}: material={material}, "
                 f"{len(feedback)} point(s): {feedback}"
             )
@@ -1026,9 +1118,10 @@ finding with record_verdict as you work through them.
             revised = self._revise_plan(plan_messages, feedback)
             if revised:
                 tasks = revised
-            self.logger.debug(
+            self.logger.info(
                 f"[plan] planner revised (round {round_no}): units {before}->{len(tasks)}."
             )
+            prev_unit_count = before
 
         final = self._normalize_tasks(tasks)
         events.emit(events.PLAN, tasks=final)
