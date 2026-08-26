@@ -952,14 +952,20 @@ def test_git_log(review: AiCodeReview, path: str, min_count: int) -> None:
     "path,expected_error",
     [
         ("../../../etc/passwd", "escapes kernel tree"),
-        ("does/not/exist", "path not found"),
     ],
-    ids=["path_escape", "missing_path"],
+    ids=["path_escape"],
 )
 def test_git_log_errors(review: AiCodeReview, path: str, expected_error: str) -> None:
     result = review.agent.dispatch_tool("git_log", {"path": path})
     assert not result.get("ok"), f"unexpectedly ok: {result}"
     assert expected_error in (result.get("error") or "")
+
+
+def test_git_log_missing_path_is_empty(review: AiCodeReview) -> None:
+    """Git, rather than PatchWise, decides whether a path has history."""
+    result = review.agent.dispatch_tool("git_log", {"path": "does/not/exist"})
+    assert result.get("ok"), f"tool returned not-ok: {result}"
+    assert result.get("total") == 0
 
 
 def test_git_log_grep(review: AiCodeReview) -> None:

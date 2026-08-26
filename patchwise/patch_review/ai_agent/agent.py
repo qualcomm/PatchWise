@@ -1421,10 +1421,25 @@ class Agent:
             }
 
         tree_rel: Optional[str] = None
+        explicit_revs: List[str] = []
         try:
             if path:
-                rel = self._validate_existing_kernel_path(path)
-                tree, tree_rel = self._split_tree(rel)
+                commit_rev, object_path = self._split_git_object_spec(path)
+                if object_path is not None:
+                    tree, tree_rel = self._split_tree(object_path)
+                    explicit_revs.append(self._resolve_git_commit(commit_rev, tree))
+                else:
+                    rel = self._validate_git_path(path)
+                    try:
+                        tree, tree_rel = self._split_tree(rel)
+                    except ValueError:
+                        if isinstance(dir, str) and dir.strip():
+                            tree = self._resolve_git_tree_dir(dir)
+                        else:
+                            # Fall back to the reviewed commit's git tree. Git
+                            # will decide whether the path has history.
+                            tree = None
+                        tree_rel = rel
             elif isinstance(dir, str) and dir.strip():
                 tree = self._resolve_git_tree_dir(dir)
             else:
@@ -1456,6 +1471,8 @@ class Agent:
             log_cmd.append(f"-S{pickaxe}")
         if pickaxe_regex:
             log_cmd.append(f"-G{pickaxe_regex}")
+        if explicit_revs:
+            log_cmd += explicit_revs
         if tree_rel:
             log_cmd += ["--", tree_rel]
         proc = self.docker_manager.run_command(
@@ -1509,6 +1526,8 @@ class Agent:
                 tree, tree_rel = self._split_tree(rel_path)
             elif isinstance(dir, str) and dir.strip():
                 tree = self._resolve_git_tree_dir(dir)
+            elif commit_rev.startswith("refs/patchwise/series/"):
+                tree = None
             else:
                 return {
                     "ok": False,

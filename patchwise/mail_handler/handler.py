@@ -40,6 +40,7 @@ logger = logging.getLogger("patchwise.mail_handler.handler")
 KERNEL_TREE = os.path.join(SANDBOX_PATH, "kernel")
 
 BASE_COMMIT_RE = re.compile(r"(?m)^base-commit:\s*([0-9a-f]{40})\s*$")
+PATCHWISE_SERIES_REF_PREFIX = "refs/patchwise/series"
 
 
 def is_auto_submitted(msg: EmailMessage) -> bool:
@@ -164,6 +165,20 @@ def apply_patch_from_email(message: EmailMessage, repo: Repo) -> str:
         return ""
 
     return repo.head.commit.hexsha
+
+
+def clear_patch_series_refs(repo: Repo) -> None:
+    """Remove stale mail-series refs before applying a new series."""
+    refs = repo.git.for_each_ref(
+        f"--format=%(refname)", PATCHWISE_SERIES_REF_PREFIX
+    ).splitlines()
+    for ref in refs:
+        repo.git.update_ref("-d", ref)
+
+
+def record_patch_series_ref(repo: Repo, index: int, sha: str) -> None:
+    """Record patch *index* in the current mail series as a git ref."""
+    repo.git.update_ref(f"{PATCHWISE_SERIES_REF_PREFIX}/{index}", sha)
 
 
 def split_mail_diff_and_message(
@@ -297,7 +312,19 @@ def format_series_context(
     """Return a numbered listing of subject lines for *series*, marking
     *current*. For a standalone patch the result is a one-line listing."""
     current_id = current.get("Message-Id")
-    lines = []
+    lines = [
+        "The working tree and HEAD are at the current patch under review. Each "
+        f"patch is available in git as {PATCHWISE_SERIES_REF_PREFIX}/N, where N "
+        "is the patch number below.",
+        "",
+        "Use git_log(path='refs/patchwise/series/N:path/to/file.c') to inspect "
+        "history for a file as of a specific patch. Use "
+        "git_show(rev='refs/patchwise/series/N') for a patch commit or "
+        "git_show(rev='refs/patchwise/series/N:path/to/file.c') for a file "
+        "at that patch. Use git_cat_file(rev='refs/patchwise/series/N', "
+        "path='path/to/file.c') to read a line range from that file.",
+        "",
+    ]
     for i, patch in enumerate(series, start=1):
         subject = decode_header_value(patch.get("Subject", ""))
         marker = (
@@ -305,7 +332,7 @@ def format_series_context(
             if patch.get("Message-Id") == current_id
             else ""
         )
-        lines.append(f"{i}. {subject}{marker}")
+        lines.append(f"{i}. {PATCHWISE_SERIES_REF_PREFIX}/{i} {subject}{marker}")
     return "## Patch Series\n\n" + "\n".join(lines)
 
 
@@ -322,13 +349,16 @@ def test_patch_from_mail(
     if base_commit:
         reset_to_commit(repo, base_commit)
 
+    clear_patch_series_refs(repo)
+
     current_id = patch.get("Message-Id")
     current_sha: Optional[str] = None
-    for sibling in series:
+    for index, sibling in enumerate(series, start=1):
         sha = apply_patch_from_email(sibling, repo)
         if not sha:
             logger.error(f"Failed to apply patch: {sibling.get('Subject', '')}")
         else:
+            record_patch_series_ref(repo, index, sha)
             logger.debug(f"Applied patch: {sibling.get('Subject', '')}")
             if sibling.get("Message-Id") == current_id:
                 current_sha = sha
