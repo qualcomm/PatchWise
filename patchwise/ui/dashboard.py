@@ -9,7 +9,9 @@ The display has two parts:
     into phase sections (``─ PLAN ─``, ``─ EXECUTE ─``, … for review;
     ``─ RCA · engineer/maintainer ─`` for crashdump RCA), rendered with Rich.
   * A **pinned status footer** at the bottom — a phase strip, iteration, token
-    meter, elapsed timer, and the current tool call.
+    meter, elapsed timer, the current tool call, and — while the working agent
+    has open tasks — its live checklist, which appears as tasks are added and
+    disappears as they complete.
 
 Both are driven through `ScreenController` (`screen.py`), which reserves the
 bottom rows with a terminal scroll region (DECSTBM). The timeline scrolls in the
@@ -32,7 +34,7 @@ import logging
 import os
 import threading
 import time
-from collections import deque
+from collections import OrderedDict, deque
 from contextlib import contextmanager
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -57,6 +59,13 @@ _SPIN = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 # inner divider, and the status line.
 _ACT_ROWS = 5
 _FOOTER_ROWS = _ACT_ROWS + 3
+
+# The open-task pane sits between the activity rows and the status line, and only
+# exists while the current agent has open tasks — it costs a divider plus one row
+# per task, so the footer grows and shrinks as the checklist fills and drains.
+# Beyond _TASK_ROWS the overflow is summarised on the last row rather than
+# pushing the timeline off the screen.
+_TASK_ROWS = 6
 
 # Phase strips per pipeline: ordered (key, label) the footer phase strip walks.
 _PHASES = {
@@ -136,6 +145,16 @@ class Dashboard:
         self.budget = 0
         self._status_override: Optional[str] = None
         self.tool_calls: deque = deque(maxlen=_ACT_ROWS)
+
+        # Open-task checklist for the footer pane. The pipeline keys its task
+        # files by agent label (each exec unit / engineer run keeps its own
+        # checklist), so the pane tracks the label it belongs to and starts empty
+        # when the working agent changes — a finished unit's tasks must not linger
+        # in the next unit's list.
+        self._tasks_label = ""
+        self._open_tasks: "OrderedDict[str, str]" = OrderedDict()
+        self._task_resume: Optional[str] = None
+        self._unit_completed = 0     # completed under the current label
 
         # Timeline / summary state.
         self._cur_section: Optional[str] = None
@@ -241,15 +260,67 @@ class Dashboard:
             grid.add_row(spin if i == 0 else Text("  "), r)
         return grid
 
+    def _tasks_pane(self) -> List[Any]:
+        """The open-task pane: a labelled divider plus one row per open task, or
+        an empty list when the working agent has none (the footer then shrinks
+        back to activity + status). Called with the lock held."""
+        if not self._open_tasks:
+            return []
+
+        total = len(self._open_tasks)
+        head = Text.assemble((" tasks ", "dim"),
+                             (f"{total} open ", "cyan"))
+        if self._unit_completed:
+            head.append(f"· {self._unit_completed} done ", style="dim")
+        if self._task_resume:
+            # A resume round means the agent stopped with tasks still open and is
+            # being asked to finish them — needs-attention, not in-progress.
+            head.append(f"· {self._task_resume} ", style="yellow")
+        rows: List[Any] = [Rule(head, align="left", characters="─", style="grey37")]
+
+        items = list(self._open_tasks.items())
+        # Keep the newest tasks visible — they are the ones being worked. When
+        # they don't all fit, the last row is spent on the elided count, so the
+        # count is taken after that row is reserved (not before).
+        if total > _TASK_ROWS:
+            shown = items[-(_TASK_ROWS - 1):]
+        else:
+            shown = items
+        hidden = total - len(shown)
+        grid = Table.grid(expand=True)
+        grid.add_column(no_wrap=True, width=2)
+        grid.add_column(no_wrap=True)          # task id
+        grid.add_column(ratio=1, no_wrap=True, overflow="crop")
+        for tid, desc in shown:
+            grid.add_row(Text("· ", style="cyan"),
+                         Text(f"{tid} ", style="cyan"),
+                         Text(_oneline(desc), style="dim"))
+        if hidden:
+            grid.add_row(Text("  "), Text(""),
+                         Text(f"… {hidden} more open", style="dim italic"))
+        rows.append(grid)
+        return rows
+
     def _footer_lines(self, width: int) -> List[str]:
-        """Render the footer (activity rows + divider + status line) to exactly
-        _FOOTER_ROWS ANSI strings, one per reserved row."""
+        """Render the footer (activity rows + optional open-task pane + divider +
+        status line) to ANSI strings, one per reserved row.
+
+        The height is *not* fixed: it is _FOOTER_ROWS plus the task pane's rows
+        while the working agent has open tasks. The controller adopts whatever
+        length this returns, so the footer grows as tasks are added and shrinks
+        back as they complete."""
         header = Rule(Text(" activity ", style="dim"), align="left",
                       characters="─", style="grey37")
-        group = Group(header, self._activity_grid(),
+        with self._lock:
+            tasks = self._tasks_pane()
+        group = Group(header, self._activity_grid(), *tasks,
                       Rule(style="grey37"), self._status_grid())
         lines = self._render(group, width=width)
-        return (lines + [""] * _FOOTER_ROWS)[:_FOOTER_ROWS]
+        # Drop the render's trailing blank rows, then pad to a floor so the footer
+        # can never collapse below its fixed part (activity + divider + status).
+        while len(lines) > 1 and not lines[-1].strip():
+            lines.pop()
+        return lines + [""] * max(0, _FOOTER_ROWS - len(lines))
 
     def update_footer(self) -> None:
         """Recompute the footer lines and hand them to the controller (which
@@ -323,6 +394,49 @@ class Dashboard:
             title_align="left", border_style="green", padding=(0, 1)))
 
     # ---- event ingestion -----------------------------------------------------
+
+    def _on_task(self, f: Dict[str, Any]) -> None:
+        """Maintain the footer's open-task list from a TASK event.
+
+        `add` puts a task in the list, `complete` takes it out — so the pane shows
+        only outstanding work and empties itself as the agent finishes. `resume`
+        marks that the agent is being asked to close tasks it left open, and
+        carries the authoritative open-id set from the pipeline (which reads the
+        on-disk checklist), so it also repairs the list if any event was missed.
+
+        Tasks are per-label: a new working label starts a fresh list, since each
+        exec unit / engineer run keeps its own checklist."""
+        action = f.get("action") or ""
+        label = f.get("label") or ""
+        tid = str(f.get("id") or "").strip()
+
+        with self._lock:
+            if label and label != self._tasks_label:
+                # New unit: drop the finished unit's tasks and its resume note.
+                self._tasks_label = label
+                self._open_tasks.clear()
+                self._task_resume = None
+                self._unit_completed = 0
+
+            if action == "add":
+                if tid:
+                    self._open_tasks[tid] = str(f.get("description") or "")
+            elif action == "complete":
+                if tid:
+                    self._open_tasks.pop(tid, None)
+                    self._unit_completed += 1
+                if not self._open_tasks:
+                    self._task_resume = None   # checklist drained
+            elif action == "resume":
+                rnd, cap = f.get("round"), f.get("cap")
+                self._task_resume = (
+                    f"resume {rnd}/{cap}" if rnd and cap else "resume")
+                open_ids = [str(i) for i in (f.get("open_ids") or []) if str(i).strip()]
+                if open_ids:
+                    # Trust the pipeline's on-disk view: keep descriptions we
+                    # know, and drop anything it no longer considers open.
+                    self._open_tasks = OrderedDict(
+                        (i, self._open_tasks.get(i, "")) for i in open_ids)
 
     def on_event(self, kind: str, f: Dict[str, Any]) -> None:
         if kind == events.RUN_START:
@@ -410,6 +524,9 @@ class Dashboard:
                                      (f"[{dim}] " if dim else "", "dim"),
                                      (loc, "cyan")))
             self._emit(Text(text, style="default"), indent=6)
+
+        elif kind == events.TASK:
+            self._on_task(f)
 
         elif kind == events.VERDICT:
             drop = f.get("verdict") == "drop"

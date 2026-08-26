@@ -22,6 +22,12 @@ Two properties make it scroll- and resize-safe by construction:
     is handled by re-reading the size and re-emitting the scroll region; the
     footer is cleared and redrawn exactly once.
 
+The footer height is not fixed: `set_footer` adopts the length of the line list
+it is handed, so a pane that comes and goes (e.g. the open-task list) can grow
+and shrink the footer. A height change is handled by the same code path as a
+resize — re-emit the region, clear the rows the old footer occupied — because the
+terminal work is identical.
+
 The controller is renderer-agnostic: it writes pre-rendered ANSI strings. The
 dashboard renders Rich into those strings, so styling lives there and terminal
 control lives here. `blessed` is used only for portable capability strings and
@@ -48,6 +54,8 @@ class ScreenController:
     def __init__(self, stream, footer_rows: int,
                  on_resize: Optional[Callable[[], None]] = None):
         self._stream = stream
+        # Starting height only: each `set_footer` adopts the length of the line
+        # list it is given, so the footer can grow and shrink at runtime.
         self._footer_rows = max(1, footer_rows)
         self._on_resize = on_resize
         self.term = blessed.Terminal(stream=stream, force_styling=True)
@@ -56,6 +64,10 @@ class ScreenController:
         self._blocks: deque = deque()        # queued timeline blocks (lists of lines)
         self._footer_lines: List[str] = []   # current footer, top→bottom
         self._footer_dirty = False
+        # Footer height the currently-drawn scroll region was built for. When it
+        # differs from _footer_rows the footer changed height and the region must
+        # be re-established (and the vacated rows cleared) before repainting.
+        self._drawn_footer_rows = self._footer_rows
 
         # How many rows of the scroll region the timeline currently fills from
         # the top. While below the region height, new lines fill downward; once
@@ -118,9 +130,15 @@ class ScreenController:
         self._wake.set()
 
     def set_footer(self, lines: List[str]) -> None:
-        """Replace the pinned footer with `footer_rows` pre-rendered lines."""
+        """Replace the pinned footer. The footer's height becomes ``len(lines)``,
+        so a caller can grow or shrink it between frames (the render thread
+        re-establishes the scroll region and wipes the vacated rows)."""
         with self._lock:
             self._footer_lines = list(lines)
+            if lines:
+                # Defensive clamp: a footer must never crowd the timeline out of
+                # existence, however many rows the caller hands us.
+                self._footer_rows = max(1, min(len(lines), max(1, self._height - 3)))
             self._footer_dirty = True
         self._wake.set()
 
@@ -200,9 +218,10 @@ class ScreenController:
         self._write("".join(out))
 
     def _drain_and_render(self) -> None:
-        """One frame: handle a pending resize, scroll queued blocks into the
-        region, then repaint the footer if dirty. Written as one batched,
-        flushed string so a frame is atomic (no partial-write ghosting)."""
+        """One frame: handle a pending resize or footer-height change, scroll
+        queued blocks into the region, then repaint the footer if dirty. Written
+        as one batched, flushed string so a frame is atomic (no partial-write
+        ghosting)."""
         with self._lock:
             blocks = list(self._blocks)
             self._blocks.clear()
@@ -212,32 +231,48 @@ class ScreenController:
 
         out: List[str] = []
 
-        if self._resize.is_set():
+        # A footer that changed height moves the region boundary exactly as a
+        # resize does, so both go through one path: re-establish the region and
+        # wipe the rows the old footer held.
+        resized = self._resize.is_set()
+        regeom = resized or self._footer_rows != self._drawn_footer_rows
+
+        if regeom:
             self._resize.clear()
-            old_first = self._scroll_rows()   # old footer's first row (0-based)
-            self._measure()
+            # The old footer's first row (0-based), from the geometry actually
+            # drawn last frame — not from the current (possibly new) footer size.
+            old_first = max(1, self._height - self._drawn_footer_rows)
+            if resized:
+                self._measure()
             new_first = self._scroll_rows()
             # Re-establish the scroll region at the new size, then clear from the
             # topmost footer row (old or new) down to the bottom. That wipes any
-            # stale footer the resize left inside the new region while leaving the
-            # timeline above it untouched: the timeline lives in the terminal's
-            # own reflow/scrollback, so we never repaint it. Repainting would
-            # re-emit lines the terminal already archived on resize and duplicate
-            # them into scrollback.
+            # stale footer left inside the new region — either by the resize or by
+            # a footer that shrank — while leaving the timeline above it untouched:
+            # the timeline lives in the terminal's own reflow/scrollback, so we
+            # never repaint it. Repainting would re-emit lines the terminal
+            # already archived and duplicate them into scrollback.
             out.append(self.term.csr(0, self._scroll_bottom()))
+            # The geometry this frame is actually being drawn for. Recorded before
+            # the on_resize callback, which re-renders the footer and may change
+            # its height again — that leaves a mismatch the next frame picks up as
+            # a fresh height change, rather than one silently marked as drawn.
+            drawn = self._footer_rows
             for row in range(min(old_first, new_first), self._height):
                 out.append(self.term.move(row, 0))
                 out.append(self.term.clear_eol or "")
-            # A shrink can leave the fill count past the new region bottom; clamp
-            # it so further output appends in-bounds (scrolling at the bottom).
+            # A shrunken region can leave the fill count past its new bottom;
+            # clamp it so further output appends in-bounds (scrolling at the
+            # bottom) instead of writing under the footer.
             self._visible_count = min(self._visible_count, self._scroll_rows())
             out.append(self.term.move(self._park_row(), 0))   # rest below content
-            if self._on_resize is not None:
+            if resized and self._on_resize is not None:
                 # Let the dashboard re-render the footer at the new width.
                 self._on_resize()
                 with self._lock:
                     footer = list(self._footer_lines)
                     self._footer_dirty = False
+            self._drawn_footer_rows = drawn
             dirty = True
 
         scroll_bottom = self._scroll_bottom()

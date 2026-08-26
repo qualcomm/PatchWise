@@ -33,6 +33,7 @@ PLAN = "plan"                    # tasks: [{id, dimension, focus, files, symbols
 CRITIC = "critic"                # round, material, feedback: [str]
 FINDING = "finding"              # label, dimension, location, text
 VERDICT = "verdict"              # label, finding, impact, verdict, reason
+TASK = "task"                    # label, action (add|complete|resume), id, description|result, note, round, cap, open_ids
 ENGINEER_ANSWER = "engineer_answer"  # label, text
 MAINTAINER = "maintainer"        # round, refuted, questions: [str], reason
 RUN_DONE = "run_done"            # summary: {...}
