@@ -38,6 +38,7 @@ import logging
 import os
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -70,9 +71,35 @@ _OVERVIEW_HEAD_LINES = 120
 _OVERVIEW_TAIL_LINES = 200
 # Window of context kept around each crash-signature hit in the overview.
 _SIGNATURE_CONTEXT = 12
+# Hard cap on how much of the primary log we pull into memory for the overview.
+# A crashdump folder can hold multi-GB memory images (e.g. DDR dumps); a
+# misclassified or pathologically large artifact must never be slurped whole
+# (readlines() on 2 GB exhausts memory and hangs the run). 64 MiB is far above
+# any real kernel console/dmesg log yet safely bounded.
+_MAX_PRIMARY_LOG_BYTES = 64 * 1024 * 1024
 
 # Filenames that are most likely the primary kernel log, best-first.
 _DMESG_HINTS = ("dmesg", "console", "kmsg", "klog", "panic", "crash", "oops")
+
+# File extensions that are definitely NOT text logs. Used to skip stat/read on
+# a slow network mount before falling through to _looks_binary; a crashdump is
+# dominated by memory images (.BIN/.bin/.img/.dump) that never need scanning.
+_BINARY_EXTS = frozenset({
+    "bin", "img", "dump", "dat", "raw", "core", "mem", "ddr", "sram",
+    "elf", "so", "ko", "o", "a", "gz", "bz2", "xz", "zst", "zip", "tar",
+    "7z", "lz4", "lzma", "efi", "iso", "hex", "rom",
+    "ulog", "png", "jpg", "jpeg", "gif", "bmp", "pdf", "obj",
+})
+
+
+def _is_binary_ext(rel: str) -> bool:
+    """Cheap suffix-based binary check -- no filesystem access. rel is a
+    forward-slash relative path from _list_artifacts."""
+    name = rel.rsplit("/", 1)[-1].lower()
+    dot = name.rfind(".")
+    if dot < 0:
+        return False
+    return name[dot + 1:] in _BINARY_EXTS
 
 # Substrings that mark a crash/anomaly in a kernel log. Used only to surface a
 # starting point in the overview; the engineer explores everything from there.
@@ -487,52 +514,121 @@ record it with `record_finding`.
 
     # crashdump ingestion
 
-    def _list_artifacts(self) -> List[Tuple[str, int]]:
-        """(crashdump-relative path, size) for every non-hidden file, sorted."""
-        out: List[Tuple[str, int]] = []
-        for p in sorted(self.crashdump_dir.rglob("*")):
-            if not p.is_file():
-                continue
-            rel = p.relative_to(self.crashdump_dir)
-            if any(part.startswith(".") for part in rel.parts):
-                continue
-            try:
-                out.append((rel.as_posix(), p.stat().st_size))
-            except OSError:
-                continue
+    @staticmethod
+    def _scan_dir(path: str) -> Tuple[List[str], List[str]]:
+        """One scandir() call: split entries into subdirs and files (paths only,
+        no stat -- see _list_artifacts for why we do not stat every entry)."""
+        subdirs: List[str] = []
+        files: List[str] = []
+        try:
+            with os.scandir(path) as it:
+                for entry in it:
+                    if entry.name.startswith("."):
+                        continue
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            subdirs.append(entry.path)
+                        else:
+                            files.append(entry.path)
+                    except OSError:
+                        continue
+        except OSError:
+            pass
+        return subdirs, files
+
+    def _list_artifacts(self) -> List[str]:
+        """Sorted crashdump-relative paths for every non-hidden file.
+
+        Dump directories are frequently pulled from a network mount (e.g. an
+        SMB share) where a single stat round-trip can run into the hundreds of
+        milliseconds and where the kernel forces actimeo=1 regardless of mount
+        options -- so DirEntry.stat() cannot amortize into readdir. Stat'ing
+        every file (2k+ on a typical dump) then costs many minutes serially.
+        We deliberately return paths only; the tiny set of text-file candidates
+        picked by _primary_log stats itself. Directory scans still parallelize
+        via a thread pool because each scandir releases the GIL on network I/O.
+        """
+        root = self.crashdump_dir
+        out: List[str] = []
+        pending = [str(root)]
+        with ThreadPoolExecutor(max_workers=32) as pool:
+            while pending:
+                next_pending: List[str] = []
+                for subdirs, files in pool.map(self._scan_dir, pending):
+                    next_pending.extend(subdirs)
+                    for f in files:
+                        out.append(Path(f).relative_to(root).as_posix())
+                pending = next_pending
+        out.sort()
         return out
 
-    def _build_manifest(self, artifacts: List[Tuple[str, int]]) -> str:
+    def _build_manifest(self, artifacts: List[str]) -> str:
         if not artifacts:
             raise RuntimeError("The crashdump folder contains no readable files")
-        lines = [f"- {rel} ({size} bytes)" for rel, size in artifacts[:200]]
+        lines = [f"- {rel}" for rel in artifacts[:200]]
         if len(artifacts) > 200:
             lines.append(f"- ... and {len(artifacts) - 200} more")
         return "\n".join(lines)
 
-    def _primary_log(self, artifacts: List[Tuple[str, int]]) -> Optional[Path]:
-        """Pick the most likely primary kernel log: a name-hinted text file,
-        else the largest text file."""
+    def _primary_log(self, artifacts: List[str]) -> Optional[Path]:
+        """Pick the most likely primary kernel log.
+
+        On a slow network mount every stat and every "peek first 8 KiB" open is
+        a round-trip; a dump with 1500+ text-ish files makes the naive scan run
+        for minutes. Fast path: match a name hint (dmesg/console/kmsg/...) and
+        verify only that one file. Slow path (no hint): stat the non-binary-ext
+        candidates once, size-cap, sniff for binary content, pick the largest.
+        Files larger than _MAX_PRIMARY_LOG_BYTES are excluded because the
+        binary sniffer only samples the first 8 KiB, so a multi-GB memory
+        image whose head happens to be NUL-free is otherwise misclassified as
+        text, selected as "largest", and slurped into memory -- hanging the
+        run. Real console/dmesg logs sit far below the cap.
+        """
+        candidates = [rel for rel in artifacts if not _is_binary_ext(rel)]
+
+        for hint in _DMESG_HINTS:
+            for rel in candidates:
+                if hint in rel.lower():
+                    path = self.crashdump_dir / rel
+                    try:
+                        if path.stat().st_size > _MAX_PRIMARY_LOG_BYTES:
+                            continue
+                    except OSError:
+                        continue
+                    if CrashdumpAgent._looks_binary(path):
+                        continue
+                    return path
+
+        with ThreadPoolExecutor(max_workers=32) as pool:
+            def _stat(rel: str) -> Tuple[str, Optional[int]]:
+                try:
+                    return rel, (self.crashdump_dir / rel).stat().st_size
+                except OSError:
+                    return rel, None
+            sized = list(pool.map(_stat, candidates))
+
         text_files: List[Tuple[str, int]] = [
             (rel, size)
-            for rel, size in artifacts
-            if not CrashdumpAgent._looks_binary(self.crashdump_dir / rel)
+            for rel, size in sized
+            if size is not None
+            and size <= _MAX_PRIMARY_LOG_BYTES
+            and not CrashdumpAgent._looks_binary(self.crashdump_dir / rel)
         ]
         if not text_files:
             return None
-        for hint in _DMESG_HINTS:
-            for rel, _ in text_files:
-                if hint in rel.lower():
-                    return self.crashdump_dir / rel
-        # Fall back to the largest text artifact (dmesg is usually the biggest).
         rel = max(text_files, key=lambda t: t[1])[0]
         return self.crashdump_dir / rel
 
     @staticmethod
     def _read_lines(path: Path) -> List[str]:
+        # Bound the read: the primary log is already size-gated by _primary_log,
+        # but read at most _MAX_PRIMARY_LOG_BYTES here too so a huge file can never
+        # be slurped whole into memory (readlines() on a multi-GB file hangs the
+        # run). splitlines() drops a trailing partial line from the truncation.
         try:
             with open(path, "r", encoding="utf-8", errors="replace") as f:
-                return f.readlines()
+                data = f.read(_MAX_PRIMARY_LOG_BYTES)
+            return data.splitlines()
         except OSError:
             return []
 
@@ -566,7 +662,7 @@ record it with `record_finding`.
             prev = i
         return "\n".join(out)
 
-    def _build_overview(self, artifacts: List[Tuple[str, int]]) -> str:
+    def _build_overview(self, artifacts: List[str]) -> str:
         primary = self._primary_log(artifacts)
         if primary is None:
             return (
