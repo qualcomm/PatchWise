@@ -143,6 +143,7 @@ class RootCauseAnalysis:
         "grep", "read_file", "list_files", "read_doc",
         "git_log", "git_show", "git_cat_file",
         "record_finding",
+        "task_add", "task_complete", "task_list",
     ]
     MAINTAINER_TOOLS = [
         "list_crash_files", "read_crash_file", "search_crash",
@@ -254,6 +255,18 @@ explicitly: the single root cause, the mechanism from the originating defect to
 the crash, and the fix (as a unified ```diff fenced patch to the kernel source),
 each grounded in the specific dump and source lines you read. This conclusion is
 what gets reviewed, so make it concrete and self-contained.
+
+## Tracking your work with the task checklist
+
+Use `task_add(id, description)` and `task_complete(id, result, note)` to track
+every item of work you plan to do and what you actually finish. Add tasks for
+the leads you intend to pursue, the hypotheses you want to prove or refute,
+and any sub-question a lead spins off. Add new tasks whenever a fresh lead
+surfaces — the checklist is not restricted to the initial plan. Call
+`task_complete` the moment you finish a task. Call `task_list` whenever you
+want to see what is still open (ex: before you stop). Every task_add must
+eventually be matched by a task_complete; leaving a task open means the work
+is incomplete.
 """
 
     EXECUTION_DIRECTIVE = (
