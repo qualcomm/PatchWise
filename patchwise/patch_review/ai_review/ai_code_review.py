@@ -417,8 +417,10 @@ finding with record_verdict as you work through them.
         for doc in docs:
             if from_docker_container:
                 content = self.docker_manager.read_file(str(doc["path"]))
+                # Older kernels predate some of these docs; skip what is absent
+                # rather than failing the whole review.
                 if content is False:
-                    raise FileNotFoundError(doc["path"])
+                    continue
             else:
                 with open(doc["path"], "r") as f:
                     content = f.read()
