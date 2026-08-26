@@ -4,7 +4,7 @@
 from platformdirs import user_config_dir
 from patchwise import PACKAGE_PATH
 from pathlib import Path
-from typing import Dict, Any, cast
+from typing import Dict, Any, Tuple, cast
 import shutil
 import yaml
 
@@ -53,6 +53,12 @@ def parse_config() -> Dict[str, Any]:
         return default_options
 
     return _merge_overrides(default_options, user_options)
+
+
+def redis_address() -> Tuple[str, int]:
+    """Return the ts-cache Redis (host, port) from `indexing.cache`."""
+    cache = parse_config()["indexing"]["cache"]
+    return cache["host"], int(cache["port"])
 
 
 def update_user_config(dict: Dict[str, Any]) -> None:

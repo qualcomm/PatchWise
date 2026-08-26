@@ -19,7 +19,7 @@ import json
 import logging
 import re
 from html import escape
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from patchwise import SANDBOX_PATH, __version__
 
@@ -27,6 +27,18 @@ logger = logging.getLogger(__name__)
 
 OBS_PATH = SANDBOX_PATH / "ai_code_review" / "observability.json"
 TOOL_LOG_PATH = SANDBOX_PATH / "tool_calls.log"
+
+
+def get_cache_size() -> Optional[int]:
+    """Return Redis used_memory in bytes, or None if Redis is not up."""
+    try:
+        from patchwise.patch_review.ai_review.ts_cache import TsCache
+
+        cache = TsCache()
+        return cache.memory_bytes()
+    except Exception:
+        logger.debug("get_cache_size: could not reach ts-cache", exc_info=True)
+        return None
 
 # The call name is anchored right after `iter=<n> | call=`, and the ok flag is
 # anchored to end-of-line — args (which may themselves contain `ok=...` or
@@ -104,6 +116,8 @@ def _blank_stats() -> Dict[str, Any]:
         "peak_prompt": 0,
         "plan_rounds": 0,
         "planner_tasks": 0,
+        "index_cached": 0,
+        "index_parsed": 0,
     }
 
 
@@ -130,6 +144,8 @@ def _fold_run(acc: Dict[str, Any], run: Dict[str, Any]) -> None:
     acc["peak_prompt"] = max(acc["peak_prompt"], run.get("peak_prompt_tokens") or 0)
     acc["plan_rounds"] += run.get("total_plan_rounds") or 0
     acc["planner_tasks"] += run.get("total_planner_tasks") or 0
+    acc["index_cached"] += run.get("index_cached") or 0
+    acc["index_parsed"] += run.get("index_parsed") or 0
 
 
 def aggregate_runs(
@@ -323,12 +339,23 @@ def _card(
     )
 
 
+def _fmt_bytes(n: int) -> str:
+    if n >= 1_073_741_824:
+        return f"{n / 1_073_741_824:.2f} GB"
+    return f"{n / 1_048_576:.1f} MB"
+
+
 def _fmt_avg(n: float) -> str:
     """One-decimal mean, trimming a trailing .0 (e.g. 6.3, 12)."""
     return f"{n:.1f}".rstrip("0").rstrip(".")
 
 
-def _avg_cards(stats: Dict[str, Any], scope: str, prev: Dict[str, Any] = None) -> str:
+def _avg_cards(
+    stats: Dict[str, Any],
+    scope: str,
+    prev: Dict[str, Any] = None,
+    cache_size: Optional[int] = None,
+) -> str:
     """Per-patch averages for a scope ('this week' / 'total').
 
     When prev is supplied, delta badges compare each per-patch average against
@@ -384,6 +411,18 @@ def _avg_cards(stats: Dict[str, Any], scope: str, prev: Dict[str, Any] = None) -
     exec_cards = [
         _card("Iter cap hit", _pct(stats["iter_cap_hits"], n)),
     ]
+    index_cards = [
+        _card(
+            "Index hit rate",
+            _pct(stats["index_cached"], stats["index_cached"] + stats["index_parsed"]),
+            rows=[
+                ("Cached / patch", _fmt_int(stats["index_cached"] / n)),
+                ("Parsed / patch", _fmt_int(stats["index_parsed"] / n)),
+            ],
+        )
+    ]
+    if cache_size is not None:
+        index_cards.append(_card("Cache size", _fmt_bytes(cache_size)))
     filter_cards = [
         _card(
             "Found",
@@ -450,6 +489,10 @@ def _avg_cards(stats: Dict[str, Any], scope: str, prev: Dict[str, Any] = None) -
         + subhead("Exec")
         + '<div class="cards">'
         + "".join(exec_cards)
+        + "</div>"
+        + subhead("Index")
+        + '<div class="cards">'
+        + "".join(index_cards)
         + "</div>"
         + subhead("Filter")
         + '<div class="cards">'
@@ -807,6 +850,7 @@ def render(now: datetime.datetime) -> str:
     prev_week_dt = now - datetime.timedelta(weeks=1)
     prev_week = weekly.get(_week_key(prev_week_dt), _blank_stats())
     call_times = [dt for dt, *_ in calls]
+    cache_size = get_cache_size()
 
     scope_toggle = (
         '<div class="tc-tabs">'
@@ -819,8 +863,8 @@ def render(now: datetime.datetime) -> str:
         f'<span class="sub">AiCodeReview · '
         f'generated {escape(now.strftime("%Y-%m-%d %H:%M:%S"))}</span></header>',
         f"<h2>{scope_toggle}</h2>",
-        f'<div class="sc-view" data-s="week">{_avg_cards(this_week, "this week", prev=prev_week)}</div>',
-        f'<div class="sc-view" data-s="total">{_avg_cards(total, "yet")}</div>',
+        f'<div class="sc-view" data-s="week">{_avg_cards(this_week, "this week", prev=prev_week, cache_size=cache_size)}</div>',
+        f'<div class="sc-view" data-s="total">{_avg_cards(total, "yet", cache_size=cache_size)}</div>',
         "<h2>Patches reviewed</h2>",
         _timeseries_panel("ts-patches", _bucketed(_patch_times(runs), now), "patches"),
         "<h2>Activity</h2>",
@@ -855,6 +899,7 @@ def stats_payload(now: datetime.datetime) -> Dict[str, Any]:
         "this_week": weekly.get(_week_key(now), _blank_stats()),
         "weekly": weekly,
         "patches_timeseries": _bucketed(_patch_times(runs), now),
+        "cache_size": get_cache_size(),
         "tools": {
             "total": tool_total,
             "timeseries": _bucketed([dt for dt, *_ in calls], now),

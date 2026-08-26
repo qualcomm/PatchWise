@@ -21,6 +21,8 @@ from pathlib import Path
 from patchwise import PACKAGE_NAME, SANDBOX_PATH
 from patchwise.docker import DockerManager
 from patchwise.patch_review.ai_agent.tool_definitions import TOOLS
+from patchwise.patch_review.ai_review.ts_cache import TsCache
+from patchwise.patch_review.ai_review.ts_indexer import TsIndex
 from patchwise.ui import events
 from patchwise.utils.config import parse_config
 from patchwise.utils.decorators import retry
@@ -65,9 +67,6 @@ def build_system_message(*segments: str) -> dict:
 
 # @retry binds max_retries at decoration time, so it must be a constant read at import.
 DEFAULT_MAX_API_RETRIES = _positive_int_env("PATCHWISE_MAX_API_RETRIES", 10)
-
-# Container-side tree-sitter indexer path
-TS_INDEXER_PATH = "/home/patchwise/bin/ts_indexer.py"
 
 REVIEW_PROMPTS_PATH = (
     Path(__file__).resolve().parents[3] / "thirdparty" / "review-prompts"
@@ -121,9 +120,13 @@ class Agent:
         self.logger = self.get_logger()
         self.docker_manager = docker_manager
         self.enable_edit_tools = enable_edit_tools
-        self.ts_daemon: Optional[subprocess.Popen[Any]] = None
         self.seen_files: Set[str] = set()
 
+        # Connect to the Redis ts-cache and set up the host-side index
+        blocklist = parse_config().get("indexing", {}).get("blocklist") or []
+        self._ts_index = TsIndex(
+            docker_manager=docker_manager, cache=TsCache(), blocklist=blocklist
+        )
         # Summed for observability; there is no run-wide token cap.
         self.tokens_used: int = 0
         self.input_tokens: int = 0
@@ -197,7 +200,9 @@ class Agent:
             ct = getattr(usage, "prompt_tokens_details", None)
             self.cached_tokens += (getattr(ct, "cached_tokens", 0) or 0) if ct else 0
             cd = getattr(usage, "completion_tokens_details", None)
-            self.reasoning_tokens += (getattr(cd, "reasoning_tokens", 0) or 0) if cd else 0
+            self.reasoning_tokens += (
+                (getattr(cd, "reasoning_tokens", 0) or 0) if cd else 0
+            )
             self.output_tokens += getattr(usage, "completion_tokens", 0) or 0
         return response
 
@@ -352,9 +357,13 @@ class Agent:
             self.current_iteration = iteration
             self.logger.debug(f"Agent iteration {iteration}/{max_iters}")
             events.emit(
-                events.ITERATION, label=self.current_label, n=iteration,
-                cap=max_iters, tokens=self.tokens_used,
-                budget=self.token_budget, peak=self.peak_prompt_tokens,
+                events.ITERATION,
+                label=self.current_label,
+                n=iteration,
+                cap=max_iters,
+                tokens=self.tokens_used,
+                budget=self.token_budget,
+                peak=self.peak_prompt_tokens,
             )
 
             if not self.budget_remaining():
@@ -543,7 +552,9 @@ class Agent:
 
     def _doc_container_path(self, sub: str = "") -> str:
         """Container path of `Documentation/<sub>` in the detected Linux docs tree."""
-        rel = "/".join(filter(None, [self._docs_subdir, "Documentation", sub.strip("/")]))
+        rel = "/".join(
+            filter(None, [self._docs_subdir, "Documentation", sub.strip("/")])
+        )
         return str(self.docker_manager.kernel_dir / rel)
 
     def _validate_existing_kernel_path(self, path: str) -> str:
@@ -588,121 +599,35 @@ class Agent:
             hi = lo + 200
         return "".join(lines[lo:hi])
 
-    def _start_ts_daemon(self) -> None:
-        """Spawn the container-side tree-sitter index daemon.
+    # -----------------------------------------------------------------------
+    # Tree-sitter query wrappers — delegate to TsIndex
+    # -----------------------------------------------------------------------
 
-        The daemon builds the index once, then serves JSON-RPC queries over
-        stdin/stdout.
-        """
-        if getattr(self, "ts_daemon", None) is not None:
-            return
-        kernel_dir = self.docker_manager.sandbox_path / "kernel"
-        blocklist = parse_config().get("indexing", {}).get("blocklist") or []
-        self.logger.info("tree-sitter: starting index daemon in container")
-        start = time.time()
-        self.ts_daemon = self.docker_manager.run_interactive_command(
-            ["python3", TS_INDEXER_PATH, str(kernel_dir), *map(str, blocklist)],
-            cwd=str(kernel_dir),
-        )
-        events.emit(events.INDEX, phase="start")
-        # The daemon streams {"progress", "total"} lines while building, then a
-        # {"ready": true, ...} line. Surface progress; block until ready.
-        ready: Dict[str, Any] = {}
-        while True:
-            line = self.ts_daemon.stdout.readline() if self.ts_daemon.stdout else ""
-            if not line:
-                # EOF: the daemon exited before ready. Drain its stderr so the real
-                # cause (missing file, ImportError, …) is visible instead of an
-                # opaque generic failure.
-                stderr = self.ts_daemon.stderr.read() if self.ts_daemon.stderr else ""
-                raise RuntimeError(
-                    "ts_indexer daemon exited before ready signal"
-                    + (f":\n{stderr.strip()}" if stderr.strip() else "")
-                )
-            try:
-                msg = json.loads(line)
-            except json.JSONDecodeError as e:
-                raise RuntimeError(f"ts_indexer signal not JSON: {e}\nline: {line!r}")
-            if msg.get("ready"):
-                ready = msg
-                break
-            if "progress" in msg:
-                events.emit(
-                    events.INDEX, phase="progress",
-                    done=msg.get("progress", 0), total=msg.get("total", 0),
-                )
-                continue
-            raise RuntimeError(f"ts_indexer signal malformed: {msg}")
-        elapsed = time.time() - start
-        self.logger.info(
-            f"tree-sitter: daemon ready in {elapsed:.1f}s — "
-            f"{ready.get('unique_names', 0)} unique names, "
-            f"{ready.get('entries', 0)} entries, "
-            f"{ready.get('files_parsed', 0)} parsed, "
-            f"{ready.get('files_skipped', 0)} skipped"
-        )
-        events.emit(
-            events.INDEX, phase="done",
-            files=ready.get("files_parsed", 0), seconds=round(elapsed, 1),
-        )
+    @property
+    def index_cached(self) -> int:
+        return self._ts_index.cached
 
-    def _ts_query(self, **req: Any) -> Dict[str, Any]:
-        """Send one JSON-RPC request to the ts_indexer daemon and read its reply."""
-        if getattr(self, "ts_daemon", None) is None:
-            raise RuntimeError("ts_indexer daemon not started")
-        proc = self.ts_daemon
-        if proc.stdin is None or proc.stdout is None:
-            raise RuntimeError("ts_indexer daemon has no stdio")
-        if proc.poll() is not None:
-            raise RuntimeError(f"ts_indexer daemon has exited (rc={proc.returncode})")
-        proc.stdin.write(json.dumps(req) + "\n")
-        proc.stdin.flush()
-        line = proc.stdout.readline()
-        if not line:
-            raise RuntimeError("ts_indexer daemon closed stdout")
-        return json.loads(line)
+    @property
+    def index_parsed(self) -> int:
+        return self._ts_index.parsed
 
-    # TODO: Do we need this now that LSP/clangd is removed?
-    def _ensure_navigation_stack(self, need_ts: bool = True) -> None:
-        """Lazily start the tree-sitter index daemon on first use."""
-        if need_ts and getattr(self, "ts_daemon", None) is None:
-            self._start_ts_daemon()
+    def _ts_lookup(self, name: str) -> List[Dict[str, Any]]:
+        return self._ts_index.lookup(name)
 
-    def _ts_lookup(self, name: str, limit: int = 100) -> List[Dict[str, Any]]:
-        """Return up to `limit` index entries matching `name`."""
-        resp = self._ts_query(op="lookup", name=name, limit=limit)
-        if "error" in resp:
-            raise RuntimeError(f"ts_indexer error: {resp['error']}")
-        return resp.get("candidates", [])
+    def _ts_constructs_in_files(
+        self, rel_paths: List[str]
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        return self._ts_index.constructs_in_files(rel_paths)
+
+    def _ts_callees_batch(
+        self, specs: List[Tuple[str, int, int]]
+    ) -> List[List[Dict[str, Any]]]:
+        return self._ts_index.callees_batch(specs)
 
     @staticmethod
     def _strip_type_keyword(name: str) -> str:
-        """Drop a leading C tag keyword the model often includes.
-
-        Models routinely pass a type as `struct foo`/`union foo`/`enum foo`, but
-        the tree-sitter index keys it under the bare tag `foo`. Strip the keyword
-        so the lookup matches; a bare name is returned unchanged.
-        """
+        """Drop a leading C tag keyword the model often includes (struct/union/enum foo → foo)."""
         return re.sub(r"^\s*(?:struct|union|enum)\s+", "", name.strip())
-
-    def _ts_constructs_in_file(self, rel_path: str) -> List[Dict[str, Any]]:
-        """Return every construct (function, struct, enum, macro, initializer, …)
-        in a kernel-relative file, each as {name, kind, start_line, end_line}."""
-        resp = self._ts_query(op="constructs_in_file", path=rel_path)
-        if "error" in resp:
-            raise RuntimeError(f"ts_indexer error: {resp['error']}")
-        return resp.get("constructs", [])
-
-    def _ts_callees(
-        self, rel_path: str, start_line: int, end_line: int
-    ) -> List[Dict[str, Any]]:
-        """Return the calls made within [start_line, end_line] of a file."""
-        resp = self._ts_query(
-            op="callees", path=rel_path, start_line=start_line, end_line=end_line
-        )
-        if "error" in resp:
-            raise RuntimeError(f"ts_indexer error: {resp['error']}")
-        return resp.get("callees", [])
 
     def _split_file_arg(self, file: Optional[Union[str, List[str]]]) -> List[str]:
         """Parse a `file` argument into normalized kernel-relative paths.
@@ -760,8 +685,6 @@ class Agent:
             key=lambda c: (tier(c), c["file"], c["start_line"]),
         )
 
-    _TS_LOOKUP_LIMIT = 100
-
     def get_tools(
         self, allowed: Optional[List[str]] = None
     ) -> Optional[List[Dict[str, Any]]]:
@@ -769,7 +692,9 @@ class Agent:
         if allowed is None:
             return TOOLS
         allowed_set = set(allowed)
-        filtered = [t for t in TOOLS if t.get("function", {}).get("name") in allowed_set]
+        filtered = [
+            t for t in TOOLS if t.get("function", {}).get("name") in allowed_set
+        ]
         return filtered or None
 
     _DEFINITION_LIMIT = 50
@@ -785,9 +710,8 @@ class Agent:
         # all arch/#ifdef variants — ranked by proximity to files already seen.
         # We deliberately do not collapse to the config-active variant: a kernel
         # review must weigh all of them, not just what one defconfig compiles.
-        self._ensure_navigation_stack(need_ts=True)
         name = self._strip_type_keyword(name)
-        candidates = self._ts_lookup(name, limit=self._TS_LOOKUP_LIMIT)
+        candidates = self._ts_lookup(name)
         if not candidates:
             return {"ok": False, "error": f"symbol '{name}' not found in index"}
         ranked = self._rank_candidates(candidates, self._split_file_arg(file))
@@ -827,7 +751,6 @@ class Agent:
         # name` inside an ops table, a macro body, a struct — is a `reference`,
         # since that wiring is often how `name` actually gets invoked. Both come
         # straight off `enclosing`, so there is no caller-specific plumbing.
-        self._ensure_navigation_stack(need_ts=True)
         name = self._strip_type_keyword(name)
         pattern = rf"\b{re.escape(name)}\b"
         hits, error, skipped = self._rg_search(pattern, file, glob=None)
@@ -890,9 +813,8 @@ class Agent:
         # and extract their call expressions — direct `foo()` and indirect
         # `ops->fn()` alike (the latter is the dominant kernel call style, which
         # a semantic call graph would miss).
-        self._ensure_navigation_stack(need_ts=True)
         name = self._strip_type_keyword(name)
-        candidates = self._ts_lookup(name, limit=self._TS_LOOKUP_LIMIT)
+        candidates = self._ts_lookup(name)
         funcs = [c for c in candidates if c.get("kind") == "function"]
         hints = self._split_file_arg(file)
         if hints:
@@ -904,9 +826,12 @@ class Agent:
                 "error": f"no function definition named '{name}' in index",
             }
         ranked = self._rank_candidates(funcs, hints)
+        top = ranked[:10]
+        callees_lists = self._ts_callees_batch(
+            [(c["file"], c["start_line"], c["end_line"]) for c in top]
+        )
         definitions: List[Dict[str, Any]] = []
-        for c in ranked[:10]:
-            callees = self._ts_callees(c["file"], c["start_line"], c["end_line"])
+        for c, callees in zip(top, callees_lists):
             self.seen_files.add(c["file"])
             definitions.append(
                 {
@@ -1005,6 +930,9 @@ class Agent:
                 "--max-count",
                 "500",
             ]
+        # \n in a pattern requires multiline mode.
+        if "\\n" in pattern:
+            rg_cmd.append("--multiline")
         # Apply glob filters when searching a directory (or the whole tree). When
         # every path is a concrete file, search them directly so a glob can't
         # filter an explicitly-named file out.
@@ -1028,7 +956,11 @@ class Agent:
         # silent 0 on a malformed pattern reads as "nothing found".
         if proc.returncode == 2:
             detail = (err or "").strip().splitlines()
-            return None, f"invalid regex or search error: {detail[0] if detail else ''}", skipped
+            return (
+                None,
+                f"invalid regex or search error: {detail[0] if detail else ''}",
+                skipped,
+            )
 
         if count_only:
             count = 0
@@ -1039,17 +971,11 @@ class Agent:
                     continue
             return count, None, skipped
 
-        file_to_constructs: Dict[str, List[Tuple[int, int, str, str]]] = {}
-
-        def constructs_for(rel_path: str) -> List[Tuple[int, int, str, str]]:
-            if rel_path not in file_to_constructs:
-                cs = self._ts_constructs_in_file(rel_path)
-                file_to_constructs[rel_path] = [
-                    (c["start_line"], c["end_line"], c["name"], c["kind"]) for c in cs
-                ]
-            return file_to_constructs[rel_path]
-
-        hits: List[Dict[str, Any]] = []
+        # Parse rg output once, up front, so every hit file's constructs can be
+        # resolved in one batch (a fixed number of execs) instead of a docker
+        # exec per file -- a tree-wide grep can hit hundreds of files, and
+        # per-file execs dominated the wall clock.
+        parsed_lines: List[Tuple[str, int, str]] = []
         seen_hits: Set[Tuple[str, int]] = set()
         for raw in output.splitlines():
             parts = raw.split(":", 2)
@@ -1064,7 +990,18 @@ class Agent:
             if (rel, hit_line) in seen_hits:
                 continue
             seen_hits.add((rel, hit_line))
+            parsed_lines.append((rel, hit_line, text))
 
+        constructs_by_file = self._ts_constructs_in_files(
+            list(dict.fromkeys(rel for rel, _, _ in parsed_lines))
+        )
+        file_to_constructs: Dict[str, List[Tuple[int, int, str, str]]] = {
+            rel: [(c["start_line"], c["end_line"], c["name"], c["kind"]) for c in cs]
+            for rel, cs in constructs_by_file.items()
+        }
+
+        hits: List[Dict[str, Any]] = []
+        for rel, hit_line, text in parsed_lines:
             # Attribute the hit to the INNERMOST construct that contains it
             # (smallest span), of any kind — function, struct, enum, union,
             # typedef, macro, or ops-table initializer. Consumers split on
@@ -1075,7 +1012,7 @@ class Agent:
             # read the whole construct in one precise read.
             enclosing: Optional[Dict[str, Any]] = None
             enclosing_span: Optional[int] = None
-            for s, e, cname, ckind in constructs_for(rel):
+            for s, e, cname, ckind in file_to_constructs.get(rel, []):
                 if not (s <= hit_line <= e):
                     continue
                 span = e - s
@@ -1099,11 +1036,13 @@ class Agent:
         self,
         pattern: str,
         file: Optional[Union[str, List[str]]] = None,
+        path: Optional[Union[str, List[str]]] = None,
         glob: Optional[str] = None,
         count_only: bool = False,
     ) -> Dict[str, Any]:
-        if not count_only:
-            self._ensure_navigation_stack(need_ts=True)
+        # `path` is an alias for `file`.
+        if path and not file:
+            file = path
         search_result, error, skipped = self._rg_search(
             pattern, file, glob, count_only=count_only
         )
@@ -1190,7 +1129,7 @@ class Agent:
         # Documentation/ prefix (the model often drops it), then prepend the tree.
         subdir = self._docs_subdir
         if subdir and (rel == subdir or rel.startswith(subdir + "/")):
-            rel = rel[len(subdir):].lstrip("/")
+            rel = rel[len(subdir) :].lstrip("/")
         if not (rel == "Documentation" or rel.startswith("Documentation/")):
             rel = "Documentation/" + rel
         rel = "/".join(filter(None, [subdir, rel]))
@@ -1208,9 +1147,7 @@ class Agent:
         self.seen_files.add(rel)
         return {"ok": True, "result": {"path": rel, "content": content}}
 
-    def _tool_read_binding(
-        self, compatible: Union[str, List[str]]
-    ) -> Dict[str, Any]:
+    def _tool_read_binding(self, compatible: Union[str, List[str]]) -> Dict[str, Any]:
         """Resolve a devicetree `compatible` pattern to its binding docs.
 
         The compatible is in the diff; the binding is one ripgrep away under
@@ -1281,7 +1218,6 @@ class Agent:
         # _rg_search attributes hits to their enclosing construct via the
         # tree-sitter daemon, so boot it first (the critic, which runs before
         # any navigation tool, would otherwise hit it cold).
-        self._ensure_navigation_stack(need_ts=True)
         doc_rel = "/".join(filter(None, [self._docs_subdir, "Documentation"]))
         hits, error, _ = self._rg_search(query, file=[doc_rel], glob="*")
         if error:
@@ -1344,8 +1280,9 @@ class Agent:
         except Exception:
             args_json = str(args)
         ok = bool(result.get("ok"))
-        events.emit(events.TOOL_CALL, label=label, iter=iteration, name=name,
-                    args=args, ok=ok)
+        events.emit(
+            events.TOOL_CALL, label=label, iter=iteration, name=name, args=args, ok=ok
+        )
         line = f"{ts} | task={label} | iter={iteration} | call={name}({args_json}) | ok={ok}\n"
         try:
             with open(log_path, "a") as f:
@@ -1433,9 +1370,12 @@ class Agent:
             # the reviewed commit.
             sha = self.docker_manager.commit_sha
             proc = self.docker_manager.run_command(
-                ["sh", "-c",
-                 f"git --no-pager format-patch -1 --stdout {sha} "
-                 "| scripts/checkpatch.pl -"],
+                [
+                    "sh",
+                    "-c",
+                    f"git --no-pager format-patch -1 --stdout {sha} "
+                    "| scripts/checkpatch.pl -",
+                ],
                 cwd=git_wd,
             )
             stdout, _ = proc.communicate()
@@ -1636,12 +1576,19 @@ class Agent:
         phase/subtask label (the same label `_log_tool_call` uses), so a single
         reviewer's findings accumulate in one file."""
         path = self.findings_path_for(self.current_label or "unit")
-        head = " ".join(p for p in (f"[{dimension}]" if dimension else "", location) if p)
+        head = " ".join(
+            p for p in (f"[{dimension}]" if dimension else "", location) if p
+        )
         block = f"### {head}\n\n{finding}\n\n" if head else f"{finding}\n\n"
         with open(path, "a") as f:
             f.write(block)
-        events.emit(events.FINDING, label=self.current_label,
-                    dimension=dimension, location=location, text=finding)
+        events.emit(
+            events.FINDING,
+            label=self.current_label,
+            dimension=dimension,
+            location=location,
+            text=finding,
+        )
         return {"ok": True, "recorded": location or dimension or "finding"}
 
     @staticmethod
@@ -1771,8 +1718,14 @@ class Agent:
         }
         with open(path, "a") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
-        events.emit(events.VERDICT, label=self.current_label, finding=finding,
-                    impact=impact, verdict=verdict, reason=reason)
+        events.emit(
+            events.VERDICT,
+            label=self.current_label,
+            finding=finding,
+            impact=impact,
+            verdict=verdict,
+            reason=reason,
+        )
         return {"ok": True, "recorded": verdict or "verdict"}
 
     def dispatch_tool(self, name: str, args: dict) -> dict:
@@ -1836,7 +1789,4 @@ class Agent:
         proc = self.docker_manager.run_command(log_cmd, cwd=git_wd)
         stdout, _ = proc.communicate()
         prefix = self.docker_manager.git_subdir
-        return {
-            f"{prefix}/{f}" if prefix else f
-            for f in stdout.strip().splitlines()
-        }
+        return {f"{prefix}/{f}" if prefix else f for f in stdout.strip().splitlines()}

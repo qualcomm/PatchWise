@@ -890,19 +890,25 @@ finding with record_verdict as you work through them.
 
     @cached_property
     def _diff_digest_model(self) -> List[Dict[str, Any]]:
-        self.agent._ensure_navigation_stack(need_ts=True)
+        diffs = [
+            fd for fd in self._commit_file_diffs
+            if not fd["deleted"] and fd["path"].endswith((".c", ".h")) and fd["ranges"]
+        ]
+        # The index stores paths relative to the mounted repo root. Outside tool
+        # dispatch (which reports errors to the model), so degrade rather than
+        # abort the plan phase.
+        index_paths = [os.path.join(self.git_subdir, fd["path"]) for fd in diffs]
+        try:
+            constructs_by_file = self.agent._ts_constructs_in_files(index_paths)
+        except RuntimeError as e:
+            self.logger.warning(f"diff digest: construct lookup failed: {e}")
+            constructs_by_file = {}
 
         files: List[Dict[str, Any]] = []
-        for fd in self._commit_file_diffs:
+        for fd, index_path in zip(diffs, index_paths):
             path = fd["path"]
-            if fd["deleted"] or not path.endswith((".c", ".h")) or not fd["ranges"]:
-                continue
-
-            # The index stores paths relative to the mounted repo root.
-            index_path = os.path.join(self.git_subdir, path)
-            try:
-                constructs = self.agent._ts_constructs_in_file(index_path)
-            except RuntimeError:
+            constructs = constructs_by_file.get(index_path)
+            if constructs is None:
                 continue
 
             ranges = fd["ranges"]
@@ -1682,6 +1688,8 @@ finding with record_verdict as you work through them.
             "total_time": round(total_time, 2),
             "time_waiting_for_ai_response": round(self.agent.time_waiting_for_ai_response, 2),
             "api_retries": self.agent.api_retries,
+            "index_cached": self.agent.index_cached,
+            "index_parsed": self.agent.index_parsed,
         }
         self._append_observability(observability)
         self.logger.info(

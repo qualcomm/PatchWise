@@ -35,7 +35,10 @@ dependencies = [
     "imapclient>=3.0.0",
     "fastapi>=0.110",
     "uvicorn>=0.29",
-    "pygments>=2.19.0"
+    "pygments>=2.19.0",
+    "redis>=5",
+    "tree-sitter>=0.24",
+    "tree-sitter-c>=0.23",
 ]
 readme = "README.md"
 classifiers = [

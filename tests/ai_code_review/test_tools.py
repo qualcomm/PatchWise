@@ -34,6 +34,7 @@ os.environ["PATCHWISE_SANDBOX_PATH"] = str(TESTS_DIR)
 import pytest
 from git import InvalidGitRepositoryError, NoSuchPathError, Repo
 
+from patchwise.docker import DockerManager
 from patchwise.patch_review.ai_review.ai_code_review import AiCodeReview
 from patchwise.patch_review.kernel_tree import init_kernel_tree
 
@@ -90,6 +91,10 @@ def review() -> AiCodeReview:
         f"Using kernel={KERNEL_DIR} head={head.hexsha[:12]} ({head.summary!r})",
         flush=True,
     )
+    # The Agent connects to the ts-cache eagerly; start it as the production
+    # path does (prepare_containers_and_build_volume) since this fixture builds
+    # the review directly.
+    DockerManager.ensure_ts_cache_service()
     instance = AiCodeReview(repo_path=str(KERNEL_DIR), commit=head)
     print("=== Running tests... ===\n", flush=True)
     return instance
@@ -151,7 +156,9 @@ def test_find_definition_strips_type_keyword(
     result = review.agent.dispatch_tool("find_definition", {"name": name})
     assert result.get("ok"), f"tool returned not-ok: {result}"
     paths = [d.get("path", "") for d in result.get("result", [])]
-    assert any(expected_file in p for p in paths), f"{expected_file!r} not among {paths}"
+    assert any(
+        expected_file in p for p in paths
+    ), f"{expected_file!r} not among {paths}"
 
 
 # #ifdef-variant cases: two textual defs in the same file under
@@ -294,7 +301,9 @@ def test_find_definition_granular_kind(
         for d in result.get("result", [])
         if expected_file in d.get("path", "") and d.get("kind") == kind
     ]
-    assert match, f"no {kind!r} for {name!r} in {expected_file}; got {result.get('result')}"
+    assert (
+        match
+    ), f"no {kind!r} for {name!r} in {expected_file}; got {result.get('result')}"
 
 
 # ---------------------------------------------------------------------------
@@ -326,8 +335,9 @@ def test_find_callers(review: AiCodeReview, name: str, min_count: int) -> None:
     assert isinstance(first.get("function_start"), int), first
     assert isinstance(first.get("function_end"), int), first
     assert first["function_start"] <= first["function_end"], first
-    assert all(first["function_start"] <= ln <= first["function_end"]
-               for ln in first["lines"]), first
+    assert all(
+        first["function_start"] <= ln <= first["function_end"] for ln in first["lines"]
+    ), first
 
 
 def test_find_callers_references(review: AiCodeReview) -> None:
@@ -691,6 +701,19 @@ def test_grep_errors(
     result = review.agent.dispatch_tool("grep", args)
     assert not result.get("ok"), f"unexpectedly ok: {result}"
     assert expected_error in (result.get("error") or "")
+
+
+def test_grep_path_alias(review: AiCodeReview) -> None:
+    """Models sometimes pass 'path' instead of 'file' for scope; treat as alias."""
+    result = review.agent.dispatch_tool(
+        "grep",
+        {
+            "pattern": "do_sys_openat2",
+            "path": ["fs/open.c"],
+        },
+    )
+    assert result.get("ok"), f"path alias not accepted: {result}"
+    assert result.get("total", 0) >= 1, "expected hits when path alias scopes to fs/open.c"
 
 
 # ---------------------------------------------------------------------------

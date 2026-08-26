@@ -503,6 +503,7 @@ record it with `record_finding`.
         if not DockerManager.build_volume_initialized:
             DockerManager.initialize_shared_build_volume(Path(repo_path), commit_sha)
             DockerManager.build_volume_initialized = True
+        DockerManager.ensure_ts_cache_service()
         dm.start_container_with_shared_volume()
         return dm
 

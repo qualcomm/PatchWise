@@ -86,6 +86,8 @@ def prepare_containers_and_build_volume(
     # Initialize shared build volume using base container
     DockerManager.initialize_shared_build_volume(Path(repo_path), commit.hexsha)
 
+    DockerManager.ensure_ts_cache_service()
+
     logger.info("Container preparation complete.")
 
 

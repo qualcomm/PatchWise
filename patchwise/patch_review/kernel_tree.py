@@ -60,12 +60,12 @@ def fetch_and_branch(repo: Repo) -> None:
         repo.create_remote(PACKAGE_NAME, git_url)
     try:
         repo.remotes[PACKAGE_NAME].set_url(git_url)
-        repo.remotes[PACKAGE_NAME].fetch("stable", progress=TqdmFetchProgress())
+        repo.remotes[PACKAGE_NAME].fetch("stable", progress=TqdmFetchProgress(), kill_after_timeout=_FETCH_TIMEOUT)
     except GitCommandError as git_error:
         logger.warning("git: Failed, trying https:")
         repo.remotes[PACKAGE_NAME].set_url(http_url)
         try:
-            repo.remotes[PACKAGE_NAME].fetch("stable", progress=TqdmFetchProgress())
+            repo.remotes[PACKAGE_NAME].fetch("stable", progress=TqdmFetchProgress(), kill_after_timeout=_FETCH_TIMEOUT)
         except GitCommandError as http_error:
             logger.error("https: Failed, exiting...")
             raise
@@ -84,6 +84,9 @@ def init_kernel_tree(path: Path = KERNEL_PATH) -> Repo:
     return repo
 
 
+_FETCH_TIMEOUT = 120  # seconds; kernel.org mirrors can be slow but shouldn't stall indefinitely
+
+
 def reset_to_commit(repo: Repo, sha: str) -> bool:
     """Reset the working tree to *sha*, fetching it from the kernel tree's
     remotes first. Returns ``True`` on success."""
@@ -94,8 +97,12 @@ def reset_to_commit(repo: Repo, sha: str) -> bool:
                 check=True,
                 capture_output=True,
                 cwd=repo.working_tree_dir,
+                timeout=_FETCH_TIMEOUT,
             )
             break
+        except subprocess.TimeoutExpired:
+            logger.warning(f"git fetch from {remote.name} timed out after {_FETCH_TIMEOUT}s, trying next remote")
+            continue
         except subprocess.CalledProcessError:
             continue
     else:

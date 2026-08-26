@@ -3,6 +3,10 @@ log_level: "INFO"
 # tree-sitter code index. Patterns are gitignore-style.
 # Override this with your own list in ~/.config/patchwise_config.yaml.
 indexing:
+    cache:
+        host: "127.0.0.1"   # published loopback of the patchwise-ts-cache container
+        port: 6379
+        # schema_version:            # optional override of the module constant
     blocklist:
         - "**/out/"
         - "**/prebuilts/"

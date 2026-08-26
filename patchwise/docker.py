@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, List, Literal, Optional, Union
 
 from patchwise import PACKAGE_NAME, PACKAGE_PATH
-from patchwise.utils.config import parse_config
+from patchwise.utils.config import parse_config, redis_address
 from patchwise.utils.repo_workspace import is_repo_managed, require_workspace_root
 
 _GIT_COMMITTER = parse_config()["git_committer"]
@@ -48,6 +48,13 @@ class DockerManager:
     # build time), and the agent runs model-composed shell commands over an
     # untrusted patch, so denying egress keeps a prompt injection sandboxed.
     _NETWORK_ARGS = ["--network", "none"]
+
+    ts_cache_initialized = False
+    _ts_cache_container = "patchwise-ts-cache"
+    _ts_cache_volume = "patchwise-ts-cache"
+    # redis-server's default listen port inside the container; the host side of
+    # the port mapping comes from `indexing.cache`.
+    _ts_cache_container_port = 6379
 
     def __init__(
         self,
@@ -332,16 +339,18 @@ class DockerManager:
             cwd = str(cwd)
 
         docker_command = ["docker", "exec"]
+        if kwargs.get("stdin") is not None:
+            docker_command.append("-i")
         docker_command.extend(["--workdir", cwd])
         docker_command.extend([self.container_name] + command)
         self.logger.debug(f"Executing command in container: {' '.join(docker_command)}")
+        text = kwargs.pop("text", True)
         process = subprocess.Popen(
             docker_command,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True,
-            bufsize=1,
-            universal_newlines=True,
+            text=text,
+            bufsize=1 if text else -1,
             **kwargs,
         )
         return process
@@ -370,7 +379,9 @@ class DockerManager:
         # terminal; its own activity spinner covers the work-in-progress feel.
         from patchwise.ui import events
 
-        show_timer = self.logger.isEnabledFor(logging.INFO) and not events.has_subscribers()
+        show_timer = (
+            self.logger.isEnabledFor(logging.INFO) and not events.has_subscribers()
+        )
         start = time.time()
 
         process = self.run_command(cmd, cwd=cwd, **kwargs)
@@ -588,6 +599,105 @@ class DockerManager:
                     f"Failed to clean up initialization container {init_container_name}"
                 )
 
+    @classmethod
+    def ensure_ts_cache_service(cls) -> None:
+        """Start the shared Redis ts-cache container if it isn't already running."""
+        logger = logging.getLogger(f"{PACKAGE_NAME}.{cls.__name__.lower()}")
+
+        if cls.ts_cache_initialized:
+            logger.debug("ts-cache service already initialized, skipping.")
+            return
+
+        # inspect reports .State.Running — a container that merely exists (exited,
+        # created) is not usable, and its name would block a fresh `docker run`.
+        try:
+            inspect = subprocess.run(
+                [
+                    "docker",
+                    "container",
+                    "inspect",
+                    "-f",
+                    "{{.State.Running}}",
+                    cls._ts_cache_container,
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except subprocess.CalledProcessError:
+            inspect = None
+
+        if inspect is not None:
+            if inspect.stdout.strip() == "true":
+                logger.debug(
+                    f"ts-cache container {cls._ts_cache_container} already running."
+                )
+                cls.ts_cache_initialized = True
+                return
+            # Exists but stopped — restart it rather than recreate (name is taken).
+            logger.info(
+                f"Restarting stopped ts-cache container {cls._ts_cache_container}..."
+            )
+            subprocess.run(
+                ["docker", "start", cls._ts_cache_container],
+                check=True,
+                capture_output=True,
+            )
+            cls._wait_ts_cache_ready()
+            cls.ts_cache_initialized = True
+            return
+
+        logger.info(f"Starting ts-cache container {cls._ts_cache_container}...")
+        host, port = redis_address()
+        subprocess.run(
+            [
+                "docker",
+                "run",
+                "-d",
+                "--name",
+                cls._ts_cache_container,
+                "-p",
+                f"{host}:{port}:{cls._ts_cache_container_port}",
+                "-v",
+                f"{cls._ts_cache_volume}:/data",
+                "redis:alpine",
+                "redis-server",
+                "--maxmemory",
+                "5gb",
+                "--maxmemory-policy",
+                "allkeys-lru",
+                "--save",
+                "900 1 300 100",
+                "--dir",
+                "/data",
+            ],
+            check=True,
+            capture_output=True,
+        )
+        cls._wait_ts_cache_ready()
+        logger.info(f"ts-cache container {cls._ts_cache_container} started.")
+        cls.ts_cache_initialized = True
+
+    @classmethod
+    def _wait_ts_cache_ready(cls, timeout: float = 120) -> None:
+        """Block until Redis answers PING -- it replies LOADING while it rewarms
+        from the RDB snapshot, which can take a while for a multi-GB cache."""
+        deadline = time.monotonic() + timeout
+        while True:
+            proc = subprocess.run(
+                ["docker", "exec", cls._ts_cache_container, "redis-cli", "ping"],
+                capture_output=True,
+                text=True,
+            )
+            if proc.stdout.strip() == "PONG":
+                return
+            if time.monotonic() > deadline:
+                raise RuntimeError(
+                    f"ts-cache container {cls._ts_cache_container} not ready after "
+                    f"{timeout}s: {(proc.stdout + proc.stderr).strip()}"
+                )
+            time.sleep(1)
+
     def start_container_with_shared_volume(self) -> None:
         """Start container with the shared build volume instead of bind mount."""
         try:
@@ -705,9 +815,17 @@ class DockerManager:
         if self._repo_managed:
             subprocess.run(
                 [
-                    "docker", "exec", "--user", "root",
-                    self.container_name, "git", "config", "--system",
-                    "--add", "safe.directory", "*",
+                    "docker",
+                    "exec",
+                    "--user",
+                    "root",
+                    self.container_name,
+                    "git",
+                    "config",
+                    "--system",
+                    "--add",
+                    "safe.directory",
+                    "*",
                 ],
                 check=True,
                 capture_output=True,
