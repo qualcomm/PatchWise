@@ -517,6 +517,91 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "task_add",
+            "description": (
+                "Add one task to your own checklist. Use this to track anything "
+                "you plan to investigate or do — items known up front, follow-ups "
+                "you discover along the way, or sub-questions spun off from "
+                "another task. Keep the id short and stable; use it later with "
+                "task_complete. You may add tasks at any point, not only at the "
+                "start."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "description": (
+                            "Short stable identifier for this task, reused by "
+                            "task_complete."
+                        ),
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": (
+                            "One line: what will be investigated or done."
+                        ),
+                    },
+                },
+                "required": ["id", "description"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "task_complete",
+            "description": (
+                "Mark one previously-added task as complete. Call this the moment "
+                "you finish a task — after acting on its conclusion, or after "
+                "concluding there is nothing more to do for it. Every task_add "
+                "MUST eventually be matched by a task_complete."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "description": "The id passed to task_add.",
+                    },
+                    "result": {
+                        "type": "string",
+                        "description": (
+                            "One word summarising the outcome, e.g. 'done', "
+                            "'clean', 'found', 'abandoned'."
+                        ),
+                    },
+                    "note": {
+                        "type": "string",
+                        "description": (
+                            "Optional one-line summary of what was checked and "
+                            "why the result is what it is."
+                        ),
+                    },
+                },
+                "required": ["id", "result"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "task_list",
+            "description": (
+                "Show your current checklist: every task_add so far, and for "
+                "each one whether it has been marked complete. Use this to "
+                "check what is still open before you stop, or whenever you "
+                "lose track of what remains."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {},
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "run_checkpatch",
             "description": (
                 "Run scripts/checkpatch.pl on the current uncommitted changes to verify "

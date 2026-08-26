@@ -8,6 +8,7 @@ import os
 import re
 import subprocess
 import time
+from collections import OrderedDict
 from functools import cache
 from typing import Any, Dict, List, Optional, Tuple, Set, Union
 from urllib.parse import unquote, urlparse
@@ -1880,6 +1881,97 @@ class Agent:
             raise ValueError(f"verdicts path escapes sandbox: {path}")
         return path
 
+    @staticmethod
+    def tasks_path_for(label: str) -> Path:
+        """Sandbox path of the per-phase checklist file (JSONL) for `label`,
+        written by task_add/task_complete and read back by the review to check
+        whether every added task was completed. Same sandbox-escape guard as
+        findings_path_for."""
+        safe = re.sub(r"[^A-Za-z0-9_.-]", "_", label or "unit")
+        base = Path(SANDBOX_PATH).resolve()
+        path = (base / f"tasks_{safe}.jsonl").resolve()
+        if path.parent != base:
+            raise ValueError(f"tasks path escapes sandbox: {path}")
+        return path
+
+    def _tool_task_add(self, id: str, description: str = "") -> dict:
+        """Append one task-add event to the per-phase tasks file. Callable at
+        any point in the review to track pre-planned units, mid-review
+        follow-ups, or sub-questions spun off from another task."""
+        path = self.tasks_path_for(self.current_label or "unit")
+        record = {"event": "add", "id": id, "description": description}
+        with open(path, "a") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        self.logger.info(
+            f"[tasks] add id={id!r} desc={description[:80]!r} (label={self.current_label})"
+        )
+        events.emit(events.TASK, label=self.current_label,
+                    action="add", id=id, description=description)
+        return {"ok": True, "added": id}
+
+    def _tool_task_complete(self, id: str, result: str = "", note: str = "") -> dict:
+        """Append one task-complete event to the per-phase tasks file. `result`
+        should be 'found' (record_finding was called for this task) or 'clean'
+        (nothing to report). The review reads the file back to detect any
+        task_add without a matching task_complete and, on incompleteness,
+        resumes the reviewer to finish those tasks."""
+        path = self.tasks_path_for(self.current_label or "unit")
+        record = {"event": "complete", "id": id, "result": result, "note": note}
+        with open(path, "a") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        self.logger.info(
+            f"[tasks] complete id={id!r} result={result!r} note={note[:80]!r} "
+            f"(label={self.current_label})"
+        )
+        events.emit(events.TASK, label=self.current_label,
+                    action="complete", id=id, result=result, note=note)
+        return {"ok": True, "completed": id}
+
+    def _tool_task_list(self) -> dict:
+        """Reads the per-phase tasks file and returns the current checklist:
+        every task_add so far and whether each has been marked complete. This
+        is the read-side counterpart to task_add/task_complete — the model
+        calls it to remember what is still open when the transcript is long."""
+        path = self.tasks_path_for(self.current_label or "unit")
+        adds: OrderedDict[str, str] = OrderedDict()
+        completes: Dict[str, dict] = {}
+        if path.exists():
+            for line in path.read_text().splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                tid = rec.get("id")
+                if not tid:
+                    continue
+                if rec.get("event") == "add":
+                    adds.setdefault(tid, rec.get("description", ""))
+                elif rec.get("event") == "complete":
+                    completes[tid] = {
+                        "result": rec.get("result", ""),
+                        "note": rec.get("note", ""),
+                    }
+        tasks = []
+        open_ids = []
+        for tid, desc in adds.items():
+            c = completes.get(tid)
+            status = "complete" if c else "open"
+            entry = {"id": tid, "description": desc, "status": status}
+            if c:
+                entry["result"] = c["result"]
+                entry["note"] = c["note"]
+            else:
+                open_ids.append(tid)
+            tasks.append(entry)
+        self.logger.info(
+            f"[tasks] list: {len(adds)} added, {len(completes)} completed, "
+            f"{len(open_ids)} open (label={self.current_label})"
+        )
+        return {"total": len(adds), "open": open_ids, "tasks": tasks}
+
     def _tool_record_verdict(
         self,
         finding: str,
@@ -1928,6 +2020,9 @@ class Agent:
             "run_sparse": self._tool_run_sparse,
             "record_finding": self._tool_record_finding,
             "record_verdict": self._tool_record_verdict,
+            "task_add": self._tool_task_add,
+            "task_complete": self._tool_task_complete,
+            "task_list": self._tool_task_list,
         }
         tool_fn = read_tools.get(name)
 
