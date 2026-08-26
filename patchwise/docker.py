@@ -259,63 +259,62 @@ class DockerManager:
             )
             raise
 
+        # Always remove any existing container (running or stopped) with this
+        # name and start fresh, so a stale container from a crashed run can
+        # never be reused or block `docker run` on the name.
+        subprocess.run(
+            ["docker", "rm", "-f", self.container_name],
+            capture_output=True,
+        )
+        args = [
+            "docker",
+            "run",
+            "-d",
+            "--name",
+            self.container_name,
+            "-v",
+            f"{build_path}:{self.build_dir}",
+            "-v",
+            f"{self._kernel_overlay_volume}:{self.kernel_dir}",
+            self.image_tag,
+            "tail",
+            "-f",
+            "/dev/null",
+        ]
+        self.logger.info(
+            f"Starting container {self.container_name} with args {' '.join(args)}..."
+        )
         try:
             subprocess.run(
-                ["docker", "container", "inspect", self.container_name],
+                args,
                 check=True,
                 capture_output=True,
             )
-            self.logger.debug(f"Container {self.container_name} is already running.")
-        except subprocess.CalledProcessError:
-            args = [
-                "docker",
-                "run",
-                "-d",
-                "--name",
-                self.container_name,
-                "-v",
-                f"{build_path}:{self.build_dir}",
-                "-v",
-                f"{self._kernel_overlay_volume}:{self.kernel_dir}",
-                self.image_tag,
-                "tail",
-                "-f",
-                "/dev/null",
-            ]
-            self.logger.info(
-                f"Starting container {self.container_name} with args {' '.join(args)}..."
+        except subprocess.CalledProcessError as e:
+            self.logger.error(
+                f"Failed to start container {self.container_name}: {e}\nstderr: {e.stderr}"
             )
-            try:
-                subprocess.run(
-                    args,
-                    check=True,
-                    capture_output=True,
-                )
-            except subprocess.CalledProcessError as e:
-                self.logger.error(
-                    f"Failed to start container {self.container_name}: {e}\nstderr: {e.stderr}"
-                )
-                self._cleanup_kernel_overlay()
-                raise
-            self.logger.info(f"Container {self.container_name} started successfully.")
+            self._cleanup_kernel_overlay()
+            raise
+        self.logger.info(f"Container {self.container_name} started successfully.")
 
-            try:
-                self._configure_git_identity()
-            except subprocess.CalledProcessError as e:
-                self.logger.error(
-                    f"Failed to configure git identity: {e}\nstderr: {e.stderr}"
-                )
-                self._cleanup_kernel_overlay()
-                raise
+        try:
+            self._configure_git_identity()
+        except subprocess.CalledProcessError as e:
+            self.logger.error(
+                f"Failed to configure git identity: {e}\nstderr: {e.stderr}"
+            )
+            self._cleanup_kernel_overlay()
+            raise
 
-            try:
-                self._prepare_kernel_tree()
-            except subprocess.CalledProcessError as e:
-                self.logger.error(
-                    f"Failed to prepare kernel tree at {self.commit_sha}: {e}\nstderr: {e.stderr}"
-                )
-                self._cleanup_kernel_overlay()
-                raise
+        try:
+            self._prepare_kernel_tree()
+        except subprocess.CalledProcessError as e:
+            self.logger.error(
+                f"Failed to prepare kernel tree at {self.commit_sha}: {e}\nstderr: {e.stderr}"
+            )
+            self._cleanup_kernel_overlay()
+            raise
 
     def run_command(
         self, command: list[str], cwd: Optional[str], **kwargs: Any
@@ -591,77 +590,76 @@ class DockerManager:
             )
             raise
 
+        # Always remove any existing container (running or stopped) with this
+        # name and start fresh, so a stale container from a crashed run can
+        # never be reused or block `docker run` on the name.
+        subprocess.run(
+            ["docker", "rm", "-f", self.container_name],
+            capture_output=True,
+        )
+        args = [
+            "docker",
+            "run",
+            "-d",
+            "--name",
+            self.container_name,
+            "-v",
+            f"{self._build_volume_name}:/shared/build",
+            "-v",
+            f"{self._build_volume_name}:{self.build_dir}",
+            "-v",
+            f"{self._kernel_overlay_volume}:{self.kernel_dir}",
+        ]
+        args += [
+            self.image_tag,
+            "tail",
+            "-f",
+            "/dev/null",
+        ]
+        self.logger.info(
+            f"Starting container {self.container_name} with shared volume..."
+        )
         try:
             subprocess.run(
-                ["docker", "container", "inspect", self.container_name],
+                args,
                 check=True,
                 capture_output=True,
             )
-            self.logger.debug(f"Container {self.container_name} is already running.")
-        except subprocess.CalledProcessError:
-            args = [
-                "docker",
-                "run",
-                "-d",
-                "--name",
-                self.container_name,
-                "-v",
-                f"{self._build_volume_name}:/shared/build",
-                "-v",
-                f"{self._build_volume_name}:{self.build_dir}",
-                "-v",
-                f"{self._kernel_overlay_volume}:{self.kernel_dir}",
-            ]
-            args += [
-                self.image_tag,
-                "tail",
-                "-f",
-                "/dev/null",
-            ]
-            self.logger.info(
-                f"Starting container {self.container_name} with shared volume..."
+        except subprocess.CalledProcessError as e:
+            self.logger.error(
+                f"Failed to start container {self.container_name}: {e}\nstderr: {e.stderr}"
             )
-            try:
-                subprocess.run(
-                    args,
-                    check=True,
-                    capture_output=True,
-                )
-            except subprocess.CalledProcessError as e:
-                self.logger.error(
-                    f"Failed to start container {self.container_name}: {e}\nstderr: {e.stderr}"
-                )
-                self._cleanup_kernel_overlay()
-                raise
-            self.logger.info(f"Container {self.container_name} started successfully.")
+            self._cleanup_kernel_overlay()
+            raise
+        self.logger.info(f"Container {self.container_name} started successfully.")
 
-            # Ensure the specific build directory has proper permissions
-            try:
-                self._fix_build_directory_permissions()
-            except subprocess.CalledProcessError as e:
-                self.logger.error(
-                    f"Failed to fix build directory permissions: {e}\nstderr: {e.stderr}"
-                )
-                self._cleanup_kernel_overlay()
-                raise
+        # Ensure the specific build directory has proper permissions
+        try:
+            self._fix_build_directory_permissions()
+        except subprocess.CalledProcessError as e:
+            self.logger.error(
+                f"Failed to fix build directory permissions: {e}\nstderr: {e.stderr}"
+            )
+            self._cleanup_kernel_overlay()
+            raise
 
-            try:
-                self._configure_git_identity()
-            except subprocess.CalledProcessError as e:
-                self.logger.error(
-                    f"Failed to configure git identity: {e}\nstderr: {e.stderr}"
-                )
-                self._cleanup_kernel_overlay()
-                raise
+        try:
+            self._configure_git_identity()
+        except subprocess.CalledProcessError as e:
+            self.logger.error(
+                f"Failed to configure git identity: {e}\nstderr: {e.stderr}"
+            )
+            self._cleanup_kernel_overlay()
+            raise
 
-            try:
-                self._prepare_kernel_tree()
-            except subprocess.CalledProcessError as e:
-                self.logger.error(
-                    f"Failed to prepare kernel tree at {self.commit_sha}: {e}\nstderr: {e.stderr}"
-                )
-                self._cleanup_kernel_overlay()
-                raise
+        try:
+            self._prepare_kernel_tree()
+        except subprocess.CalledProcessError as e:
+            self.logger.error(
+                f"Failed to prepare kernel tree at {self.commit_sha}: {e}\nstderr: {e.stderr}"
+            )
+            self._cleanup_kernel_overlay()
+            raise
 
     def _prepare_kernel_tree(self) -> None:
         """Configure git trust and, for standalone (upstream) kernels, reset the
