@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "patchwise"
-version = "0.9.0"
+version = "0.9.1"
 description = "AI Code Review, Root Cause Analysis and Static Analysis for the Linux kernel"
 authors = [
     { name = "Qualcomm Technologies, Inc.", email = "qc.opensource@qti.qualcomm.com" }
