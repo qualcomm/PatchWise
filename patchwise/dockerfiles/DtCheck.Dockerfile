@@ -3,27 +3,24 @@ FROM patchwise-base:latest
 
 USER root
 
-# RUN chown -R patchwise:patchwise /home/patchwise/build
-
-# RUN wget https://apt.llvm.org/llvm.sh && \
-#     chmod +x llvm.sh && \
-#     ./llvm.sh 14 && \
-#     rm llvm.sh
-
 RUN apt-get update && apt-get install -y --no-install-recommends \
     swig \
     meson \
     && rm -rf /var/lib/apt/lists/*
 
-RUN git clone git://git.kernel.org/pub/scm/utils/dtc/dtc.git /home/patchwise/dtc \
-    && cd /home/patchwise/dtc \
-    && meson setup builddir/ \
-    && meson compile -C builddir/ \
-    && meson install -C builddir/ \
-    && cd /home/patchwise \
-    && rm -rf /home/patchwise/dtc
+# Build the Python bindings from dtc git. The pylibfdt sdist on PyPI still uses
+# the Python 2 C API and no longer compiles; dtc's own copy is current.
+RUN pip3 install --no-cache-dir \
+    "libfdt @ git+https://git.kernel.org/pub/scm/utils/dtc/dtc.git"
 
-RUN pip3 install dtschema
+# dtc names its wheel `libfdt`, not the `pylibfdt` dtschema asks for. Install the
+# dependencies by hand so pip doesn't rebuild the broken PyPI sdist.
+RUN pip3 install --no-cache-dir \
+    "ruamel.yaml>0.15.69" \
+    "jsonschema>=4.18" \
+    rfc3987 \
+    && pip3 install --no-cache-dir --no-deps dtschema
+
 RUN pip3 install yamllint
 
 USER patchwise
