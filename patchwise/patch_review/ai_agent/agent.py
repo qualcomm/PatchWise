@@ -427,27 +427,42 @@ class Agent:
         docs live in the base kernel, so the doc tools anchor here rather than at
         the commit's subtree. Prefers the commit's own tree when it too carries
         full docs, else the first match."""
-        proc = self.docker_manager.run_command(
-            ["rg", "-l", "--glob", "index.rst",
-             "The Linux Kernel documentation", str(self.docker_manager.kernel_dir)],
-            cwd=None,
+        # Sentinel files in order of kernel era. Try each in turn; the first
+        # match identifies Documentation/ regardless of kernel age.
+        sentinels = [
+            ("Documentation/index.rst",               "The Linux Kernel documentation"),
+            ("Documentation/process/coding-style.rst","Linux kernel coding style"),
+            ("Documentation/CodingStyle",             "Linux kernel coding style"),
+            ("Documentation/SubmittingPatches",       ""),
+        ]
+        for leaf, content_marker in sentinels:
+            rg_args = ["rg", "-l"]
+            if content_marker:
+                rg_args += ["--glob", leaf.split("/")[-1], content_marker]
+            else:
+                rg_args += ["-g", leaf.split("/")[-1], "."]
+            rg_args.append(str(self.docker_manager.kernel_dir))
+            proc = self.docker_manager.run_command(rg_args, cwd=None)
+            stdout, stderr = proc.communicate()
+            if stderr and stderr.strip():
+                self.logger.warning(
+                    f"rg for sentinel {leaf!r} wrote to stderr "
+                    f"(rc={proc.returncode}): {stderr.strip()}"
+                )
+            trees: List[str] = []
+            for line in (stdout or "").splitlines():
+                rel = self._kernel_rel(line.strip())
+                if rel == leaf:
+                    trees.append("")
+                elif rel.endswith("/" + leaf):
+                    trees.append(rel[: -len(leaf)].rstrip("/"))
+            if trees:
+                subdir = self.docker_manager.git_subdir
+                return subdir if subdir in trees else sorted(trees)[0]
+        raise RuntimeError(
+            "kernel Documentation/ not found in the workspace; --repo-path is "
+            "likely not a kernel tree"
         )
-        stdout, _ = proc.communicate()
-        leaf = "Documentation/index.rst"
-        trees: List[str] = []
-        for line in (stdout or "").splitlines():
-            rel = self._kernel_rel(line.strip())
-            if rel == leaf:
-                trees.append("")
-            elif rel.endswith("/" + leaf):
-                trees.append(rel[: -len(leaf)].rstrip("/"))
-        if not trees:
-            raise RuntimeError(
-                "kernel Documentation/ not found in the workspace; --repo-path is "
-                "likely not a kernel tree"
-            )
-        subdir = self.docker_manager.git_subdir
-        return subdir if subdir in trees else sorted(trees)[0]
 
     def _doc_container_path(self, sub: str = "") -> str:
         """Container path of `Documentation/<sub>` in the detected Linux docs tree."""
