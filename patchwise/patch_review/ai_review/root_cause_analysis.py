@@ -167,16 +167,16 @@ class RootCauseAnalysis:
     ENGINEER_TOOLS = [
         "list_crash_files", "read_crash_file", "search_crash",
         "find_definition", "find_callers", "find_callees",
-        "grep", "read_file", "list_files", "read_doc",
-        "git_log", "git_show", "git_cat_file",
+        "grep", "read_file", "read_doc",
+        "bash",
         "record_finding",
         "task_add", "task_complete", "task_list",
     ]
     MAINTAINER_TOOLS = [
         "list_crash_files", "read_crash_file", "search_crash",
         "find_definition", "find_callers", "find_callees",
-        "grep", "read_file", "list_files", "read_doc",
-        "git_log", "git_show", "git_cat_file",
+        "grep", "read_file", "read_doc",
+        "bash",
         "get_subsystem_review_guide",
     ]
 
@@ -197,9 +197,9 @@ Crashdump artifacts:
 Kernel source (the real tree the crash came from):
 - `find_definition` / `find_callers` / `find_callees` — navigate the symbols in
   the backtrace.
-- `grep` / `read_file` / `list_files` — search and read kernel source.
-- `git_log` / `git_show` / `git_cat_file` — inspect history of the implicated
-  files. `read_doc` — read a documented kernel contract (under `Documentation/`).
+- `grep` / `read_file` — search and read kernel source.
+- `read_doc` — read a documented kernel contract (under `Documentation/`).
+- `bash(command, cwd?)` — one-shot shell in the kernel tree.
 
 Start by listing the dump folder and reading the primary log around the crash
 signature; follow the evidence (resolve backtrace symbols, registers, addresses
@@ -1087,7 +1087,7 @@ record it with `record_finding`.
 
     @staticmethod
     def _fmt_tool_counts(counts: Dict[str, int]) -> str:
-        """Compact 'read_file×6, grep×4, git_show×1' summary, busiest first."""
+        """Compact 'read_file×6, grep×4, bash×1' summary, busiest first."""
         if not counts:
             return "(none)"
         return ", ".join(

@@ -179,13 +179,13 @@ Code-navigation tools (all paths kernel-relative, e.g. `drivers/mtd/nand/raw/qco
 - `read_binding(compatible)`
 - `search_docs(query)`
 - `read_file(path, start?, end?)`
-- `list_files(path, recursive?)`
 - `get_subsystem_review_guide(subsystem_file)`
-- `git_log(path)`
-- `git_show(rev, name_only?)`
-- `git_cat_file(rev, path, start?, end?)`
 
 Use the file paths from tool results as `file=` hints to disambiguate symbols. Prefer several targeted calls over guessing.
+
+`bash(command, cwd?)` runs a one-shot shell command in the kernel tree (fresh
+exec each call — chain steps with `&&`; `cwd` defaults to the kernel root).
+Reach for it when no navigation tool fits.
 """
 
     SUBSYSTEM_INDEX_BLOCK = """
@@ -390,9 +390,10 @@ is incomplete.
 # False-Positive Filter
 
 Judge every finding below and keep it by default. Drop a finding only as a
-proven false positive: read its cited code with `read_file` (or `git_cat_file`),
-match it to a specific rule in the False Positive Guide below, and show the
-concrete code that refutes it.
+proven false positive: read its cited code with `read_file` (or, for a
+historical revision, `bash` with `git show <rev>:<path>`), match it to a
+specific rule in the False Positive Guide below, and show the concrete code
+that refutes it.
 
 Keep a defect in the patched code even if caller, concurrent, or legacy code
 might mask it, unless the code proves the failure impossible.
@@ -745,7 +746,7 @@ finding with record_verdict as you work through them.
         return int(raw) if raw and raw.isdigit() and int(raw) > 0 else self.FP_ITER_CAP
 
     def _select_subsystem_guides(self) -> set[str]:
-        """Ask a grep-only agent which subsystem guides apply to this change."""
+        """Ask a bash-only agent which subsystem guides apply to this change."""
         changed_files = list(self.commit.stats.files)
         subsystem_index = self.get_subsystem_index()
         messages = [
@@ -753,12 +754,18 @@ finding with record_verdict as you work through them.
                 "role": "system",
                 "content": (
                     "Select the subsystem guides with a reverse search. Check path "
-                    "triggers against the changed paths, then grep the changed files "
-                    "for the trigger regexes from every remaining row. Every grep call "
-                    "must pass file=<changed paths> and count_only=true. Batch as many "
-                    "independent grep calls as possible into each response. Cover every "
-                    "remaining subsystem row with its specific trigger regexes. Return "
-                    "only JSON:\n"
+                    "triggers against the changed paths, then search the changed "
+                    "files for the trigger regexes from every remaining row. Cover "
+                    "every remaining subsystem row with its specific trigger "
+                    "regexes.\n"
+                    "You only need to know WHICH regexes match, not where — so "
+                    "sweep many rows per `bash` call instead of one call per "
+                    "regex. Substitute the changed paths for FILES:\n"
+                    "  for re in 'regmap_' 'clk_prepare' 'dma_map_'; do\n"
+                    "    rg -q -e \"$re\" FILES && echo \"$re yes\" || "
+                    "echo \"$re no\"\n"
+                    "  done\n"
+                    "Return only JSON:\n"
                     '{"subsystem_guides": ["guide.md"]}\n'
                     + self.SUBSYSTEM_INDEX_BLOCK
                     + subsystem_index
@@ -781,7 +788,7 @@ finding with record_verdict as you work through them.
             messages,
             force_tool_usage=False,
             max_iterations=self.SUBSYSTEM_SELECTOR_ITER_CAP,
-            allowed_tools=["grep"],
+            allowed_tools=["bash"],
             label="subsystem-selector",
         )
         parsed = self._extract_json(raw)
@@ -985,9 +992,10 @@ finding with record_verdict as you work through them.
             ])
         # The critic gets get_subsystem_review_guide + read_doc (wired in
         # _critic_system_prompt) plus read_binding and search_docs. It gets no
-        # code-reading or search tools (read_file/grep/find_*), so it physically
+        # code-reading or search tools (read_file/grep/find_*) and deliberately no
+        # `bash` — one `rg` would undo the whole restriction — so it physically
         # cannot hunt specific bugs in the implementation and feed them back as
-        # "gaps" — its job is coverage and scoping, not bug-finding.
+        # "gaps": its job is coverage and scoping, not bug-finding.
         allowed = [
             "get_subsystem_review_guide",
             "read_doc",

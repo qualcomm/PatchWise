@@ -88,22 +88,22 @@ def repo_project_note(repo_path: str) -> str:
     return (
         "## Workspace projects\n\n"
         "This is a repo(1)-managed workspace with these git projects "
-        "(workspace-relative paths). The git tools resolve a file's project from "
-        "its path automatically; you only name one of these as `dir` for a "
-        "path-less `git_log` search (grep/pickaxe):\n\n"
+        "(workspace-relative paths). Each is a separate git tree, so a `git` "
+        "command under `bash` must run inside the project that owns the file — "
+        "pass `cwd=<project path>`:\n\n"
         f"```\n{listing}\n```\n"
     )
 
 
 def project_layout_note(git_subdir: str) -> str:
-    """Review context: where the diff's files live, and that the git tools resolve
-    a file's project from its path."""
+    """Review context: where the diff's files live, and how to reach git history
+    for a file in a multi-project workspace."""
     if not git_subdir:
         return (
             "## Repository layout\n\n"
             "The workspace root is the git tree, so the diff's paths are already "
-            "workspace-relative. The git tools resolve a file's project from its "
-            "path; a path-less `git_log` search takes `dir='.'`.\n"
+            "workspace-relative and `bash` git commands work from the default "
+            "working directory.\n"
         )
     return (
         "## Repository layout\n\n"
@@ -114,8 +114,10 @@ def project_layout_note(git_subdir: str) -> str:
         f"committed — the code it depends on (definitions, callers, headers) may "
         f"live in other projects, such as the base kernel. Investigate wherever the "
         f"evidence leads: `find_definition`, `find_callers` and `grep` search the "
-        f"whole workspace and return full workspace paths, and the git tools "
-        f"(`git_log`, `git_show`, `git_cat_file`) resolve each file's project from "
-        f"the path you pass. Only a path-less `git_log` search needs a `dir` naming "
-        f"the project to search.\n"
+        f"whole workspace and return full workspace paths.\n\n"
+        f"Each project is its own git tree, so a `git` command under `bash` must "
+        f"run in the project that owns the file: pass `cwd` (e.g. "
+        f"`bash(command=\"git log --oneline -5 -- drivers/foo.c\", "
+        f"cwd=\"{git_subdir}\")`). Paths after `--` are relative to that project, "
+        f"not to the workspace.\n"
     )

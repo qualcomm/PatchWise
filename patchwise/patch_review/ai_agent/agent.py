@@ -468,98 +468,6 @@ class Agent:
             raise ValueError(f"path not found: {rel}")
         return rel
 
-    def _git_dir_cwd(self, tree: Optional[str]) -> str:
-        """Container cwd for git in project ``tree`` ("" = mount root; ``None`` =
-        the reviewed commit's anchored subtree)."""
-        if tree is None:
-            return self.docker_manager._git_workdir
-        return "/".join(filter(None, [str(self.docker_manager.kernel_dir), tree]))
-
-    def _resolve_git_tree_dir(self, dir: str) -> str:
-        """Validate `dir` is a git tree inside the workspace and return it
-        workspace-relative. For the path-less git tools, which have no path to
-        derive the project from."""
-        if not isinstance(dir, str) or not dir.strip():
-            raise ValueError(
-                "dir is required: name the project git tree, e.g. 'common' or '.'"
-            )
-        rel = self._kernel_rel(dir)
-        if rel in ("", "."):
-            rel = ""  # mount root is itself the git tree (upstream)
-        self._abs_in_kernel(rel or ".")
-        gitmarker = "/".join(
-            filter(None, [str(self.docker_manager.kernel_dir), rel, ".git"])
-        )
-        check = self.docker_manager.run_command(["test", "-e", gitmarker], cwd=None)
-        check.communicate()
-        if check.returncode != 0:
-            raise ValueError(
-                f"dir is not a git tree (no .git): {rel or '.'}; pass the project root"
-            )
-        return rel
-
-    def _resolve_git_commit(self, rev: str, tree: Optional[str] = None) -> str:
-        """Resolve a revision to a commit SHA, rejecting invalid or option-like refs."""
-        if not isinstance(rev, str) or not rev.strip():
-            raise ValueError("rev must be a non-empty string")
-        if rev.startswith("-"):
-            raise ValueError(f"invalid rev: {rev}")
-        if any(c in rev for c in ("\x00", "\n", "\r")):
-            raise ValueError(f"invalid rev: {rev}")
-
-        proc = self.docker_manager.run_command(
-            [
-                "git",
-                "rev-parse",
-                "--verify",
-                "--end-of-options",
-                f"{rev}^{{commit}}",
-            ],
-            cwd=self._git_dir_cwd(tree),
-        )
-        stdout, stderr = proc.communicate()
-        if proc.returncode != 0:
-            detail = stderr.strip() or stdout.strip() or rev
-            raise ValueError(f"invalid rev: {detail}")
-        return stdout.strip()
-
-    def _validate_git_path(self, path: str) -> str:
-        """Validate a kernel-relative path for git object access."""
-        self._abs_in_kernel(path)
-        return self._kernel_rel(path)
-
-    def _split_tree(self, rel: str) -> Tuple[str, str]:
-        """Locate the git project owning a workspace-relative path (nearest
-        enclosing ``.git``), returning ``(tree, tree_rel)``.
-
-        The file's location decides the project, not the commit under review — so
-        the git tools reach every project. Raises when none is found."""
-        base = Path(self.kernel_path)
-        parts = [p for p in rel.split("/") if p]
-        for i in range(len(parts), -1, -1):
-            candidate = "/".join(parts[:i])
-            gitmarker = (base / candidate / ".git") if candidate else (base / ".git")
-            if gitmarker.exists():
-                return candidate, "/".join(parts[i:])
-        raise ValueError(f"no git project found for path: {rel}")
-
-    def _split_git_object_spec(self, rev: str) -> Tuple[str, Optional[str]]:
-        """Split `rev[:path]` syntax into commit rev and optional kernel-relative path."""
-        if not isinstance(rev, str) or not rev.strip():
-            raise ValueError("rev must be a non-empty string")
-        if rev.startswith("-"):
-            raise ValueError(f"invalid rev: {rev}")
-        if any(c in rev for c in ("\x00", "\n", "\r")):
-            raise ValueError(f"invalid rev: {rev}")
-
-        if ":" not in rev:
-            return rev, None
-
-        commit_rev, rel_path = rev.split(":", 1)
-        if not commit_rev or not rel_path:
-            raise ValueError(f"invalid rev: {rev}")
-        return commit_rev, self._validate_git_path(rel_path)
-
     def _git_command(self, *args: str) -> List[str]:
         """Run git with paging disabled so tool output is deterministic."""
         return ["git", "--no-pager", *args]
@@ -776,7 +684,7 @@ class Agent:
     _CALLEES_LIMIT = 200
     _CALLERS_LIMIT = 100  # max caller entries and max file-scope references each
     _GREP_LIMIT = 100  # max grep hits returned
-    _READ_MAX_LINES = 256  # max lines returned per read_file / git_cat_file call
+    _READ_MAX_LINES = 256  # max lines returned per read_file call
 
     def _tool_find_definition(
         self, name: str, file: Optional[Union[str, List[str]]] = None
@@ -1297,59 +1205,6 @@ class Agent:
             "truncated": len(hits) > 50,
         }
 
-    def _tool_list_files(self, path: str, recursive: bool = False) -> Dict[str, Any]:
-        try:
-            self._abs_in_kernel(path)  # validation only; reject "../" escapes
-        except ValueError as e:
-            return {"ok": False, "error": str(e)}
-
-        rel = self._kernel_rel(path)
-        container_path = str(self.docker_manager.kernel_dir / rel)
-
-        check = self.docker_manager.run_command(
-            ["test", "-d", container_path], cwd=None
-        )
-        check.communicate()
-        if check.returncode != 0:
-            return {"ok": False, "error": f"not a directory: {path}"}
-
-        find_cmd = ["find", container_path, "-mindepth", "1"]
-        if not recursive:
-            find_cmd += ["-maxdepth", "1"]
-        find_cmd += ["-printf", "%P\t%y\n"]
-        proc = self.docker_manager.run_command(find_cmd, cwd=None)
-        stdout, stderr = proc.communicate()
-        if proc.returncode != 0:
-            return {"ok": False, "error": f"find failed: {stderr.strip()}"}
-
-        entries: List[Dict[str, str]] = []
-        for line in stdout.splitlines():
-            name, sep, kind = line.partition("\t")
-            if not sep:
-                continue
-            if any(part.startswith(".") for part in name.split("/")):
-                continue
-            entries.append(
-                {
-                    "name": name,
-                    "type": "dir" if kind == "d" else "file",
-                }
-            )
-
-        entries.sort(key=lambda e: e["name"])
-
-        total = len(entries)
-        truncated = total > 100
-        entries = entries[:100]
-        return {
-            "ok": True,
-            "result": {
-                "entries": entries,
-                "total": total,
-                "truncated": truncated,
-            },
-        }
-
     def _tool_get_subsystem_review_guide(self, subsystem_file: str) -> Dict[str, Any]:
         """Load a subsystem review guide from thirdparty/review-prompts/kernel/subsystem/."""
         available = sorted(p.name for p in SUBSYSTEM_REVIEW_PROMPTS_PATH.glob("*.md"))
@@ -1406,247 +1261,56 @@ class Agent:
         except Exception as e:
             self.logger.debug(f"Failed to write tool_calls.log: {e}")
 
-    def _tool_git_log(
-        self,
-        path: Optional[str] = None,
-        grep: Optional[str] = None,
-        pickaxe: Optional[str] = None,
-        pickaxe_regex: Optional[str] = None,
-        dir: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        if not (path or grep or pickaxe or pickaxe_regex):
-            return {
-                "ok": False,
-                "error": "give at least one of: path, grep, pickaxe, pickaxe_regex",
-            }
+    _BASH_OUTPUT_CAP = 20_000  # chars of merged stdout+stderr per call
+    _BASH_TIMEOUT = 120  # seconds per call
 
-        tree_rel: Optional[str] = None
-        explicit_revs: List[str] = []
-        try:
-            if path:
-                commit_rev, object_path = self._split_git_object_spec(path)
-                if object_path is not None:
-                    tree, tree_rel = self._split_tree(object_path)
-                    explicit_revs.append(self._resolve_git_commit(commit_rev, tree))
-                else:
-                    rel = self._validate_git_path(path)
-                    try:
-                        tree, tree_rel = self._split_tree(rel)
-                    except ValueError:
-                        if isinstance(dir, str) and dir.strip():
-                            tree = self._resolve_git_tree_dir(dir)
-                        else:
-                            # Fall back to the reviewed commit's git tree. Git
-                            # will decide whether the path has history.
-                            tree = None
-                        tree_rel = rel
-            elif isinstance(dir, str) and dir.strip():
-                tree = self._resolve_git_tree_dir(dir)
-            else:
-                return {
-                    "ok": False,
-                    "error": (
-                        "dir is required for a path-less search: name the project "
-                        "git tree to search, e.g. 'kernel_platform/common' or '.'"
-                    ),
-                }
-        except ValueError as e:
-            return {"ok": False, "error": str(e)}
+    def _tool_bash(self, command: str, cwd: Optional[str] = None) -> Dict[str, Any]:
+        """Run a shell command in the container (one-shot, like `docker exec`).
 
-        log_cmd = [
-            *self._git_command("log"),
-            "--no-ext-diff",
-            "--no-textconv",
-            "--no-color",
-            "--max-count",
-            "101",
-            "--format=%H%x1f%an%x1f%ad%x1f%s",
-            "--date=short",
-        ]
-        # Search options, passed in attached form (--opt=value / -Xvalue) so a
-        # value that begins with '-' is never re-parsed as a flag.
-        if grep:
-            log_cmd.append(f"--grep={grep}")
-        if pickaxe:
-            log_cmd.append(f"-S{pickaxe}")
-        if pickaxe_regex:
-            log_cmd.append(f"-G{pickaxe_regex}")
-        if explicit_revs:
-            log_cmd += explicit_revs
-        if tree_rel:
-            log_cmd += ["--", tree_rel]
-        proc = self.docker_manager.run_command(
-            log_cmd, cwd=self._git_dir_cwd(tree)
+        No path vetting: a shell command's reachable set is decided by what the
+        container has mounted, not by anything inspectable in the command string.
+        Loops that must not reach the source tree omit `bash` from their
+        allowed_tools rather than relying on argument checks here.
+
+        `ok` mirrors the exit code, so `grep`/`test` failures read as intended;
+        dispatch-level errors still surface through `dispatch_tool`.
+
+        The timeout is enforced by `timeout` inside the container, not just here:
+        killing the host `docker exec` client leaves the command running, so a
+        runaway would spin for the rest of the review. stdin is closed so a
+        command that reads it fails instead of blocking forever.
+        """
+        workdir = (
+            self._container_kernel_path(self._kernel_rel(cwd))
+            if cwd
+            else str(self.docker_manager.kernel_dir)
         )
-        stdout, stderr = proc.communicate()
-        if proc.returncode != 0:
-            detail = stderr.strip() or "git log failed"
-            return {"ok": False, "error": detail}
-
-        commits: List[Dict[str, str]] = []
-        for line in stdout.splitlines():
-            parts = line.split("\x1f")
-            if len(parts) != 4:
-                continue
-            commits.append(
-                {
-                    "rev": parts[0],
-                    "author": parts[1],
-                    "date": parts[2],
-                    "subject": parts[3],
-                }
+        wrapped = ["timeout", "-k", "5", str(self._BASH_TIMEOUT), "sh", "-c", command]
+        proc = self.docker_manager.run_command(
+            wrapped, cwd=workdir, stdin=subprocess.DEVNULL
+        )
+        try:
+            stdout, stderr = proc.communicate(timeout=self._BASH_TIMEOUT + 15)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            stdout, stderr = proc.communicate()
+        output = (stdout or "") + (stderr or "")
+        truncated = len(output) > self._BASH_OUTPUT_CAP
+        if truncated:
+            output = output[: self._BASH_OUTPUT_CAP]
+        timed_out = proc.returncode in (124, 137)
+        if timed_out:
+            output += (
+                f"\n[timed out after {self._BASH_TIMEOUT}s and was killed. "
+                f"Narrow the command — scope a search to a subdirectory, or "
+                f"split it into steps.]"
             )
-
-        total = len(commits)
-        truncated = total > 100
         return {
-            "ok": True,
-            "result": commits[:100],
-            "total": total,
+            "ok": proc.returncode == 0,
+            "result": output,
+            "exit_code": proc.returncode,
             "truncated": truncated,
-        }
-
-    def _tool_git_show(
-        self, rev: str, name_only: bool = False, dir: Optional[str] = None
-    ) -> Dict[str, Any]:
-        try:
-            commit_rev, rel_path = self._split_git_object_spec(rev)
-        except ValueError as e:
-            return {"ok": False, "error": str(e)}
-
-        if name_only and rel_path is not None:
-            return {
-                "ok": False,
-                "error": "name_only is only supported for commit revisions, not rev:path",
-            }
-
-        tree_rel: Optional[str] = None
-        try:
-            if rel_path is not None:
-                tree, tree_rel = self._split_tree(rel_path)
-            elif isinstance(dir, str) and dir.strip():
-                tree = self._resolve_git_tree_dir(dir)
-            elif commit_rev.startswith("refs/patchwise/series/"):
-                tree = None
-            else:
-                return {
-                    "ok": False,
-                    "error": (
-                        "dir is required when rev has no ':path': name the project "
-                        "git tree that holds the commit, e.g. "
-                        "'kernel_platform/common' or '.'"
-                    ),
-                }
-            resolved_rev = self._resolve_git_commit(commit_rev, tree)
-        except ValueError as e:
-            return {"ok": False, "error": str(e)}
-
-        object_spec = (
-            resolved_rev if tree_rel is None else f"{resolved_rev}:{tree_rel}"
-        )
-
-        if name_only:
-            show_cmd = [
-                *self._git_command("show"),
-                "--format=",
-                "--name-only",
-                "--no-ext-diff",
-                "--no-textconv",
-                "--no-color",
-                resolved_rev,
-            ]
-        else:
-            show_cmd = [
-                *self._git_command("show"),
-                "--no-ext-diff",
-                "--no-textconv",
-                "--no-color",
-                "--stat=80,20",
-                "--format=medium",
-                "--unified=3",
-                object_spec,
-            ]
-        proc = self.docker_manager.run_command(
-            show_cmd, cwd=self._git_dir_cwd(tree)
-        )
-        stdout, stderr = proc.communicate()
-        if proc.returncode != 0:
-            detail = stderr.strip() or "git show failed"
-            return {"ok": False, "error": detail}
-
-        if name_only:
-            prefix = tree
-            paths = [
-                f"{prefix}/{p}" if prefix else p
-                for p in (
-                    line.strip() for line in stdout.splitlines() if line.strip()
-                )
-            ]
-            total = len(paths)
-            return {
-                "ok": True,
-                "result": {
-                    "rev": resolved_rev,
-                    "paths": paths[:200],
-                    "truncated": total > 200,
-                },
-            }
-
-        lines = stdout.splitlines(keepends=True)
-        total_lines = len(lines)
-        end = min(total_lines, 200)
-        return {
-            "ok": True,
-            "result": {
-                "rev": object_spec,
-                "content": "".join(lines[:end]),
-                "truncated": total_lines > 200,
-            },
-        }
-
-    def _tool_git_cat_file(
-        self,
-        rev: str,
-        path: str,
-        start: int = 1,
-        end: Optional[int] = None,
-    ) -> Dict[str, Any]:
-        try:
-            rel = self._validate_git_path(path)
-            tree, tree_rel = self._split_tree(rel)
-            resolved_rev = self._resolve_git_commit(rev, tree)
-        except ValueError as e:
-            return {"ok": False, "error": str(e)}
-
-        object_spec = f"{resolved_rev}:{tree_rel}"
-        proc = self.docker_manager.run_command(
-            self._git_command("cat-file", "-p", object_spec),
-            cwd=self._git_dir_cwd(tree),
-        )
-        stdout, stderr = proc.communicate()
-        if proc.returncode != 0:
-            detail = stderr.strip() or "git cat-file failed"
-            if not detail.startswith("git cat-file failed"):
-                detail = f"git cat-file failed: {detail}"
-            return {"ok": False, "error": detail}
-
-        lines = stdout.splitlines(keepends=True)
-        total_lines = len(lines)
-        start_1 = max(1, start)
-        cap_end = start_1 + self._READ_MAX_LINES - 1
-        request_end = end if end is not None else cap_end
-        effective_end = min(request_end, cap_end, total_lines)
-        return {
-            "ok": True,
-            "result": {
-                "rev": resolved_rev,
-                "path": rel,
-                "start": start_1,
-                "end": effective_end,
-                # Position triple — see _tool_read_file: lines start..end of total.
-                "total": total_lines,
-                "content": "".join(lines[start_1 - 1 : effective_end]),
-            },
+            "timed_out": timed_out,
         }
 
     def _tool_run_checkpatch(self, file_path: Optional[str] = None) -> Dict[str, Any]:
@@ -2030,11 +1694,8 @@ class Agent:
             "read_doc": self._tool_read_doc,
             "read_binding": self._tool_read_binding,
             "search_docs": self._tool_search_docs,
-            "list_files": self._tool_list_files,
             "get_subsystem_review_guide": self._tool_get_subsystem_review_guide,
-            "git_log": self._tool_git_log,
-            "git_show": self._tool_git_show,
-            "git_cat_file": self._tool_git_cat_file,
+            "bash": self._tool_bash,
             "run_checkpatch": self._tool_run_checkpatch,
             "run_sparse": self._tool_run_sparse,
             "record_finding": self._tool_record_finding,

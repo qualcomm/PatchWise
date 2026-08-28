@@ -44,6 +44,11 @@ class DockerManager:
     build_volume_initialized = False
     _build_volume_name = "patchwise-shared-build"
 
+    # Nothing we run in a container needs network (packages are installed at image
+    # build time), and the agent runs model-composed shell commands over an
+    # untrusted patch, so denying egress keeps a prompt injection sandboxed.
+    _NETWORK_ARGS = ["--network", "none"]
+
     def __init__(
         self,
         image_tag: str,
@@ -127,6 +132,7 @@ class DockerManager:
                 "docker",
                 "run",
                 "--rm",
+                *self._NETWORK_ARGS,
                 "--user",
                 "root",
                 "-v",
@@ -272,6 +278,7 @@ class DockerManager:
             "-d",
             "--name",
             self.container_name,
+            *self._NETWORK_ARGS,
             "-v",
             f"{build_path}:{self.build_dir}",
             "-v",
@@ -524,6 +531,7 @@ class DockerManager:
                     "-d",
                     "--name",
                     init_container_name,
+                    *cls._NETWORK_ARGS,
                     "-v",
                     f"{cls._build_volume_name}:/shared/build",
                     base_image_tag,
@@ -603,6 +611,7 @@ class DockerManager:
             "-d",
             "--name",
             self.container_name,
+            *self._NETWORK_ARGS,
             "-v",
             f"{self._build_volume_name}:/shared/build",
             "-v",

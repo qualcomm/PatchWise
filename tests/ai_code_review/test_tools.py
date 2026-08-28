@@ -7,8 +7,7 @@ Boots the full AiCodeReview pipeline (docker + ts_indexer) against a pinned
 linux-next checkout cloned into tests/linux/, then exercises each tool exposed
 via AiCodeReview.dispatch_tool:
 
-  find_definition / find_callers / find_callees / grep / read_file / list_files
-  / git_log / git_show / git_cat_file
+  find_definition / find_callers / find_callees / grep / read_file / bash
 
 Code navigation is pure tree-sitter + ripgrep (no clangd / compile database),
 so the suite needs no kernel build.
@@ -873,250 +872,155 @@ def test_read_binding_miss(review: AiCodeReview) -> None:
 
 
 # ---------------------------------------------------------------------------
-# list_files
+# bash
 # ---------------------------------------------------------------------------
 
 
-# list_files caps output at 100 entries sorted alphabetically, so expected
-# names must fall within the first 100 of the chosen directory or the
-# directory must be small enough to fit.
-@pytest.mark.parametrize(
-    "path,recursive,expected",
-    [
-        ("drivers/remoteproc", False, "remoteproc_core.c"),
-        ("kernel/printk", False, "printk.c"),
-    ],
-    ids=lambda v: str(v),
-)
-def test_list_files(
+def test_bash_runs_in_the_container(review: AiCodeReview) -> None:
+    result = review.agent.dispatch_tool("bash", {"command": "echo hello"})
+    assert result.get("ok"), f"tool returned not-ok: {result}"
+    assert result["result"] == "hello\n"
+    assert result["exit_code"] == 0
+    assert result["truncated"] is False
+
+
+def test_bash_defaults_cwd_to_kernel_root(review: AiCodeReview) -> None:
+    """An unqualified command sees the kernel tree, so the paths the prompts use
+    (`drivers/...`, `scripts/checkpatch.pl`) resolve as written."""
+    result = review.agent.dispatch_tool("bash", {"command": "pwd && ls Makefile"})
+    assert result.get("ok"), f"tool returned not-ok: {result}"
+    assert str(review.agent.docker_manager.kernel_dir) in result["result"]
+    assert "Makefile" in result["result"]
+
+
+def test_bash_resolves_kernel_relative_cwd(review: AiCodeReview) -> None:
+    result = review.agent.dispatch_tool("bash", {"command": "pwd", "cwd": "fs"})
+    assert result.get("ok"), f"tool returned not-ok: {result}"
+    assert result["result"].strip() == str(review.agent.docker_manager.kernel_dir / "fs")
+
+
+def test_bash_accepts_absolute_container_cwd(review: AiCodeReview) -> None:
+    """The model sees absolute container paths in earlier output, so passing one
+    back must not be re-anchored under the kernel root."""
+    abs_path = str(review.agent.docker_manager.kernel_dir / "fs")
+    result = review.agent.dispatch_tool("bash", {"command": "pwd", "cwd": abs_path})
+    assert result.get("ok"), f"tool returned not-ok: {result}"
+    assert result["result"].strip() == abs_path
+
+
+def test_bash_exit_code_drives_ok(review: AiCodeReview) -> None:
+    """`ok` mirrors the exit status so a failed `grep`/`test` reads as intended
+    instead of looking like a broken tool call."""
+    result = review.agent.dispatch_tool("bash", {"command": "test -e no_such_file"})
+    assert result.get("ok") is False
+    assert result["exit_code"] != 0
+
+
+def test_bash_merges_stdout_and_stderr(review: AiCodeReview) -> None:
+    result = review.agent.dispatch_tool(
+        "bash", {"command": "echo out; echo err >&2"}
+    )
+    assert result.get("ok"), f"tool returned not-ok: {result}"
+    assert "out" in result["result"] and "err" in result["result"]
+
+
+def test_bash_truncates_past_output_cap(review: AiCodeReview) -> None:
+    """`cat` on a large file would otherwise flood the context."""
+    from patchwise.patch_review.ai_agent.agent import Agent
+
+    n = Agent._BASH_OUTPUT_CAP + 500
+    result = review.agent.dispatch_tool("bash", {"command": f"printf 'x%.0s' $(seq {n})"})
+    assert result.get("ok"), f"tool returned not-ok: {result}"
+    assert result["truncated"] is True
+    assert len(result["result"]) == Agent._BASH_OUTPUT_CAP
+
+
+def test_bash_kills_a_hanging_command(review: AiCodeReview) -> None:
+    """A command that never exits must not stall the review."""
+    review.agent._BASH_TIMEOUT = 3  # type: ignore[misc]
+    try:
+        start = time.monotonic()
+        result = review.agent.dispatch_tool(
+            "bash", {"command": "while true; do :; done"}
+        )
+        elapsed = time.monotonic() - start
+    finally:
+        del review.agent._BASH_TIMEOUT  # type: ignore[misc]
+
+    assert result["timed_out"] is True
+    assert result["ok"] is False
+    assert result["exit_code"] in (124, 137)
+    assert "timed out" in result["result"]
+    assert elapsed < 30, f"took {elapsed:.1f}s — timeout did not fire promptly"
+
+
+def test_bash_timeout_reaps_the_process_in_the_container(
     review: AiCodeReview,
-    path: str,
-    recursive: bool,
-    expected: str,
 ) -> None:
+    """Killing the host `docker exec` client leaves the command running, so the
+    timeout has to be enforced inside the container."""
+    # An unlikely duration doubles as a marker to find the process by.
+    review.agent._BASH_TIMEOUT = 3  # type: ignore[misc]
+    try:
+        result = review.agent.dispatch_tool("bash", {"command": "sleep 2971"})
+    finally:
+        del review.agent._BASH_TIMEOUT  # type: ignore[misc]
+    assert result["timed_out"] is True
+
+    survivors = review.agent.dispatch_tool(
+        "bash",
+        {
+            # Split so the marker never appears whole in the probe's own argv,
+            # which /proc would otherwise match.
+            "command": (
+                "a=sleep; b=2971; n=0; for d in /proc/[0-9]*; do "
+                'c=$(tr "\\0" " " < $d/cmdline 2>/dev/null); '
+                'case "$c" in *"$a $b"*) n=$((n+1));; esac; done; echo $n'
+            )
+        },
+    )
+    assert (
+        survivors["result"].strip() == "0"
+    ), f"orphan survived in the container: {survivors['result']!r}"
+
+
+def test_bash_closes_stdin(review: AiCodeReview) -> None:
+    """A command reading stdin should fail, not block until the timeout."""
+    start = time.monotonic()
+    result = review.agent.dispatch_tool("bash", {"command": "cat"})
+    elapsed = time.monotonic() - start
+    assert elapsed < 20, f"took {elapsed:.1f}s — stdin was not closed"
+    assert result["timed_out"] is False
+
+
+def test_bash_covers_git_history(review: AiCodeReview) -> None:
+    """History is bash's job now that git_log/git_show/git_cat_file are gone."""
     result = review.agent.dispatch_tool(
-        "list_files", {"path": path, "recursive": recursive}
+        "bash",
+        {"command": f"git --no-pager log --oneline -1 {PINNED_COMMIT} -- fs/open.c"},
     )
     assert result.get("ok"), f"tool returned not-ok: {result}"
-    entries = result.get("result", {}).get("entries", [])
-    assert any(
-        e["name"] == expected for e in entries
-    ), f"{expected!r} not among {len(entries)} entries"
+    assert result["result"].strip(), "expected a commit line"
 
 
-@pytest.mark.parametrize(
-    "path,expected_error",
-    [
-        ("../../etc", "escapes kernel tree"),
-        ("does/not/exist", "not a directory"),
-        ("fs/open.c", "not a directory"),
-    ],
-    ids=["path_escape", "missing", "path_is_file"],
-)
-def test_list_files_errors(
-    review: AiCodeReview, path: str, expected_error: str
-) -> None:
-    result = review.agent.dispatch_tool("list_files", {"path": path})
-    assert not result.get("ok"), f"unexpectedly ok: {result}"
-    assert expected_error in (result.get("error") or "")
-
-
-# ---------------------------------------------------------------------------
-# git_log
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "path,min_count",
-    [
-        ("fs/open.c", 1),
-        ("include/linux/list.h", 1),
-    ],
-    ids=lambda v: str(v),
-)
-def test_git_log(review: AiCodeReview, path: str, min_count: int) -> None:
-    result = review.agent.dispatch_tool("git_log", {"path": path})
-    assert result.get("ok"), f"tool returned not-ok: {result}"
-    commits = result.get("result", [])
-    total = result.get("total", 0)
-    assert total >= min_count, f"only {total} commits (wanted >= {min_count})"
-    assert commits, "expected at least one commit entry"
-    first = commits[0]
-    assert first.get("rev"), f"missing rev in {first}"
-    assert first.get("author"), f"missing author in {first}"
-    assert first.get("date"), f"missing date in {first}"
-    assert first.get("subject"), f"missing subject in {first}"
-
-
-@pytest.mark.parametrize(
-    "path,expected_error",
-    [
-        ("../../../etc/passwd", "escapes kernel tree"),
-    ],
-    ids=["path_escape"],
-)
-def test_git_log_errors(review: AiCodeReview, path: str, expected_error: str) -> None:
-    result = review.agent.dispatch_tool("git_log", {"path": path})
-    assert not result.get("ok"), f"unexpectedly ok: {result}"
-    assert expected_error in (result.get("error") or "")
-
-
-def test_git_log_missing_path_is_empty(review: AiCodeReview) -> None:
-    """Git, rather than PatchWise, decides whether a path has history."""
-    result = review.agent.dispatch_tool("git_log", {"path": "does/not/exist"})
-    assert result.get("ok"), f"tool returned not-ok: {result}"
-    assert result.get("total") == 0
-
-
-def test_git_log_grep(review: AiCodeReview) -> None:
-    """--grep searches commit messages; no path needed."""
-    result = review.agent.dispatch_tool("git_log", {"dir": ".", "grep": "open"})
-    assert result.get("ok"), f"tool returned not-ok: {result}"
-    assert result.get("total", 0) >= 1, "expected message matches for 'open'"
-
-
-# Pickaxe searches are scoped to fs/open.c so they walk only that file's
-# history (fast) rather than all of mainline.
-def test_git_log_pickaxe_added_removed(review: AiCodeReview) -> None:
-    """-S finds the commit(s) that added or removed an exact string."""
+def test_bash_covers_historical_file_reads(review: AiCodeReview) -> None:
     result = review.agent.dispatch_tool(
-        "git_log", {"pickaxe": "do_sys_openat2", "path": "fs/open.c"}
+        "bash", {"command": f"git --no-pager show {PINNED_COMMIT}:fs/open.c | sed -n '1,20p'"}
     )
     assert result.get("ok"), f"tool returned not-ok: {result}"
-    assert result.get("total", 0) >= 1, "expected the commit that introduced it"
+    assert "#include <linux/string.h>" in result["result"]
 
 
-def test_git_log_pickaxe_regex(review: AiCodeReview) -> None:
-    """-G finds commits whose diff adds/removes a line matching a regex."""
+def test_bash_composes_a_pipeline(review: AiCodeReview) -> None:
+    """The reason bash earns its place next to the navigation tools: several
+    steps in one call, which a one-shape-per-schema tool cannot express."""
     result = review.agent.dispatch_tool(
-        "git_log", {"pickaxe_regex": "do_sys_openat2", "path": "fs/open.c"}
+        "bash",
+        {"command": "for f in fs/open.c fs/read_write.c; do "
+                    "printf '%s %s\\n' \"$f\" \"$(wc -l < $f)\"; done"},
     )
     assert result.get("ok"), f"tool returned not-ok: {result}"
-    assert result.get("total", 0) >= 1, "expected diff-content matches"
-
-
-def test_git_log_requires_a_criterion(review: AiCodeReview) -> None:
-    """With neither path nor a search term, git_log refuses rather than dumping
-    unscoped history."""
-    result = review.agent.dispatch_tool("git_log", {})
-    assert not result.get("ok"), f"unexpectedly ok: {result}"
-    assert "at least one" in (result.get("error") or "")
-
-
-def test_git_log_path_less_requires_dir(review: AiCodeReview) -> None:
-    """A grep/pickaxe search has no path to derive the project from, so it must
-    be told which project to search."""
-    result = review.agent.dispatch_tool("git_log", {"grep": "open"})
-    assert not result.get("ok"), f"unexpectedly ok: {result}"
-    assert "dir is required" in (result.get("error") or "")
-
-
-@pytest.mark.parametrize("bad_dir", ["../../etc", "../..", "foo/../../.."], ids=lambda v: v)
-def test_git_log_dir_cannot_escape_workspace(
-    review: AiCodeReview, bad_dir: str
-) -> None:
-    """A path-less search's `dir` must stay inside the workspace."""
-    result = review.agent.dispatch_tool("git_log", {"grep": "open", "dir": bad_dir})
-    assert not result.get("ok"), f"unexpectedly ok: {result}"
-    assert "escapes kernel tree" in (result.get("error") or "")
-
-
-# ---------------------------------------------------------------------------
-# git_show
-# ---------------------------------------------------------------------------
-
-
-def test_git_show(review: AiCodeReview) -> None:
-    result = review.agent.dispatch_tool("git_show", {"dir": ".", "rev": PINNED_COMMIT})
-    assert result.get("ok"), f"tool returned not-ok: {result}"
-    payload = result.get("result", {})
-    assert payload.get("rev") == PINNED_COMMIT
-    content = payload.get("content", "")
-    assert f"commit {PINNED_COMMIT}" in content
-
-
-def test_git_show_name_only(review: AiCodeReview) -> None:
-    result = review.agent.dispatch_tool(
-        "git_show", {"dir": ".", "rev": PINNED_COMMIT, "name_only": True}
-    )
-    assert result.get("ok"), f"tool returned not-ok: {result}"
-    payload = result.get("result", {})
-    assert payload.get("rev") == PINNED_COMMIT
-    paths = payload.get("paths", [])
-    assert paths, "expected changed file paths"
-
-
-def test_git_show_object_path(review: AiCodeReview) -> None:
-    rev = f"{PINNED_COMMIT}:fs/open.c"
-    result = review.agent.dispatch_tool("git_show", {"rev": rev})
-    assert result.get("ok"), f"tool returned not-ok: {result}"
-    payload = result.get("result", {})
-    assert payload.get("rev") == rev
-    content = payload.get("content", "")
-    assert "diff --git" not in content
-
-
-def test_git_show_bare_commit_requires_dir(review: AiCodeReview) -> None:
-    """A bare commit rev (no ':path') has no path to derive the project from, so
-    the caller must name the project holding the commit."""
-    result = review.agent.dispatch_tool("git_show", {"rev": PINNED_COMMIT})
-    assert not result.get("ok"), f"unexpectedly ok: {result}"
-    assert "dir is required" in (result.get("error") or "")
-
-
-@pytest.mark.parametrize(
-    "args,expected_error",
-    [
-        ({"dir": ".", "rev": "not_a_real_rev"}, "invalid rev"),
-        ({"dir": ".", "rev": "-n1"}, "invalid rev"),
-        ({"rev": f"{PINNED_COMMIT}:fs/open.c", "name_only": True}, "name_only"),
-    ],
-    ids=["missing_rev", "option_like_rev", "name_only_with_object_spec"],
-)
-def test_git_show_errors(
-    review: AiCodeReview, args: Dict[str, Any], expected_error: str
-) -> None:
-    result = review.agent.dispatch_tool("git_show", args)
-    assert not result.get("ok"), f"unexpectedly ok: {result}"
-    assert expected_error in (result.get("error") or "")
-
-
-# ---------------------------------------------------------------------------
-# git_cat_file
-# ---------------------------------------------------------------------------
-
-
-def test_git_cat_file(review: AiCodeReview) -> None:
-    result = review.agent.dispatch_tool(
-        "git_cat_file",
-        {"rev": PINNED_COMMIT, "path": "fs/open.c", "start": 1, "end": 20},
-    )
-    assert result.get("ok"), f"tool returned not-ok: {result}"
-    payload = result.get("result", {})
-    assert payload.get("rev") == PINNED_COMMIT
-    assert payload.get("path") == "fs/open.c"
-    assert "#include <linux/string.h>" in payload.get("content", "")
-    # Same position-triple contract as read_file: total present, no truncated.
-    assert payload.get("start") == 1 and payload.get("end") == 20
-    assert isinstance(payload.get("total"), int) and payload["total"] >= 20
-    assert "truncated" not in payload
-
-
-@pytest.mark.parametrize(
-    "args,expected_error",
-    [
-        ({"rev": "not_a_real_rev", "path": "fs/open.c"}, "invalid rev"),
-        ({"rev": PINNED_COMMIT, "path": "../../../etc/passwd"}, "escapes kernel tree"),
-        ({"rev": PINNED_COMMIT, "path": "does/not/exist.c"}, "git cat-file failed"),
-    ],
-    ids=["missing_rev", "path_escape", "missing_path_in_commit"],
-)
-def test_git_cat_file_errors(
-    review: AiCodeReview, args: Dict[str, Any], expected_error: str
-) -> None:
-    result = review.agent.dispatch_tool("git_cat_file", args)
-    assert not result.get("ok"), f"unexpectedly ok: {result}"
-    assert expected_error in (result.get("error") or "")
+    assert "fs/open.c" in result["result"] and "fs/read_write.c" in result["result"]
 
 
 # ---------------------------------------------------------------------------

@@ -5,8 +5,14 @@
 All tools accept and return workspace-relative paths (e.g. 'drivers/usb/foo.c').
 The `file` arg on name-taking tools is a hint for where you saw the symbol
 used, not where its definition lives. The tool resolves the definition
-itself. List tools cap results at 100; read_file and git_cat_file cap at
-256 lines; git_show caps at 200.
+itself. List tools cap results at 100; read_file caps at 256 lines.
+
+The navigation tools return *structured* results — line spans, the enclosing
+construct, every arch/#ifdef variant ranked — which is what they exist for.
+`bash` covers everything else the container can do (history, lint, build,
+one-off composition) without a bespoke schema per command; it returns plain
+text, so reach for the navigation tools when you want positions rather than
+prose.
 """
 
 _NAME_PARAM = {
@@ -271,158 +277,35 @@ TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "list_files",
+            "name": "bash",
             "description": (
-                "List files and directories at a workspace-relative path. Set "
-                "recursive=true for a deep listing. Hidden entries (dotfiles/dirs "
-                "such as .git) are filtered out. Result is "
-                "{entries: [{name, type: 'file'|'dir'}], total, truncated}. "
-                "Capped at 100 entries."
+                "Run a shell command in the container. One-shot: each call is a "
+                "fresh exec, so no state (cwd, variables, environment) carries "
+                "over — chain related steps with `&&` or `;` in one command. "
+                "stdout and stderr are merged; output is truncated past a size "
+                "cap, and the command is killed after 120s. "
+                "Example usage: git history, one-off shell composition, "
+                "build/config inspection, etc. For searching and reading source, "
+                "prefer the navigation tools — they return line spans and the "
+                "enclosing construct, which the bash output does not carry."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "path": {
+                    "command": {
                         "type": "string",
-                        "description": "Workspace-relative directory path (use '.' for the workspace root).",
+                        "description": "Shell command, run via `sh -c`.",
                     },
-                    "recursive": {
-                        "type": "boolean",
-                        "description": "Whether to walk subdirectories (default false).",
-                    },
-                },
-                "required": ["path"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "git_log",
-            "description": (
-                "Search commit history. Returns {result: [{rev, author, date, "
-                "subject}], total, truncated}, capped at 100 commits. Give at "
-                "least one criterion: `path` (history of a file/dir), `grep` "
-                "(commit-message regex), `pickaxe` (commits that added or "
-                "removed an exact string — when a symbol/line was introduced or "
-                "deleted), or `pickaxe_regex` (commits whose diff adds/removes a "
-                "line matching a regex). Combine them to narrow, e.g. pickaxe + "
-                "path to find where a symbol entered one file."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {
+                    "cwd": {
                         "type": "string",
                         "description": (
-                            "Workspace-relative file or directory path to scope the "
-                            "search to. Optional when a search criterion is given."
-                        ),
-                    },
-                    "dir": {
-                        "type": "string",
-                        "description": (
-                            "Workspace-relative project git tree for a path-less "
-                            "search (grep/pickaxe with no `path`); use `.` for the "
+                            "Working directory, workspace-relative (e.g. "
+                            "'drivers/usb') or absolute. Defaults to the "
                             "workspace root."
                         ),
                     },
-                    "grep": {
-                        "type": "string",
-                        "description": "Regex matched against commit messages (--grep).",
-                    },
-                    "pickaxe": {
-                        "type": "string",
-                        "description": (
-                            "Exact string; finds commits that changed how many "
-                            "times it occurs, i.e. added or removed it (-S)."
-                        ),
-                    },
-                    "pickaxe_regex": {
-                        "type": "string",
-                        "description": (
-                            "Regex; finds commits whose diff adds or removes any "
-                            "line matching it (-G)."
-                        ),
-                    },
                 },
-                "required": [],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "git_show",
-            "description": (
-                "Show a commit or historical file object by revision. `rev` may "
-                "be a commit id/revision (e.g. HEAD~1) or `<commit-id>:<relative/path>` "
-                "(e.g. `43cfbdda5af6:drivers/remoteproc/qcom_q6v5.c`). Set "
-                "`name_only=true` to return only changed file paths for a commit. "
-                "Returns {rev, content, truncated} or {rev, paths, truncated}. "
-                "Capped at 200 lines or 200 paths per call."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "rev": {
-                        "type": "string",
-                        "description": (
-                            "A commit revision (e.g. HEAD, HEAD~1, a SHA) or a "
-                            "historical file object "
-                            "`43cfbdda5af6:drivers/remoteproc/qcom_q6v5.c`."
-                        ),
-                    },
-                    "dir": {
-                        "type": "string",
-                        "description": (
-                            "Workspace-relative project git tree for a bare commit "
-                            "`rev` (no `:path`); use `.` for the workspace root."
-                        ),
-                    },
-                    "name_only": {
-                        "type": "boolean",
-                        "description": (
-                            "If true, return only the changed file paths for the commit."
-                        ),
-                    },
-                },
-                "required": ["rev"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "git_cat_file",
-            "description": (
-                "Read a historical file from git by commit revision and "
-                "workspace-relative path. Returns {rev, path, start, end, total, "
-                "content}: lines start..end of `total` (end < total means more "
-                "remains). Capped at 256 lines per call. Use this when `git_show` "
-                "output is truncated or when you want file contents without a patch."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "rev": {
-                        "type": "string",
-                        "description": "A commit revision such as HEAD, HEAD~1, or a commit SHA.",
-                    },
-                    "path": {
-                        "type": "string",
-                        "description": "Workspace-relative path, read at `rev`.",
-                    },
-                    "start": {
-                        "type": "integer",
-                        "description": "1-based starting line (default 1).",
-                    },
-                    "end": {
-                        "type": "integer",
-                        "description": "1-based ending line, inclusive (default start+255).",
-                    },
-                },
-                "required": ["rev", "path"],
+                "required": ["command"],
             },
         },
     },
@@ -683,8 +566,10 @@ TOOLS = [
     },
 ]
 
-# Read-only code-navigation tools; loops that scope themselves with
-# allowed_tools start from this set and append the few extras they need.
+# The general-purpose working set: structured navigation tools plus `bash`.
+# Loops that scope themselves with allowed_tools start from this set and append
+# the few extras they need. `bash` is read-only only by convention — it can
+# write, so loops that must not modify the tree omit it explicitly.
 NAVIGATION_TOOLS = [
     "find_definition",
     "find_callers",
@@ -694,8 +579,5 @@ NAVIGATION_TOOLS = [
     "read_doc",
     "read_binding",
     "search_docs",
-    "list_files",
-    "git_log",
-    "git_show",
-    "git_cat_file",
+    "bash",
 ]

@@ -31,4 +31,4 @@ MANIFEST
 
 sandbox/
 tests/linux/
-
+tests/tool_calls.log
