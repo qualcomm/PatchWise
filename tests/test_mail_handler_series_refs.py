@@ -1,3 +1,6 @@
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+# SPDX-License-Identifier: BSD-3-Clause
+
 from email.message import EmailMessage
 from pathlib import Path
 from typing import Optional
