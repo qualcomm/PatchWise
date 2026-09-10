@@ -284,7 +284,7 @@ mail:
 
 ## Configuration
 
-PatchWise merges [`patchwise/default_config.yaml`](patchwise/default_config.yaml) (shipped defaults) under `~/.config/patchwise_config.yaml` (user overrides) — see that file for all available options.
+PatchWise merges [`patchwise/default_config.yaml`](patchwise/default_config.yaml) (shipped defaults) under `~/.config/patchwise_config.yaml` (user overrides) — see that file for all available options. Run `patchwise --config` for an interactive menuconfig-style TUI to browse and edit these options instead of hand-editing the YAML.
 
 ## Command-Line Options
 
@@ -293,6 +293,7 @@ PatchWise merges [`patchwise/default_config.yaml`](patchwise/default_config.yaml
 - `--rca`: Root-cause a kernel crashdump folder instead of reviewing commits. See [Crashdump Root-Cause Analysis](#crashdump-root-cause-analysis).
 - `--plain`: Disable the live dashboard and use plain log output.
 - `--stats`: Serve the observability web dashboard instead of running a review, computed from the artifacts under the sandbox.
+- `--config`: Launch an interactive menuconfig-style TUI to view and edit `~/.config/patchwise_config.yaml` instead of running a review.
 - `--output-dir`: Directory to save the review/RCA results. (default: `/tmp/patchwise/output`, overridable via `PATCHWISE_OUTPUT_PATH`)
 
 ### Patch Review Options
