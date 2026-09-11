@@ -114,7 +114,13 @@ Your output should only contain the in-line review and nothing else.
 - ASCII characters only.
 - Line-wrap the text at 75 columns but don't line-wrap quoted text, code and tags.
 - Keep the in-line review consice, simple and highly readable.
-- If a finding begins with `[likely false positive]`, keep that exact prefix at the start of that finding's comment and keep the finding in the output.
+- When several findings refer to the same quoted line(s), emit that quote only
+  once and list the separate concerns beneath it, one per paragraph. Never
+  repeat an identical quote block.
+- If a finding begins with `[likely false positive]`, keep that exact prefix at the
+  start of that finding's comment and keep the finding in the output. When such a
+  finding is grouped under a shared quote, keep the prefix at the start of its own
+  paragraph.
 - If the review has no actionable issue, your response must be, "No issues found."
 - Make sure you follow Linux Kernel guidelines (Documentation).
 
