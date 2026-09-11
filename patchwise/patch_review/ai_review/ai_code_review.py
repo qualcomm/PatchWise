@@ -64,6 +64,7 @@ class AiCodeReview(AiReview):
     CRITIC_ITER_CAP = 10
     EXEC_ITER_CAP = 100
     FP_ITER_CAP = 50
+    REVIEW_CLEANUP_ITER_CAP = 10
 
     # Reviewer loads guides and streams findings; the filter records verdicts.
     EXEC_TOOLS = NAVIGATION_TOOLS + [
@@ -111,9 +112,11 @@ Your output should only contain the in-line review and nothing else.
 
 - Remove any thinking and internal reasoning.
 - ASCII characters only.
+- Line-wrap the text at 75 columns but don't line-wrap quoted text, code and tags.
 - Keep the in-line review consice, simple and highly readable.
 - If a finding begins with `[likely false positive]`, keep that exact prefix at the start of that finding's comment and keep the finding in the output.
 - If the review has no actionable issue, your response must be, "No issues found."
+- Make sure you follow Linux Kernel guidelines (Documentation).
 
 Example in-line review by linux kernel maintainer:
 ```
@@ -1512,15 +1515,17 @@ finding with record_verdict as you work through them.
         )
         messages = [{"role": "user", "content": formatted_prompt}]
 
-        completion_kwargs: dict = {
-            "messages": messages,
-            "stream": False,
-        }
-        response = self.agent.completion_with_retry(**completion_kwargs)
-        review = response.choices[0].message.content or ""
+        review = self.agent.run_agent_loop(
+            messages,
+            force_tool_usage=False,
+            max_iterations=self.REVIEW_CLEANUP_ITER_CAP,
+            allowed_tools=["bash"],
+            label="review-cleanup",
+        )
+
         if review.strip() == "No issues found.":
             return ""
-        return super().format_chat_response(review)
+        return review
 
     _SUBDIR = "ai_code_review"
 
