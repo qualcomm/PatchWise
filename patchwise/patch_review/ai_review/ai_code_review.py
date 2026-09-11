@@ -398,8 +398,6 @@ that refutes it.
 Keep a defect in the patched code even if caller, concurrent, or legacy code
 might mask it, unless the code proves the failure impossible.
 
-Drop findings that address only the commit message.
-
 Rate each finding's `impact` — the severity of the defect if it is real:
 - `high`: memory corruption, crash/panic/oops, security hole, data loss,
   deadlock, or a use of uninitialised/freed memory.
