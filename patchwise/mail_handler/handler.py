@@ -241,11 +241,9 @@ AI-generated content. Be sure to check for accuracy.
 
     response = textwrap.indent(quoted, "> ", predicate=lambda _: True) + HEADER
     if "LLMCommitAudit" in ai_reviews:
-        response += (
-            "**Commit Analysis**:" + "\n\n" + ai_reviews["LLMCommitAudit"] + "\n\n"
-        )
+        response += ai_reviews["LLMCommitAudit"] + "\n\n"
     if "AiCodeReview" in ai_reviews:
-        response += "**Code Review**:" + "\n\n" + ai_reviews["AiCodeReview"] + "\n\n"
+        response += ai_reviews["AiCodeReview"] + "\n\n"
     subject = f"Re: [Patchwise AI Review] {message['Subject']}"
     return response, subject
 
