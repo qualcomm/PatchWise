@@ -212,6 +212,8 @@ def run_local_mode(args: argparse.Namespace) -> None:
                 continue
             review_name = type(review).__name__
             output_file = output_dir / f"{review_name.lower()}.txt"
+            if not result_text.endswith("\n"):
+                result_text += "\n"
             with open(output_file, "w", encoding="utf-8") as f:
                 f.write(result_text)
             logger.info(f"Saved {review_name} results to {output_file}")
