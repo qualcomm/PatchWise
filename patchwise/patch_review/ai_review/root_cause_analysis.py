@@ -1246,7 +1246,7 @@ def run_rca_mode(args: argparse.Namespace) -> None:
     report = rca.run()
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / "rca_report.md").write_text(report)
+    (out_dir / "rca_report.md").write_text(report.rstrip("\n") + "\n")
     # The live dashboard renders the accepted root cause as a panel and the
     # report is saved above, so only echo the raw markdown to stdout when no UI
     # is consuming events (piped/--plain/DEBUG runs).
