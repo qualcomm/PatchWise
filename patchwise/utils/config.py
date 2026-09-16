@@ -4,7 +4,7 @@
 from platformdirs import user_config_dir
 from patchwise import PACKAGE_PATH
 from pathlib import Path
-from typing import Dict, Any, cast
+from typing import Dict, Any, Sequence, cast
 import shutil
 import yaml
 
@@ -55,10 +55,24 @@ def parse_config() -> Dict[str, Any]:
     return _merge_overrides(default_options, user_options)
 
 
-def update_user_config(dict: Dict[str, Any]) -> None:
+def update_user_config(key_path: Sequence[str], value: Any) -> None:
+    """
+    Sets a single (possibly nested) key in user_config.yaml to ``value``, leaving every
+    other key untouched. ``key_path`` is walked/created one level at a time, e.g.
+    ``("mail", "imap", "ssl")``.
+    """
     if not USER_CONFIG_PATH.exists():
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         shutil.copy(DEFAULT_CONFIG_PATH, USER_CONFIG_PATH)
 
+    user_options = read_from_config(USER_CONFIG_PATH)
+
+    node = user_options
+    for key in key_path[:-1]:
+        if not isinstance(node.get(key), dict):
+            node[key] = {}
+        node = node[key]
+    node[key_path[-1]] = value
+
     with open(USER_CONFIG_PATH, "w") as file:
-        yaml.dump(dict, file)
+        yaml.dump(user_options, file)

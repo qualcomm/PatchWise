@@ -62,6 +62,11 @@ def parse_args(config: Dict) -> argparse.Namespace:
         action="store_true",
         help="Serve the observability web dashboard instead of running a review.",
     )
+    parser.add_argument(
+        "--config",
+        action="store_true",
+        help="Launch an interactive TUI to view and edit the user config instead of running a review.",
+    )
 
     review_group = parser.add_argument_group("Patch Review Options")
 
@@ -130,11 +135,20 @@ def parse_args(config: Dict) -> argparse.Namespace:
         for action in dashboard_group._group_actions
         if getattr(args, action.dest) != action.default
     ]
+    used_review_args = [
+        action.option_strings[0]
+        for action in review_group._group_actions
+        if getattr(args, action.dest) != action.default
+    ]
 
     if args.mail and args.rca:
         parser.error("--mail and --rca are mutually exclusive")
     if args.stats and (args.mail or args.rca):
         parser.error("--stats cannot be combined with --mail or --rca")
+    if args.config and (args.mail or args.rca or args.stats):
+        parser.error("--config cannot be combined with --mail, --rca, or --stats")
+    if args.config and used_review_args:
+        parser.error(f"{', '.join(used_review_args)} may not be used with --config")
     if not args.stats and used_dashboard_args:
         parser.error(f"{', '.join(used_dashboard_args)} may only be used with --stats")
     if not args.mail and used_mail_args:
@@ -236,18 +250,19 @@ def main():
         {"-h", "--help", "-v", "--version"} & set(sys.argv[1:])
     )
     wants_dashboard = "--stats" in sys.argv[1:]
+    wants_config_editor = "--config" in sys.argv[1:]
 
     if (
         not api_key_conf["no_reprompt"]
         and not wants_help_or_version
         and not wants_dashboard
+        and not wants_config_editor
     ):
         selected_option = display_prompt_with_options(
             api_key_conf["message"], api_key_conf["options"]
         )
         if selected_option == "Yes. Don't show again":
-            api_key_conf["no_reprompt"] = True
-            update_user_config(config)
+            update_user_config(("api_key_disclaimer", "no_reprompt"), True)
         elif selected_option != "Yes":
             return
 
@@ -258,6 +273,13 @@ def main():
     # The dashboard only reads on-disk artifacts — no Docker, no API key.
     if args.stats:
         run_dashboard_mode(args)
+        return
+
+    # The config editor only reads/writes user_config.yaml — no Docker, no API key.
+    if args.config:
+        from patchwise.utils.config_tui import run_config_editor
+
+        run_config_editor()
         return
 
     check_docker_available()

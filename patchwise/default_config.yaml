@@ -26,25 +26,51 @@ ai:
     #     models:
     #       openai/Pro: "GPT-5"
     models: {}
+# Shown once before the first review, asking the user to confirm their API key
+# may be used. Suppressed permanently once "Yes. Don't show again" is chosen.
 api_key_disclaimer:
+    # Text shown in the disclaimer prompt.
     message: "PatchWise uses LiteLLM to interact with your preferred model provider (default: OpenAI). LiteLLM will automatically retrieve the API key from your environment variables if it is set based on the API URL provided to LiteLLM (default: OpenAI). Please confirm that you acknowledge that your API key may be used, if set in your environment. Select 'Yes' to proceed, 'No' to abort, and 'Yes. Don't show again' to proceed and disable this prompt."
+    # Selectable responses to the disclaimer prompt. Not user-editable in
+    # practice; changing this list changes what display_prompt_with_options()
+    # can return.
     options: ["Yes", "No", "Yes. Don't show again"]
+    # Set to true (via "Yes. Don't show again") to stop showing the disclaimer.
     no_reprompt: false
+# Mailing-list mode (--mail): mailbox credentials and reply routing/filtering.
 mail:
+    # IMAP/SMTP login address.
     email: "patchwise@qualcomm.com"
+    # IMAP/SMTP password (or app password).
     password: ""
+    # From: address used on outgoing review replies.
     from_email: "Patchwise <patchwise@qualcomm.com>"
+    # Only process mail whose sender's domain is in this list.
     accepted_sender_domains: []
+    # Only process mail addressed to one of these mailing lists.
     accepted_lists: []
+    # Mailing-list addresses that have moved; mail sent to one of these gets an
+    # automatic "please use the new list" reply instead of a review.
     deprecated_lists: {}
+    # Addresses always CC'd on review replies, regardless of send_mode.
     always_cc: []
+    # Extra addresses CC'd on review replies when send_mode is 2.
     additional_cc: []
+    # Who review replies are addressed to: 0 = always_cc only (falls back to
+    # the sender if empty); 1 = sender + always_cc; 2 = sender + original
+    # To/Cc (filtered to accepted_sender_domains) + always_cc + additional_cc.
     send_mode: 2
     imap:
+        # IMAP server hostname.
         server: "imap.gmail.com"
+        # IMAP server port.
         port: 993
+        # Whether to connect to IMAP over SSL.
         ssl: true
     smtp:
+        # SMTP server hostname.
         server: "smtp.gmail.com"
+        # SMTP server port.
         port: 465
+        # Whether to connect to SMTP over SSL.
         ssl: true
