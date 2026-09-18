@@ -29,7 +29,8 @@ usage() {
     echo ""
     echo "Arguments:"
     echo "  <agent>     Install skill and commands for this code agent"
-    echo "              Available agents: claude, codex, opencode, gemini"
+    echo "              Available agents: claude, codex, opencode, gemini,"
+    echo "                                goose, kiro-cli"
     echo "  <project>   Install skills and commands for this project"
     echo "              Available projects: iproute, kernel, systemd"
     echo ""
@@ -77,8 +78,27 @@ install_project() {
         for cmd_file in "$src_commands"/*.md; do
             if [ -f "$cmd_file" ]; then
                 local cmd_name=$(basename "$cmd_file")
-                sed "s|{{REVIEW_DIR}}|$project_dir|g" "$cmd_file" > "$COMMANDS_DIR/$cmd_name"
-                echo "  /${cmd_name%.md}"
+                if [ "${COMMANDS_AS_SKILLS:-0}" = "1" ]; then
+                    # The agent has no standalone slash-command files; install
+                    # each command as a skill (<name>/SKILL.md) so the agent
+                    # exposes it as /<name>.  Skills require frontmatter with
+                    # a name, so generate it when the source file has none.
+                    local cmd_skill_dir="$COMMANDS_DIR/${cmd_name%.md}"
+                    mkdir -p "$cmd_skill_dir"
+                    {
+                        if ! head -n 1 "$cmd_file" | grep -q '^---$'; then
+                            printf -- '---\n'
+                            printf 'name: %s\n' "${cmd_name%.md}"
+                            printf 'description: "/%s slash command from the %s review prompts; load only when invoked explicitly"\n' \
+                                "${cmd_name%.md}" "$project"
+                            printf -- '---\n\n'
+                        fi
+                        sed "s|{{REVIEW_DIR}}|$project_dir|g" "$cmd_file"
+                    } > "$cmd_skill_dir/$SKILL_FILE_NAME"
+                else
+                    sed "s|{{REVIEW_DIR}}|$project_dir|g" "$cmd_file" > "$COMMANDS_DIR/$cmd_name"
+                fi
+                echo "  ${COMMAND_PREFIX:-/}${cmd_name%.md}"
             fi
         done
     fi

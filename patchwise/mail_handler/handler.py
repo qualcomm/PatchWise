@@ -8,7 +8,6 @@ import os
 from pathlib import Path
 import re
 import tempfile
-import textwrap
 from typing import Callable, Dict, List, Optional
 import subprocess
 from git import Repo
@@ -181,32 +180,6 @@ def record_patch_series_ref(repo: Repo, index: int, sha: str) -> None:
     repo.git.update_ref(f"{PATCHWISE_SERIES_REF_PREFIX}/{index}", sha)
 
 
-def split_mail_diff_and_message(
-    raw_email: bytes,
-) -> tuple[Optional[str], Optional[str]]:
-    """Split a raw patch email into (patch, log_message) via git mailinfo."""
-    with tempfile.TemporaryDirectory() as tmp:
-        msg_path = os.path.join(tmp, "msg")
-        patch_path = os.path.join(tmp, "patch")
-        try:
-            subprocess.run(
-                ["git", "mailinfo", msg_path, patch_path],
-                input=raw_email,
-                check=True,
-                capture_output=True,
-            )
-        except subprocess.CalledProcessError as e:
-            logger.error(f"git mailinfo failed: {e.stderr.decode(errors='replace')}")
-            return None, None
-
-        with open(patch_path, "rb") as f:
-            patch = f.read().decode("utf-8", errors="replace")
-        with open(msg_path, "rb") as f:
-            log_message = f.read().decode("utf-8", errors="replace")
-
-    return (patch or None, log_message or None)
-
-
 def format_static_analysis_output(
     message: EmailMessage,
     static_reviews: Dict,
@@ -230,22 +203,18 @@ AI-generated content. Be sure to check for accuracy.
 
 """
 
-    patch, log_message = split_mail_diff_and_message(message.as_bytes())
+    # The AI review sections quote the specific commit-message and diff lines
+    # they comment on, maintainer-style, so python only contributes the header
+    # disclaimer here.
+    response = HEADER
 
-    if not patch:
-        return
-
-    quoted = f"{message['Subject']}\n"
-    if log_message:
-        quoted += f"\n{log_message.rstrip()}\n"
-
-    response = textwrap.indent(quoted, "> ", predicate=lambda _: True) + HEADER
-    if "LLMCommitAudit" in ai_reviews:
-        response += (
-            "**Commit Analysis**:" + "\n\n" + ai_reviews["LLMCommitAudit"] + "\n\n"
-        )
     if "AiCodeReview" in ai_reviews:
-        response += "**Code Review**:" + "\n\n" + ai_reviews["AiCodeReview"] + "\n\n"
+        response += ai_reviews["AiCodeReview"] + "\n\n"
+
+    # TODO: Now that AiCodeReview includes commit message feedback,
+    #       do we still need LLMCommitAudit here?
+    if "LLMCommitAudit" in ai_reviews:
+        response += ai_reviews["LLMCommitAudit"] + "\n\n"
     subject = f"Re: [Patchwise AI Review] {message['Subject']}"
     return response, subject
 
@@ -261,10 +230,23 @@ def format_ai_patch_fix_output(mbox_patch: str) -> str:
     )
 
 
+def _decode_body(msg: EmailMessage) -> str:
+    """Return the decoded text body of *msg* (empty string on failure).
+
+    Messages are parsed with ``policy=email.policy.default`` so ``get_content``
+    handles charset/transfer-encoding decoding; it can raise for multipart or
+    unknown content types, which we treat as "no usable body".
+    """
+    try:
+        return msg.get_content()
+    except (KeyError, LookupError):
+        return ""
+
+
 def get_patch_series(
     message: EmailMessage, mail_client: "MailClient"
-) -> tuple[List[EmailMessage], Optional[str]]:
-    """Return ``(series, base_commit)`` for *message*.
+) -> tuple[List[EmailMessage], Optional[str], Optional[EmailMessage]]:
+    """Return ``(series, base_commit, cover)`` for *message*.
 
     *series* is the ordered list of every patch in the mailing-list
     series (including *message* itself). For a standalone patch the list
@@ -272,14 +254,16 @@ def get_patch_series(
 
     *base_commit* is the SHA read from the cover letter's ``base-commit:``
     trailer, or ``None``.
+
+    *cover* is the cover-letter message when one is found, else ``None``.
     """
     in_reply_to = (message.get("In-Reply-To") or "").strip()
     if not in_reply_to:
-        return [message], None
+        return [message], None, None
 
     siblings = mail_client.fetch_patch_series(in_reply_to)
     if not siblings:
-        return [message], None
+        return [message], None, None
 
     cover: Optional[EmailMessage] = None
     patches: List[EmailMessage] = []
@@ -295,34 +279,35 @@ def get_patch_series(
 
     base_commit: Optional[str] = None
     if cover:
-        body = cover.get_payload(decode=True)
-        if isinstance(body, bytes):
-            body = body.decode(cover.get_content_charset() or "utf-8", errors="replace")
-        match = BASE_COMMIT_RE.search(body or "")
+        match = BASE_COMMIT_RE.search(_decode_body(cover))
         if match:
             base_commit = match.group(1)
 
-    return patches, base_commit
+    return patches, base_commit, cover
 
 
 def format_series_context(
     current: EmailMessage,
     series: List[EmailMessage],
+    cover: Optional[EmailMessage] = None,
 ) -> str:
     """Return a numbered listing of subject lines for *series*, marking
-    *current*. For a standalone patch the result is a one-line listing."""
+    *current*. For a standalone patch the result is a one-line listing.
+
+    When *cover* is given, its subject and body are prepended as a
+    ``## Cover Letter`` section so the reviewer can see the series-level
+    description authored by the submitter."""
     current_id = current.get("Message-Id")
     lines = [
         "The working tree and HEAD are at the current patch under review. Each "
         f"patch is available in git as {PATCHWISE_SERIES_REF_PREFIX}/N, where N "
         "is the patch number below.",
         "",
-        "Use git_log(path='refs/patchwise/series/N:path/to/file.c') to inspect "
-        "history for a file as of a specific patch. Use "
-        "git_show(rev='refs/patchwise/series/N') for a patch commit or "
-        "git_show(rev='refs/patchwise/series/N:path/to/file.c') for a file "
-        "at that patch. Use git_cat_file(rev='refs/patchwise/series/N', "
-        "path='path/to/file.c') to read a line range from that file.",
+        "Use bash to inspect the series with git against these refs, e.g. "
+        "`git log refs/patchwise/series/N -- path/to/file.c` for a file's "
+        "history as of a patch, `git show refs/patchwise/series/N` for a patch "
+        "commit, or `git show refs/patchwise/series/N:path/to/file.c` to read "
+        "a file at that patch.",
         "",
     ]
     for i, patch in enumerate(series, start=1):
@@ -333,7 +318,36 @@ def format_series_context(
             else ""
         )
         lines.append(f"{i}. {PATCHWISE_SERIES_REF_PREFIX}/{i} {subject}{marker}")
-    return "## Patch Series\n\n" + "\n".join(lines)
+    series_section = "## Patch Series\n\n" + "\n".join(lines)
+
+    cover_section = format_cover_letter_context(cover)
+    if cover_section:
+        return cover_section + "\n\n" + series_section
+    return series_section
+
+
+def format_cover_letter_context(cover: Optional[EmailMessage]) -> str:
+    """Return a ``## Cover Letter`` section for *cover*, or ``""`` when there
+    is no cover letter or it has no usable text."""
+    if cover is None:
+        return ""
+    subject = decode_header_value(cover.get("Subject", "")).strip()
+    body = _decode_body(cover).strip()
+    if not subject and not body:
+        return ""
+    parts = [
+        "## Cover Letter",
+        "",
+        "The submitter's series-level description follows. It applies to the "
+        "whole series, not just the current patch.",
+        "",
+    ]
+    if subject:
+        parts.append(f"Subject: {subject}")
+        parts.append("")
+    if body:
+        parts.append(body)
+    return "\n".join(parts).rstrip()
 
 
 def test_patch_from_mail(
@@ -424,8 +438,8 @@ def process_mail(
         if deprecation:
             mail_client.send_response(msg, deprecation.message, send_mode=1)
 
-        series, base_commit = get_patch_series(msg, mail_client)
-        additional_context = format_series_context(msg, series)
+        series, base_commit, cover = get_patch_series(msg, mail_client)
+        additional_context = format_series_context(msg, series, cover)
         try:
             patch_results = test_patch_from_mail(
                 msg, series, base_commit, reviews, additional_context

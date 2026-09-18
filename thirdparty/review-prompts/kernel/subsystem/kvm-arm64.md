@@ -53,10 +53,23 @@ architectural inconsistencies.
 *   **Trap Calculation:** `kvm_calculate_traps()` must be invoked after all
     feature flags and system registers are finalized, but before the first
     VCPU entry.
+*   **pKVM hyp objects exist only after first run:** pKVM creates the hyp VM
+    and hyp vCPUs at first `KVM_RUN` (`kvm_arch_vcpu_run_pid_change()` →
+    `pkvm_create_hyp_vm()`/`pkvm_create_hyp_vcpu()`), and `vcpu_load()`'s
+    `__pkvm_vcpu_load` hypercall is a silent no-op before that (its return
+    value is ignored). Any new path reachable before first run — new ioctls
+    especially — that can issue guest hypercalls (`__pkvm_host_share_guest`,
+    `__pkvm_host_mkyoung_guest`, ...) must be audited against
+    `pkvm_get_loaded_hyp_vcpu()` returning NULL in the EL2 handler, including
+    `WARN_ON`-wrapped call sites, which become userspace-reachable warnings.
 
 **REPORT as bugs:**
 *   Attempting to run a VCPU without first calling the relevant finalization
     ioctls.
+*   New pre-first-run-callable paths (ioctls, caps) that can reach pKVM guest
+    hypercalls without guaranteeing a loaded hyp vCPU, or that advertise a
+    capability whose ioctl statically fails in the current mode
+    (cf. x86 gating `KVM_CAP_PRE_FAULT_MEMORY` on `tdp_enabled`).
 *   Modifying guest feature registers (e.g., `ID_AA64*`) after the first VCPU
     has entered the `RUNNING` state.
 *   Gating "has the guest started running" with `kvm_vcpu_initialized()`
