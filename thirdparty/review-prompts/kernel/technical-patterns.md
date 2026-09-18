@@ -25,6 +25,17 @@
     - It's not enough for the API contract to be unclear, you must prove the
     bug can happen in practice.
     - Do not recommend defensive programming unless it fixes a proven bug.
+- When a commit message or comment uses a universal quantifier ("all paths",
+  "only once", "exclusively", "never", "always"), verify it by exhaustive
+  enumeration (grep for the relevant symbol and account for every hit), not
+  by sampling the sites the diff touches. Every unaccounted hit is either a
+  bug or a required message fix.
+- Code changed in response to reviewer feedback gets the same scrutiny as new
+  code. When a lore thread shows a reviewer suggested the exact change,
+  verify the suggestion's semantics independently; review suggestions are
+  frequently name-level ("there's a simpler helper for that") and silently
+  change write-intent, locking, or error behavior. Reviewer endorsement is
+  not proof of correctness.
 
 ### Error Handling
 

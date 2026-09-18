@@ -1,6 +1,6 @@
 ---
 name: check-fixes
-description: Runs orc.md review then checks if later Fixes: commits reveal missed bugs
+description: "Runs orc.md review then checks if later Fixes: commits reveal missed bugs"
 tools: Read, Write, Glob, Bash, Task, mcp__plugin_semcode_semcode__find_commit, mcp__plugin_semcode_semcode__grep_functions
 model: opus
 ---
