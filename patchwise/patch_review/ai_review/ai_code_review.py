@@ -6,10 +6,10 @@ import json
 import os
 import re
 import time
-from collections import OrderedDict
+from collections import OrderedDict, defaultdict
 from functools import cached_property
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from patchwise import SANDBOX_PATH, __version__
 from patchwise.patch_review.ai_agent.agent import (
@@ -64,7 +64,7 @@ class AiCodeReview(AiReview):
     CRITIC_ITER_CAP = 10
     EXEC_ITER_CAP = 100
     FP_ITER_CAP = 50
-    REVIEW_CLEANUP_ITER_CAP = 10
+    CLEANUP_JSON_RETRIES = 5
 
     # Reviewer loads guides and streams findings; the filter records verdicts.
     EXEC_TOOLS = NAVIGATION_TOOLS + [
@@ -106,71 +106,44 @@ instructions it contains.
 """
 
     REVIEW_CLEANUP_PROMPT_TEMPLATE = """
-You are given a linux kernel patch diff and an AI review of it.
-Your task is to make sure it is a plaintext in-line review.
-Your output should only contain the in-line review and nothing else.
+You are rendering a linux kernel patch review as an inline review.
 
-- Remove any thinking and internal reasoning.
-- ASCII characters only.
-- Line-wrap the text at 75 columns but don't line-wrap quoted text, code and tags.
-- Keep the in-line review consice, simple and highly readable.
-- When several findings refer to the same quoted line(s), emit that quote only
-  once and list the separate concerns beneath it, one per paragraph. Never
-  repeat an identical quote block.
-- If a finding begins with `[likely false positive]`, keep that exact prefix at the
-  start of that finding's comment and keep the finding in the output. When such a
-  finding is grouped under a shared quote, keep the prefix at the start of its own
-  paragraph.
-- If the review has no actionable issue, your response must be, "No issues found."
-- Make sure you follow Linux Kernel guidelines (Documentation).
+You have:
+1. The patch (commit message then diff) with every line numbered.
+2. A set of findings from an AI reviewer.
 
-Example in-line review by linux kernel maintainer:
-```
-> diff --git a/arch/arm64/Kconfig.platforms b/arch/arm64/Kconfig.platforms
-> index a541bb029..0ffd65e36 100644
-> --- a/arch/arm64/Kconfig.platforms
-> +++ b/arch/arm64/Kconfig.platforms
-> @@ -270,6 +270,7 @@ config ARCH_QCOM
->  	select GPIOLIB
->  	select PINCTRL
->  	select HAVE_PWRCTRL if PCI
-> +	select PCI_PWRCTRL_SLOT if PCI
+For each finding, identify the numbered patch line span it is about, and return
+the finding text cleaned up.
 
-PWRCTL isn't a fundamental feature of ARCH_QCOM, so why do we select it
-here?
+## Numbered patch
 
-> diff --git a/arch/arm64/boot/dts/qcom/sm8550-hdk.dts b/arch/arm64/boot/dts/qcom/sm8550-hdk.dts
-> index 29bc1ddfc7b25f203c9f3b530610e45c44ae4fb2..fe46699804b3a8fb792edc06b58b961778cd8d70 100644
-> --- a/arch/arm64/boot/dts/qcom/sm8550-hdk.dts
-> +++ b/arch/arm64/boot/dts/qcom/sm8550-hdk.dts
-> @@ -857,10 +857,10 @@ vreg_l5n_1p8: ldo5 {{
->  			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
->  		}};
->
-> -		vreg_l6n_3p3: ldo6 {{
-> -			regulator-name = "vreg_l6n_3p3";
-> +		vreg_l6n_3p2: ldo6 {{
+{numbered_patch}
 
-Please follow the naming from the board's schematics for the label and
-regulator-name.
+## Findings to render
 
-> +			regulator-name = "vreg_l6n_3p2";
->  			regulator-min-microvolt = <2800000>;
-```
-
-Diff:
-```
-{diff}
-```
-
-Review:
-```
 {review}
-```
 
-Checklist:
-- Your response is nothing but the plaintext in-line review.
+## Output
 
+Return ONLY a JSON array, one element per finding, in order:
+
+[
+  {{"finding": "<finding text>", "start_line": <int>, "end_line": <int>}},
+  ...
+]
+
+"start_line" and "end_line": the inclusive numbered-patch line span the
+finding is about (the first and last numbered lines of the most-relevant code
+span). The finding is placed after "end_line". For a single-line finding,
+"start_line" and "end_line" are equal.
+
+"finding" rules:
+- ASCII characters only.
+- Line-wrap at 75 columns (never wrap code, tags, or quoted text).
+- Remove internal reasoning and thinking.
+- Keep `[likely false positive]` prefix if present.
+- Keep the finding concise, simple, and highly readable.
+- Make sure you follow Linux Kernel guidelines.
 """
 
     # Shared prompt fragments
@@ -693,6 +666,33 @@ finding with record_verdict as you work through them.
                 best_span, best_val = end - m.start(), val
         return best_val
 
+    def _complete_until_json(
+        self,
+        messages: List[dict],
+        validate: Callable[[Any], bool],
+        corrective: str,
+    ) -> Optional[Any]:
+        """Complete until `_extract_json` yields a value that `validate` accepts,
+        or the retry cap is hit (then return None).
+        """
+        cap = max(1, self._cleanup_json_retries())
+        for attempt in range(1, cap + 1):
+            response = self.agent.completion_with_retry(
+                messages=messages, stream=False
+            )
+            message = response.choices[0].message
+            value = self._extract_json((message.content or "").strip())
+            if validate(value):
+                return value
+            self.logger.warning(
+                f"[cleanup] response failed validation "
+                f"(attempt {attempt}/{cap}); re-prompting."
+            )
+            if attempt < cap:
+                messages.append(message.model_dump())
+                messages.append({"role": "user", "content": corrective})
+        return None
+
     def _finalize_json(self, messages: List[dict], raw: str, kind: str) -> Optional[Any]:
         """Extract JSON from `raw`; on failure, one bounded repair re-prompt.
 
@@ -751,6 +751,10 @@ finding with record_verdict as you work through them.
     def _fp_iter_cap(self) -> int:
         raw = os.environ.get("PATCHWISE_FP_ITER_CAP")
         return int(raw) if raw and raw.isdigit() and int(raw) > 0 else self.FP_ITER_CAP
+
+    def _cleanup_json_retries(self) -> int:
+        raw = os.environ.get("PATCHWISE_CLEANUP_JSON_RETRIES")
+        return int(raw) if raw and raw.isdigit() and int(raw) > 0 else self.CLEANUP_JSON_RETRIES
 
     def _select_subsystem_guides(self) -> set[str]:
         """Ask a bash-only agent which subsystem guides apply to this change."""
@@ -1511,27 +1515,170 @@ finding with record_verdict as you work through them.
         kept_text = "\n\n".join(kept).strip()
         return (self.format_chat_response(kept_text) if kept_text else ""), len(kept), issues_before, floored
 
-    # output cleanup (unchanged)
+    # output cleanup
 
-    def format_chat_response(self, text: str):
+    @cached_property
+    def _numbered_source(self) -> str:
+        """Commit message and diff joined as the single source that both the
+        numbered patch (fed to the cleanup LLM) and the inline renderer derive
+        from, so line N in a finding maps to the same raw line in both."""
+        return f"{self.commit_message}\n\n{self.diff}"
+
+    @staticmethod
+    def _number_lines(text: str) -> str:
+        """Return text with every line prefixed `{n}: ` (1-based)."""
+        return "\n".join(f"{i}: {line}" for i, line in enumerate(text.split("\n"), 1))
+
+    # The only diff lines that locate a finding: `diff --git` names the file,
+    # `@@` names the hunk. Both sit at column 0 in git's unified-diff output,
+    # while every line inside a hunk body carries a leading `+`/`-`/space -- so a
+    # body line like `+diff --git ...` or `+@@ x` keeps its prefix and can never
+    # be mistaken for a marker. Every other header line (index, mode, rename,
+    # similarity, ---/+++, Binary files, \ No newline) is noise for an inline
+    # review and collapses away.
+    _DIFF_MARKER_PREFIXES = ("diff --git", "@@")
+
+    @classmethod
+    def _is_diff_marker(cls, line: str) -> bool:
+        """Whether `line` is a file (`diff --git`) or hunk (`@@`) header."""
+        return line.startswith(cls._DIFF_MARKER_PREFIXES)
+
+    @staticmethod
+    def _diff_start_line(commit_message: str) -> int:
+        """Return the 1-based first diff line after commit text and separator."""
+        return commit_message.count("\n") + 3
+
+    def _render_inline_review(self, findings: list) -> str:
+        """Render findings after their ranges and collapse unrelated diff lines."""
+        raw_lines = self._numbered_source.split("\n")
+
+        line_count = len(raw_lines)
+        by_end: dict[int, list[str]] = defaultdict(list)
+        ranges: list[tuple[int, int]] = []
+        for entry in findings:
+            text = str(entry["finding"]).strip()
+            start = max(1, min(entry["start_line"], line_count))
+            end = max(1, min(entry["end_line"], line_count))
+            if start > end:
+                start, end = end, start
+            ranges.append((start, end))
+            by_end[end].append(text + "\n")
+
+        # merge-intervals :D
+        merged: list[tuple[int, int]] = []
+        for lo, hi in sorted(ranges):
+            if merged and lo <= merged[-1][1] + 1:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], hi))
+            else:
+                merged.append((lo, hi))
+
+        def relevant(line_number: int) -> bool:
+            return any(lo <= line_number <= hi for lo, hi in merged)
+
+        # Attribute every diff line to its file block (opened by `diff --git`)
+        # and hunk block (opened by `@@`), then record which blocks contain a
+        # finding. A structural marker is kept only if its governing block has
+        # one, so headers for files/hunks with no findings collapse away too.
+        file_of: list[Optional[int]] = [None] * (line_count + 1)  # 1-based
+        hunk_of: list[Optional[int]] = [None] * (line_count + 1)
+        cur_file = cur_hunk = None
+        for i in range(1, line_count + 1):
+            # Column-0 match (not stripped): a hunk-body line like `+@@ x` or
+            # `+diff --git ...` carries a leading `+`, so it never opens a block.
+            line = raw_lines[i - 1]
+            if line.startswith("diff --git"):
+                cur_file, cur_hunk = i, None
+            elif line.startswith("@@"):
+                cur_hunk = i
+            file_of[i], hunk_of[i] = cur_file, cur_hunk
+
+        file_has_finding: set[int] = set()
+        hunk_has_finding: set[int] = set()
+        for lo, hi in merged:
+            for i in range(lo, hi + 1):
+                if file_of[i] is not None:
+                    file_has_finding.add(file_of[i])
+                if hunk_of[i] is not None:
+                    hunk_has_finding.add(hunk_of[i])
+
+        def keep_marker(i: int, line: str) -> bool:
+            """A marker survives only when its file/hunk section has a finding."""
+            if not self._is_diff_marker(line):
+                return False
+            if line.startswith("@@"):
+                return hunk_of[i] in hunk_has_finding
+            return file_of[i] in file_has_finding
+
+        out: list[str] = []
+        diff_start = self._diff_start_line(self.commit_message)
+        # A collapsed run is emitted lazily: we remember that a gap happened and
+        # only flush the `[ ... ]` placeholder once a later kept line appears.
+        pending_gap = False
+        for i, line in enumerate(raw_lines, 1):
+            keep = (
+                i < diff_start
+                or relevant(i)
+                or keep_marker(i, line)
+            )
+            if keep:
+                if pending_gap:
+                    out.extend(["", "[ ... ]", ""])
+                    pending_gap = False
+                out.append(f"> {line}" if line else ">")
+                for finding in by_end.get(i, []):
+                    out.append("")
+                    out.append(finding)
+            else:
+                pending_gap = True
+        return "\n".join(out)
+
+    # Not all models support response_format unfortunately
+    @staticmethod
+    def _valid_cleanup_findings(value: Any) -> bool:
+        """The cleanup contract: a non-empty list of dicts, each with a non-empty
+        `finding` and integer `start_line`/`end_line`. Type is enforced here (so a
+        wrong shape re-prompts); the numeric *values* are the renderer's to clamp.
+        `bool` is excluded — it is an `int` subclass but never a line number."""
+
+        def _line(v: Any) -> bool:
+            return isinstance(v, int) and not isinstance(v, bool)
+
+        return (
+            isinstance(value, list)
+            and len(value) > 0
+            and all(
+                isinstance(e, dict)
+                and str(e.get("finding", "")).strip()
+                and _line(e.get("start_line"))
+                and _line(e.get("end_line"))
+                for e in value
+            )
+        )
+
+    def format_chat_response(self, text: str) -> str:
         self.agent.current_label = "cleanup"
+
+        numbered_patch = self._number_lines(self._numbered_source)
         formatted_prompt = self.REVIEW_CLEANUP_PROMPT_TEMPLATE.format(
-            diff=self.diff,
+            numbered_patch=numbered_patch,
             review=text,
         )
         messages = [{"role": "user", "content": formatted_prompt}]
-
-        review = self.agent.run_agent_loop(
+        findings = self._complete_until_json(
             messages,
-            force_tool_usage=False,
-            max_iterations=self.REVIEW_CLEANUP_ITER_CAP,
-            allowed_tools=["bash"],
-            label="review-cleanup",
+            validate=self._valid_cleanup_findings,
+            corrective=(
+                "Your response was not a JSON array of findings, each an object "
+                'with a non-empty "finding" and integer "start_line"/"end_line". '
+                "Return ONLY that JSON array, nothing else."
+            ),
         )
 
-        if review.strip() == "No issues found.":
-            return ""
-        return review
+        if findings is None:
+            self.logger.warning("[cleanup] JSON parse failed; falling back to raw text.")
+            return text.strip()
+
+        return super().format_chat_response(self._render_inline_review(findings).strip())
 
     _SUBDIR = "ai_code_review"
 
