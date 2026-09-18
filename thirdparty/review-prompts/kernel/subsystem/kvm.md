@@ -91,6 +91,15 @@ translation usage.
 - **Update API:** All changes to memslots (flags, address ranges) MUST go
   through `kvm_set_memory_region()`. Manual modification of memslot structures
   is forbidden.
+- **Write-intent trap in hva/pfn helpers:** `gfn_to_hva()`,
+  `gfn_to_hva_many()` and `gfn_to_hva_memslot()` request *writable*
+  translations and return `KVM_HVA_ERR_RO_BAD` for valid `KVM_MEM_READONLY`
+  slots; `gfn_to_hva_memslot_prot()` and the read variants pass write=false
+  and do not. Any fault, prefetch, or emulation path performing a read access
+  must use a write=false variant, or valid read-only memslots (arm64 UEFI
+  flash, ROM regions) hard-fail with an error the run path would not produce.
+  Check every new hva/pfn resolution against the `KVM_MEM_READONLY` and
+  dirty-logging flag classes explicitly.
 
 **REPORT as bugs:**
 - Accessing memslots or calling address translation helpers (e.g.,
@@ -98,6 +107,8 @@ translation usage.
   `slots_lock`).
 - Manual bit-flipping in memslot flags (e.g., `KVM_MEM_LOG_DIRTY_PAGES`)
   outside the official update path.
+- Read-access paths resolving hva/pfn through a write-intent helper
+  (`gfn_to_hva_memslot()` et al.) where a `KVM_MEM_READONLY` slot is legal.
 
 ```c
 // WRONG: Accessing memslots without SRCU protection
@@ -124,9 +135,22 @@ invalidations to ensure it does not install a stale mapping.
     2. **Resolve:** Translate the guest address (HVA/GPA) to a physical frame
        (PFN).
     3. **Lock:** Acquire the `kvm->mmu_lock`.
-    4. **Check:** Verify `!mmu_invalidate_retry(kvm, captured_seq)`.
+    4. **Check:** Call the gating helper (x86: `is_page_fault_stale()`).
     5. **Install:** Commit the mapping to KVM's page tables.
     6. **Unlock:** Release `kvm->mmu_lock`.
+- **The gating helper checks three things, not one.**
+  `is_page_fault_stale()` returns true if the current root's shadow page is
+  obsolete, if the root has no shadow page and
+  `KVM_REQ_MMU_FREE_OBSOLETE_ROOTS` is pending, or if `fault->slot` is set and
+  `mmu_invalidate_retry_gfn()` fires. The first two are about root validity
+  and have nothing to do with mmu_notifiers. An argument that covers only the
+  third covers a third of the check.
+- **The three facts have different writers.** The mmu_notifier fact is changed
+  by `kvm_mmu_invalidate_end()`. Root obsolescence is `sp->role.invalid` or,
+  for non-TDP-MMU pages, a `kvm->arch.mmu_valid_gen` mismatch; those are
+  changed by `__kvm_mmu_prepare_zap_page()`, `kvm_tdp_mmu_invalidate_roots()`,
+  and the generation flip in `kvm_mmu_zap_all_fast()`. Establish the three
+  separately — an argument that settles one settles nothing about the others.
 - **Generation Count Invariant:** The retry check combines the global
   `mmu_invalidate_seq` with the in-progress gfn range; neither alone is
   sufficient. The sequence counter is the primary generation-safety check; the
@@ -145,6 +169,57 @@ invalidations to ensure it does not install a stale mapping.
   lock (violates sequence-to-resolution-to-installation ordering).
 - Dropping `kvm->mmu_lock` between the retry check and the installation of the
   page table entry.
+
+## Shadow Page `role.invalid` (x86 MMU)
+
+`sp->role.invalid` is a state flag on a `struct kvm_mmu_page`, not a
+lifetime flag. A page can be invalid and still allocated, still linked from
+a parent SPTE, still walked by the guest, and still referenced as a vCPU's
+root. Reasoning about whether it is *freed* answers a different question.
+
+> An invalid shadow page reachable as an active page violates an invariant
+> the zap path asserts on, and is skipped by the bookkeeping that is
+> supposed to clean it up.
+
+- **The invariant:** an invalid page must never be on
+  `kvm->arch.active_mmu_pages`. `kvm_zap_obsolete_pages()` asserts it
+  (`if (WARN_ON_ONCE(sp->role.invalid)) continue;`) and, having warned,
+  *skips* the page instead of zapping it.
+- **`is_obsolete_sp()` returns true on `role.invalid` alone**, before the
+  `mmu_valid_gen` comparison. So an invalid page is obsolete even when it
+  carries the current generation.
+- **That breaks the FIFO argument** at the top of `kvm_zap_obsolete_pages()`
+  ("No obsolete valid page exists before a newly created page since
+  active_mmu_pages is a FIFO list"). That reasoning holds only while
+  obsolete means old-generation. A page created *already invalid* is
+  obsolete at the head of the list.
+- **Invalid pages are invisible to the hash walkers.** `for_each_valid_sp()`
+  skips anything `is_obsolete_sp()`, so `kvm_mmu_find_shadow_page()` will
+  not reuse an invalid page and `for_each_gfn_valid_sp_with_gptes()` will
+  not see it — while its parent SPTE still points at it.
+- **Children inherit it.** `kvm_mmu_child_role()` copies the parent role and
+  overrides only `level`, `access`, `direct`, `passthrough` and `quadrant`.
+  A page linked under an invalid parent is created invalid, and
+  `kvm_mmu_alloc_shadow_page()` puts it straight onto `active_mmu_pages`.
+- **Accounting is asymmetric across the flag.**
+  `kvm_mmu_alloc_shadow_page()` calls `account_shadowed()` for any
+  `sp_has_gptes()` page, but `__kvm_mmu_prepare_zap_page()` calls
+  `unaccount_shadowed()` only when `!sp->role.invalid`. A page created
+  invalid is accounted once and never unaccounted.
+- **Invalidating an in-use root does not free it.** In
+  `__kvm_mmu_prepare_zap_page()`, the `sp->root_count != 0` arm does
+  `list_del()` and defers freeing until the count drops; only the
+  `!root_count` arm reaches `invalid_list`, and `kvm_mmu_commit_zap_page()`
+  asserts that with `WARN_ON_ONCE(!sp->role.invalid || sp->root_count)`.
+  `sp->role.invalid = 1` runs on both arms.
+
+**REPORT as bugs:**
+- A shadow page that can be created, or left, with `role.invalid` set while
+  it is on `active_mmu_pages` or reachable from a live parent SPTE.
+- Linking a new child under a parent that may already be invalid, since the
+  child inherits the flag.
+- Treating "the page is not freed" as evidence that invalidating it is
+  harmless.
 
 ## VCPU Lifecycle and Preemption
 

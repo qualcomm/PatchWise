@@ -14,6 +14,13 @@ any summary, comments or questions you add should be wrapped at 78 characters
   Claude, AI review output, GitHub Actions CI run summaries, or any other bot
   as evidence for an issue.
 
+  Note: ``Assisted-by:`` tags in commit messages are NOT bot review evidence.
+  They are documented kernel metadata per
+  Documentation/process/coding-assistants.rst and should never be flagged as
+  issues. The ban above applies to citing AI/bot tools as *independent
+  corroboration* for a finding (\"Claude also found this bug\"), not to the
+  ``Assisted-by:`` trailer itself.
+
 - If an issue depends on, overlaps, or repeats automated review feedback, omit
   the entire issue. Do not rewrite "Sashiko found this" into neutral wording.
   Only report issues supported independently by source code, commit messages,
