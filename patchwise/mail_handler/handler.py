@@ -8,7 +8,6 @@ import os
 from pathlib import Path
 import re
 import tempfile
-import textwrap
 from typing import Callable, Dict, List, Optional
 import subprocess
 from git import Repo
@@ -181,32 +180,6 @@ def record_patch_series_ref(repo: Repo, index: int, sha: str) -> None:
     repo.git.update_ref(f"{PATCHWISE_SERIES_REF_PREFIX}/{index}", sha)
 
 
-def split_mail_diff_and_message(
-    raw_email: bytes,
-) -> tuple[Optional[str], Optional[str]]:
-    """Split a raw patch email into (patch, log_message) via git mailinfo."""
-    with tempfile.TemporaryDirectory() as tmp:
-        msg_path = os.path.join(tmp, "msg")
-        patch_path = os.path.join(tmp, "patch")
-        try:
-            subprocess.run(
-                ["git", "mailinfo", msg_path, patch_path],
-                input=raw_email,
-                check=True,
-                capture_output=True,
-            )
-        except subprocess.CalledProcessError as e:
-            logger.error(f"git mailinfo failed: {e.stderr.decode(errors='replace')}")
-            return None, None
-
-        with open(patch_path, "rb") as f:
-            patch = f.read().decode("utf-8", errors="replace")
-        with open(msg_path, "rb") as f:
-            log_message = f.read().decode("utf-8", errors="replace")
-
-    return (patch or None, log_message or None)
-
-
 def format_static_analysis_output(
     message: EmailMessage,
     static_reviews: Dict,
@@ -230,20 +203,18 @@ AI-generated content. Be sure to check for accuracy.
 
 """
 
-    patch, log_message = split_mail_diff_and_message(message.as_bytes())
+    # The AI review sections quote the specific commit-message and diff lines
+    # they comment on, maintainer-style, so python only contributes the header
+    # disclaimer here.
+    response = HEADER
 
-    if not patch:
-        return
-
-    quoted = f"{message['Subject']}\n"
-    if log_message:
-        quoted += f"\n{log_message.rstrip()}\n"
-
-    response = textwrap.indent(quoted, "> ", predicate=lambda _: True) + HEADER
-    if "LLMCommitAudit" in ai_reviews:
-        response += ai_reviews["LLMCommitAudit"] + "\n\n"
     if "AiCodeReview" in ai_reviews:
         response += ai_reviews["AiCodeReview"] + "\n\n"
+
+    # TODO: Now that AiCodeReview includes commit message feedback,
+    #       do we still need LLMCommitAudit here?
+    if "LLMCommitAudit" in ai_reviews:
+        response += ai_reviews["LLMCommitAudit"] + "\n\n"
     subject = f"Re: [Patchwise AI Review] {message['Subject']}"
     return response, subject
 
