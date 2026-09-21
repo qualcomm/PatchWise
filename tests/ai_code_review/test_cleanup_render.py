@@ -207,8 +207,11 @@ def test_render_keeps_commit_message_and_markers_collapses_rest():
     # The finding is rendered after its end_line anchor.
     assert "> +		return ret;" in out
     assert "buf leaks: add kfree(buf) before return ret." in out
-    # Unrelated regions collapse to a single placeholder each.
-    assert "[ ... ]" in out
+    # Short unrelated runs (<= _MAX_COLLAPSE_GAP lines) are cheap to show, so
+    # they render verbatim rather than collapsing to a placeholder. In this
+    # small diff no gap is long enough to be hidden.
+    assert "[ ... ]" not in out
+    assert ">  	int ret;" in out
     # The second hunk has no finding, so its header collapses too (not just its
     # body): markers without findings do not survive.
     assert "> @@ -50,3 +53,4 @@ static void baz(void)" not in out
@@ -352,3 +355,64 @@ def test_render_shared_end_line_lists_findings_in_order():
         ]
     )
     assert out.index("FIRST") < out.index("SECOND")
+
+
+def _diff_with_gap(n_gap: int) -> str:
+    """A single-hunk diff with a finding anchor, then `n_gap` unrelated context
+    lines, then a final kept marker-free line. The gap sits between two kept
+    regions so it is an interior run (eligible for collapse), not a discarded
+    tail."""
+    body = [f" 	filler_{k}();" for k in range(n_gap)]
+    return "\n".join(
+        [
+            "diff --git a/g.c b/g.c",
+            "index 111..222 100644",
+            "--- a/g.c",
+            "+++ b/g.c",
+            f"@@ -1,{n_gap + 2} +1,{n_gap + 3} @@ void g(void)",
+            "+	target();",
+            *body,
+            "+	tail_target();",
+        ]
+    )
+
+
+def test_render_collapses_gap_longer_than_threshold():
+    # An interior run of 11 lines (> _MAX_COLLAPSE_GAP) sits between two findings
+    # and must collapse to a single placeholder.
+    cm = "s\n\nb"
+    diff = _diff_with_gap(11)
+    review = _review(cm, diff)
+    lookup = _numbered_lookup(review)
+    lo = lookup["+	target();"]
+    hi = lookup["+	tail_target();"]
+    out = review._render_inline_review(
+        [
+            {"finding": "TOP", "start_line": lo, "end_line": lo},
+            {"finding": "BOT", "start_line": hi, "end_line": hi},
+        ]
+    )
+    assert "[ ... ]" in out
+    # None of the collapsed filler lines survive.
+    assert ">  	filler_0();" not in out
+    assert ">  	filler_10();" not in out
+
+
+def test_render_keeps_gap_at_threshold_verbatim():
+    # An interior run of exactly _MAX_COLLAPSE_GAP (10) lines is short enough to
+    # render verbatim — no placeholder, every filler line kept.
+    cm = "s\n\nb"
+    diff = _diff_with_gap(10)
+    review = _review(cm, diff)
+    lookup = _numbered_lookup(review)
+    lo = lookup["+	target();"]
+    hi = lookup["+	tail_target();"]
+    out = review._render_inline_review(
+        [
+            {"finding": "TOP", "start_line": lo, "end_line": lo},
+            {"finding": "BOT", "start_line": hi, "end_line": hi},
+        ]
+    )
+    assert "[ ... ]" not in out
+    assert ">  	filler_0();" in out
+    assert ">  	filler_9();" in out

@@ -1537,6 +1537,9 @@ finding with record_verdict as you work through them.
     # similarity, ---/+++, Binary files, \ No newline) is noise for an inline
     # review and collapses away.
     _DIFF_MARKER_PREFIXES = ("diff --git", "@@")
+    # A collapsed run must exceed this many lines to be worth a `[ ... ]`
+    # placeholder; shorter gaps are cleaner to render verbatim.
+    _MAX_COLLAPSE_GAP = 10
 
     @classmethod
     def _is_diff_marker(cls, line: str) -> bool:
@@ -1611,9 +1614,21 @@ finding with record_verdict as you work through them.
 
         out: list[str] = []
         diff_start = self._diff_start_line(self.commit_message)
-        # A collapsed run is emitted lazily: we remember that a gap happened and
-        # only flush the `[ ... ]` placeholder once a later kept line appears.
-        pending_gap = False
+
+        def quote(line: str) -> str:
+            return f"> {line}" if line else ">"
+
+        # Skipped lines are buffered rather than dropped on sight: a run only
+        # earns a `[ ... ]` placeholder once it is long enough to be worth hiding.
+        gap: list[str] = []
+
+        def flush_gap() -> None:
+            if len(gap) > self._MAX_COLLAPSE_GAP:
+                out.extend(["", "[ ... ]", ""])
+            else:
+                out.extend(quote(g) for g in gap)
+            gap.clear()
+
         for i, line in enumerate(raw_lines, 1):
             keep = (
                 i < diff_start
@@ -1621,15 +1636,14 @@ finding with record_verdict as you work through them.
                 or keep_marker(i, line)
             )
             if keep:
-                if pending_gap:
-                    out.extend(["", "[ ... ]", ""])
-                    pending_gap = False
-                out.append(f"> {line}" if line else ">")
+                flush_gap()
+                out.append(quote(line))
                 for finding in by_end.get(i, []):
                     out.append("")
                     out.append(finding)
             else:
-                pending_gap = True
+                gap.append(line)
+        # A trailing run is discarded outright: nothing kept follows it
         return "\n".join(out)
 
     # Not all models support response_format unfortunately
