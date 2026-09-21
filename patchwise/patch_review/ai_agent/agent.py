@@ -342,55 +342,76 @@ class Agent:
                 completion_kwargs["tool_choice"] = "auto"
 
             # Dispatch each tool call and append results
-            for tool_call in msg.tool_calls:
-                name = tool_call.function.name
-                try:
-                    args = json.loads(tool_call.function.arguments)
-                    self.logger.debug(f"Tool call: {name}({args})")
-                    result = self.dispatch_tool(name, args)
-                    self.logger.debug(f"Tool result: {name} -> {result}")
-                except json.JSONDecodeError as e:
-                    self.logger.error(f"Error parsing tool args for '{name}': {e}")
-                    result = {
-                        "ok": False,
-                        "error": f"Invalid JSON arguments `{args}` for tool '{name}'",
-                    }
-                except Exception as e:
-                    self.logger.error(f"Error executing tool '{name}': {e}")
-                    result = {
-                        "ok": False,
-                        "error": f"Internal error executing tool '{name}({args})'",
-                    }
+            self._dispatch_tool_calls(msg.tool_calls, messages)
 
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": tool_call.id,
-                        "name": name,
-                        "content": json.dumps(result),
-                    }
-                )
-
-        # Max iterations (or budget) reached: force a final response by disallowing tool calls
+        # Max iterations (or budget) reached. Allow the exec and fp-filter with
+        # recording tools only.
         self.logger.warning(
-            f"Agent reached max iterations ({max_iters}) or budget. Forcing final response without tools."
+            f"Agent reached max iterations ({max_iters}) or budget. Forcing final response."
         )
+
+        flush_tool = None
         if self.current_label.startswith("exec:"):
             self.exec_iter_cap_hit = True
+            flush_tool = "record_finding"
+        elif self.current_label.startswith("fp-filter"):
+            flush_tool = "record_verdict"
 
-        completion_kwargs["tool_choice"] = "none"
+        if flush_tool and use_tools:
+            completion_kwargs["tools"] = self.get_tools([flush_tool])
+            completion_kwargs["tool_choice"] = "auto"
+            final_prompt = (
+                "Maximum tool iterations reached. If you confirmed a result you "
+                f"have not yet recorded, call `{flush_tool}` now to persist it. "
+                "No further investigation is allowed."
+            )
+        else:
+            completion_kwargs["tool_choice"] = "none"
+            completion_kwargs.pop("tools", None)
+            final_prompt = (
+                "Maximum tool iterations reached. Please provide your final "
+                "response based on the available information."
+            )
 
-        messages.append(
-            {
-                "role": "user",
-                "content": "Maximum tool iterations reached. Please provide your final response based on the available information.",
-            }
-        )
-
+        messages.append({"role": "user", "content": final_prompt})
         response = self.completion_with_retry(**completion_kwargs)
-        content = response.choices[0].message.content or ""
+        msg = response.choices[0].message
+        if msg.tool_calls:
+            self._dispatch_tool_calls(msg.tool_calls, messages)
+        content = msg.content or ""
         self._log_final_response(response, content)
         return content
+
+    def _dispatch_tool_calls(self, tool_calls: list, messages: list[dict]) -> None:
+        """Dispatch each requested tool call and append its result to messages."""
+        for tool_call in tool_calls:
+            name = tool_call.function.name
+            try:
+                args = json.loads(tool_call.function.arguments)
+                self.logger.debug(f"Tool call: {name}({args})")
+                result = self.dispatch_tool(name, args)
+                self.logger.debug(f"Tool result: {name} -> {result}")
+            except json.JSONDecodeError as e:
+                self.logger.error(f"Error parsing tool args for '{name}': {e}")
+                result = {
+                    "ok": False,
+                    "error": f"Invalid JSON arguments `{args}` for tool '{name}'",
+                }
+            except Exception as e:
+                self.logger.error(f"Error executing tool '{name}': {e}")
+                result = {
+                    "ok": False,
+                    "error": f"Internal error executing tool '{name}({args})'",
+                }
+
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "name": name,
+                    "content": json.dumps(result),
+                }
+            )
 
     def _kernel_rel(self, path_or_uri: str) -> str:
         """Normalize any path/URI to a kernel-relative POSIX string."""
