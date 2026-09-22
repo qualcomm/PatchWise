@@ -72,8 +72,7 @@ class AiCodeReview(AiReview):
     ]
     FP_FILTER_TOOLS = NAVIGATION_TOOLS + ["get_subsystem_review_guide", "record_verdict"]
 
-    PROMPT_TEMPLATE = """
-# Patch under review
+    PATCH_CONTEXT_TEMPLATE = """# Patch under review
 
 ## Commit text
 
@@ -84,12 +83,10 @@ class AiCodeReview(AiReview):
 ```diff
 {diff}
 ```
-
-{additional_context}
 """
 
     EXECUTION_DIRECTIVE = (
-        "Review the following patch, recording each issue you find as you confirm it.\n\n"
+        "Review the patch shown above, recording each issue you find as you confirm it.\n\n"
     )
 
     ADDITIONAL_CONTEXT_TEMPLATE = """
@@ -394,16 +391,6 @@ kept.
 Critique this review work-list against the patch. Report coverage gaps and
 scoping problems for the planner to fix — do not rewrite the list yourself.
 
-## Commit text
-
-{commit_text}
-
-## Patch Diff
-
-```diff
-{diff}
-```
-
 ## Work-list to critique
 
 ```json
@@ -450,12 +437,6 @@ sharper list is better than a longer duplicative one.
 False-positive-filter the findings below for this patch. Record one verdict per
 finding with record_verdict as you work through them.
 
-## Patch Diff
-
-```diff
-{diff}
-```
-
 ## Findings to judge
 
 {findings}
@@ -485,32 +466,39 @@ finding with record_verdict as you work through them.
     def docs_kernel_path(self) -> Path:
         return self.docker_manager.kernel_dir / self.agent._docs_subdir
 
+    def _touches_devicetree(self) -> bool:
+        """True when the change touches DT sources or bindings."""
+        for path in self.commit.stats.files:
+            p = str(path).lower()
+            if p.endswith((".dts", ".dtsi")) or "devicetree/bindings" in p:
+                return True
+        return False
+
     def get_kernel_coding_style(self) -> str:
-        """Load kernel coding style guidelines from documentation."""
-        return self._load_prompt_bundle(
-            [
-                {
-                    "name": "Kernel Coding Style Guidelines",
-                    "path": str(
-                        self.docs_kernel_path / "Documentation/process/coding-style.rst"
-                    ),
-                },
+        """Load coding-style guides relevant to this change.
+
+        Everything gets the kernel coding style; DT patches also get the
+        devicetree coding style.
+        """
+        docs = [
+            {
+                "name": "Kernel Coding Style Guidelines",
+                "path": str(
+                    self.docs_kernel_path / "Documentation/process/coding-style.rst"
+                ),
+            },
+        ]
+        if self._touches_devicetree():
+            docs.append(
                 {
                     "name": "Devicetree Coding Style Guidelines",
                     "path": str(
                         self.docs_kernel_path
                         / "Documentation/devicetree/bindings/dts-coding-style.rst"
                     ),
-                },
-                {
-                    "name": "Kernel Rust Coding Style Guidelines",
-                    "path": str(
-                        self.docs_kernel_path / "Documentation/rust/coding-guidelines.rst"
-                    ),
-                },
-            ],
-            from_docker_container=True,
-        )
+                }
+            )
+        return self._load_prompt_bundle(docs, from_docker_container=True)
 
     def get_submitting_patches(self) -> str:
         """Load the kernel patch-submission conventions (commit message, tags)."""
@@ -535,7 +523,7 @@ finding with record_verdict as you work through them.
                     "name": "Kernel Technical Patterns",
                     "path": KERNEL_REVIEW_PROMPTS_PATH / "technical-patterns.md",
                 },
-            ]
+            ],
         )
 
     def get_false_positive_guide(self) -> str:
@@ -546,7 +534,7 @@ finding with record_verdict as you work through them.
                     "name": "False Positive Guide",
                     "path": KERNEL_REVIEW_PROMPTS_PATH / "false-positive-guide.md",
                 },
-            ]
+            ],
         )
 
     def get_subsystem_index(self) -> str:
@@ -565,6 +553,18 @@ finding with record_verdict as you work through them.
     def _date_header(self) -> str:
         return f"\nDate: {datetime.date.today().isoformat()}\n"
 
+    def _patch_context(self) -> str:
+        """Commit message + diff, byte-identical across phases.
+
+        Leads every phase's system prompt so the patch under review is a shared
+        prefix that caches across planner/critic/exec/fp-filter (and every exec
+        unit) instead of being re-sent uncached in each phase's user turn.
+        """
+        return self.PATCH_CONTEXT_TEMPLATE.format(
+            commit_text=self.commit_message,
+            diff=self.diff,
+        )
+
     def _planner_system_prompt(self) -> str:
         # The planner only divides the work; it gets no taxonomy, no subsystem
         # index, and no coding-style/patch docs — those would prime it toward a
@@ -574,6 +574,7 @@ finding with record_verdict as you work through them.
         # goal.
         return (
             self._date_header()
+            + self._patch_context()
             + self.PLANNER_INSTRUCTIONS
             + self.PLANNER_OUTPUT_BLOCK
         )
@@ -588,6 +589,7 @@ finding with record_verdict as you work through them.
         # dimension the change warrants is covered.
         return (
             self._date_header()
+            + self._patch_context()
             + self.CRITIC_INSTRUCTIONS
             + self.get_technical_patterns()
             + self.CRITIC_INDEX_HEADER
@@ -611,22 +613,24 @@ finding with record_verdict as you work through them.
         )
         return (
             self._date_header()
-            + self.EXECUTION_INSTRUCTIONS
-            + assignment
-            + self.EXECUTION_METHOD_BLOCK
+            + self._patch_context()
             + self.NAV_TOOLS_BLOCK
+            + self.get_kernel_coding_style()
             + self.get_technical_patterns()
             + self.SUBSYSTEM_INDEX_BLOCK
             + self.get_subsystem_index()
-            + self.get_kernel_coding_style()
+            + self.EXECUTION_INSTRUCTIONS
+            + self.EXECUTION_METHOD_BLOCK
+            + assignment
         )
 
     def _fp_filter_system_prompt(self) -> str:
         return (
             self._date_header()
+            + self._patch_context()
+            + self.NAV_TOOLS_BLOCK
             + self.FP_FILTER_INSTRUCTIONS
             + self.get_false_positive_guide()
-            + self.NAV_TOOLS_BLOCK
         )
 
     # lenient JSON parsing
@@ -750,7 +754,8 @@ finding with record_verdict as you work through them.
             {
                 "role": "system",
                 "content": (
-                    "Select the subsystem guides with a reverse search. Check path "
+                    self._date_header()
+                    + "Select the subsystem guides with a reverse search. Check path "
                     "triggers against the changed paths, then search the changed "
                     "files for the trigger regexes from every remaining row. Cover "
                     "every remaining subsystem row with its specific trigger "
@@ -980,8 +985,6 @@ finding with record_verdict as you work through them.
                     "role": "user",
                     "content": self._render_loaded_refs(preloaded_guides)
                     + self.CRITIC_USER_TEMPLATE.format(
-                        commit_text=commit_text,
-                        diff=self.diff,
                         plan=json.dumps(tasks, indent=2),
                     )
                     + self._diff_digest_block(),
@@ -1318,9 +1321,7 @@ finding with record_verdict as you work through them.
         # Issues found before filtering = the '### '-headed finding blocks the
         # exec phase streamed to findings.md.
         issues_before = findings_text.count("\n### ") + 1
-        fp_user = self.FP_FILTER_USER_TEMPLATE.format(
-            diff=self.diff, findings=findings_text
-        )
+        fp_user = self.FP_FILTER_USER_TEMPLATE.format(findings=findings_text)
         fp_messages = [
             {"role": "system", "content": self._fp_filter_system_prompt()},
             {"role": "user", "content": fp_user},
@@ -1603,11 +1604,7 @@ finding with record_verdict as you work through them.
             + repo_project_note(str(self.docker_manager.repo_path))
             + ctx_block
         )
-        shared_user = self.PROMPT_TEMPLATE.format(
-            diff=self.diff,
-            commit_text=self.commit_message,
-            additional_context=additional_context,
-        )
+        shared_user = additional_context
         self._dump("prompt.md", shared_user)
 
         events.emit(
