@@ -69,7 +69,6 @@ class AiCodeReview(AiReview):
     # Reviewer loads guides and streams findings; the filter records verdicts.
     EXEC_TOOLS = NAVIGATION_TOOLS + [
         "get_subsystem_review_guide", "record_finding",
-        "task_add", "task_complete", "task_list",
     ]
     FP_FILTER_TOOLS = NAVIGATION_TOOLS + ["get_subsystem_review_guide", "record_verdict"]
 
@@ -341,19 +340,6 @@ finding)` as you confirm it. Record findings as you go rather than saving them a
 for a final message — a recorded finding is preserved even if the review is cut
 short, and lets you move on to the next dimension without carrying it. Recording a
 finding does not mean you stop; work through every dimension in your assignment.
-
-## Tracking your work with the task checklist
-
-Use `task_add(id, description)` and `task_complete(id, result, note)` to track
-every item of work you plan to do and what you actually finish. Add one task
-for each analysis dimension at the start so every dimension is on the
-checklist, and add new tasks whenever a fresh sub-question or follow-up
-surfaces — the checklist is not restricted to the initial plan. Call
-`task_complete` the moment you finish a task. Call `task_list` whenever you
-want to see what is still open — before you stop, or any time the transcript
-has grown long enough that you have lost track. Every task_add must
-eventually be matched by a task_complete; leaving a task open means the work
-is incomplete.
 """
 
     # Phase 3 (FALSE-POSITIVE FILTER) prompt
@@ -1193,10 +1179,6 @@ finding with record_verdict as you work through them.
             "source": "merged",
         }
 
-    # Maximum times to resume the reviewer when its task checklist still has
-    # incomplete entries. Keep small - each resume replays the full transcript.
-    EXEC_INCOMPLETE_RESUMES = 2
-
     def _run_unit(
         self, idx: int, n: int, task: Dict[str, Any], shared_user: str
     ) -> Tuple[int, Dict[str, Any], str]:
@@ -1204,12 +1186,10 @@ finding with record_verdict as you work through them.
         tid = task.get("id", f"t{idx}")
         self.logger.info(f"[exec] unit {idx}/{n} ({tid}) start")
         # The reviewer streams findings here via record_finding (keyed by the
-        # exec:<tid> label). Reset findings and the task checklist so a re-run
-        # in the same sandbox starts clean.
+        # exec:<tid> label). Reset findings so a re-run in the same sandbox
+        # starts clean.
         findings_path = self.agent.findings_path_for(f"exec:{tid}")
         findings_path.unlink(missing_ok=True)
-        tasks_path = self.agent.tasks_path_for(f"exec:{tid}")
-        tasks_path.unlink(missing_ok=True)
         exec_messages = [
             {"role": "system", "content": self._execution_system_prompt(task)},
             {"role": "user", "content": self.EXECUTION_DIRECTIVE + shared_user},
@@ -1221,55 +1201,6 @@ finding with record_verdict as you work through them.
             allowed_tools=self.EXEC_TOOLS,
             label=f"exec:{tid}",
         )
-        # If any task_add is still open, resume the same conversation asking
-        # the reviewer to finish them. This is a targeted second chance, not a
-        # rerun — the transcript (and its tool calls) is preserved.
-        added_total, completed_total = self._task_counts(tasks_path)
-        resume_stats = {
-            "unit": tid,
-            "tasks_added": added_total,
-            "tasks_completed_before_resume": completed_total,
-            "resume_rounds": 0,
-            "open_before_each_resume": [],
-            "still_open_at_end": [],
-        }
-        for attempt in range(1, self.EXEC_INCOMPLETE_RESUMES + 1):
-            open_ids = self._incomplete_task_ids(tasks_path)
-            if not open_ids:
-                break
-            resume_stats["resume_rounds"] = attempt
-            resume_stats["open_before_each_resume"].append(list(open_ids))
-            self.logger.info(
-                f"[exec] unit {idx}/{n} ({tid}) resume {attempt}/"
-                f"{self.EXEC_INCOMPLETE_RESUMES}: "
-                f"{len(open_ids)} incomplete task(s): {open_ids}"
-            )
-            events.emit(
-                events.TASK, label=f"exec:{tid}", action="resume",
-                round=attempt, cap=self.EXEC_INCOMPLETE_RESUMES,
-                open_ids=list(open_ids),
-            )
-            exec_messages.append({
-                "role": "user",
-                "content": self._incomplete_tasks_prompt(open_ids),
-            })
-            result = self.agent.run_agent_loop(
-                exec_messages,
-                force_tool_usage=True,
-                max_iterations=self._exec_iter_cap(),
-                allowed_tools=self.EXEC_TOOLS,
-                label=f"exec:{tid}",
-            )
-        still_open = self._incomplete_task_ids(tasks_path)
-        resume_stats["still_open_at_end"] = list(still_open)
-        _, completed_after = self._task_counts(tasks_path)
-        resume_stats["tasks_completed_after_resume"] = completed_after
-        if still_open:
-            self.logger.warning(
-                f"[exec] unit {idx}/{n} ({tid}) finished with "
-                f"{len(still_open)} task(s) still incomplete: {still_open}"
-            )
-        self._task_resume_log.append(resume_stats)
         result = (result or "").strip()
         # Prefer the findings the reviewer streamed to disk as it worked; fall back
         # to the returned text only if it recorded nothing via record_finding.
@@ -1281,69 +1212,6 @@ finding with record_verdict as you work through them.
             f"({len(recorded)} chars recorded, {len(result)} returned)."
         )
         return idx, task, text
-
-    @staticmethod
-    def _incomplete_task_ids(tasks_path: Path) -> List[str]:
-        """Read the per-phase tasks JSONL and return the ids of every task_add
-        without a matching task_complete, preserving add-order."""
-        if not tasks_path.exists():
-            return []
-        added: OrderedDict[str, None] = OrderedDict()
-        completed: set = set()
-        for line in tasks_path.read_text().splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rec = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            tid = rec.get("id")
-            if not tid:
-                continue
-            ev = rec.get("event")
-            if ev == "add":
-                added.setdefault(tid, None)
-            elif ev == "complete":
-                completed.add(tid)
-        return [tid for tid in added if tid not in completed]
-
-    @staticmethod
-    def _task_counts(tasks_path: Path) -> Tuple[int, int]:
-        """Return (unique adds, unique completes) parsed from the tasks JSONL."""
-        if not tasks_path.exists():
-            return 0, 0
-        adds: set = set()
-        completes: set = set()
-        for line in tasks_path.read_text().splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rec = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            tid = rec.get("id")
-            if not tid:
-                continue
-            if rec.get("event") == "add":
-                adds.add(tid)
-            elif rec.get("event") == "complete":
-                completes.add(tid)
-        return len(adds), len(completes)
-
-    @staticmethod
-    def _incomplete_tasks_prompt(open_ids: List[str]) -> str:
-        listing = "\n".join(f"- {tid}" for tid in open_ids)
-        return (
-            "Your checklist still has open tasks:\n\n"
-            f"{listing}\n\n"
-            "Finish each one now. For every open task, do the work to the same "
-            "depth as the completed ones and then call `task_complete(id, "
-            "result, note)`. If you are unsure what a task was about, call "
-            "`task_list` to see its description. Every open task must end "
-            "with a task_complete call before you stop."
-        )
 
     def _execution_phase(
         self, tasks: List[Dict[str, Any]], shared_user: str
@@ -1723,9 +1591,6 @@ finding with record_verdict as you work through them.
     def run(self) -> str:
         """Execute the multi-phase AI code review (plan -> execution -> filter)."""
         t_start = time.monotonic()
-        # Per-unit resume telemetry (populated by _run_unit); consumed below
-        # when appending the observability record.
-        self._task_resume_log: List[Dict[str, Any]] = []
         ctx_block = (
             self.ADDITIONAL_CONTEXT_TEMPLATE.format(
                 additional_context=sanitize_additional_context(self.additional_context)
@@ -1794,31 +1659,6 @@ finding with record_verdict as you work through them.
         final, kept_blocks, issues_before_filter, likely_fps = self._fp_filter_phase(findings)
 
         total_time = time.monotonic() - t_start
-        # Aggregate the incomplete-task resume telemetry captured in _run_unit.
-        task_resume_summary = {
-            "resume_cap": self.EXEC_INCOMPLETE_RESUMES,
-            "units": len(self._task_resume_log),
-            "units_triggering_resume": sum(
-                1 for u in self._task_resume_log if u["resume_rounds"] > 0
-            ),
-            "total_resume_rounds": sum(
-                u["resume_rounds"] for u in self._task_resume_log
-            ),
-            "units_with_still_open_tasks": sum(
-                1 for u in self._task_resume_log if u["still_open_at_end"]
-            ),
-            "total_tasks_added": sum(
-                u["tasks_added"] for u in self._task_resume_log
-            ),
-            "total_tasks_completed": sum(
-                u.get("tasks_completed_after_resume", 0)
-                for u in self._task_resume_log
-            ),
-            "total_tasks_still_open": sum(
-                len(u["still_open_at_end"]) for u in self._task_resume_log
-            ),
-            "per_unit": self._task_resume_log,
-        }
         observability = {
             "patchwise_version": __version__,
             "model": self.agent.model,
@@ -1841,22 +1681,12 @@ finding with record_verdict as you work through them.
             "total_time": round(total_time, 2),
             "time_waiting_for_ai_response": round(self.agent.time_waiting_for_ai_response, 2),
             "api_retries": self.agent.api_retries,
-            "task_checklist": task_resume_summary,
         }
         self._append_observability(observability)
         self.logger.info(
             f"[review] tasks={len(tasks)} issues_before={issues_before_filter} "
             f"issues_kept={kept_blocks} likely_fps={likely_fps}; "
             f"tokens_used={self.agent.tokens_used}."
-        )
-        trs = task_resume_summary
-        self.logger.info(
-            f"[review] task-checklist: added={trs['total_tasks_added']} "
-            f"completed={trs['total_tasks_completed']} "
-            f"still_open={trs['total_tasks_still_open']} "
-            f"resume_rounds={trs['total_resume_rounds']}/"
-            f"{trs['resume_cap']} "
-            f"(units_triggered={trs['units_triggering_resume']}/{trs['units']})."
         )
         events.emit(events.RUN_DONE, summary={
             "units": len(tasks), "with_findings": len(findings),
