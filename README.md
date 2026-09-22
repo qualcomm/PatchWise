@@ -84,6 +84,9 @@
        api_key: "<your-api-key>"
    ```
 
+   The `ai:` block also accepts `model`, `provider`, and `reasoning_effort`,
+   which set the defaults for the corresponding CLI flags.
+
 1. **Run help message:**
 
    ```bash
@@ -335,6 +338,7 @@ PatchWise merges [`patchwise/default_config.yaml`](patchwise/default_config.yaml
 
 - `--model`: Specify the AI model to use for code review. (default: `openai/Pro`).
 - `--provider`: The base URL for the AI model API. (default: `https://api.openai.com/v1`)
+- `--reasoning-effort`: Reasoning-effort hint for reasoning models, e.g. `low`/`medium`/`high`. Unset uses the model default.
 - `--additional-context`: Extra text injected into the review/analysis prompt (e.g. a known reproducer or debugging notes). Shared across review and `--rca` modes.
 
 ### Crashdump RCA Options (require `--rca`)

@@ -86,6 +86,7 @@ class Agent:
     model: str = DEFAULT_MODEL
     api_base: str = DEFAULT_API_BASE
     api_key: Optional[str] = None
+    reasoning_effort: Optional[str] = None
 
     @classmethod
     def get_logger(cls) -> logging.Logger:
@@ -158,6 +159,11 @@ class Agent:
         kwargs.setdefault("model", Agent.model)
         kwargs.setdefault("api_base", Agent.api_base)
         kwargs.setdefault("api_key", Agent.api_key)
+        if Agent.reasoning_effort:
+            kwargs.setdefault("reasoning_effort", Agent.reasoning_effort)
+            allowed = kwargs.setdefault("allowed_openai_params", [])
+            if "reasoning_effort" not in allowed:
+                allowed.append("reasoning_effort")
         self._inject_prompt_caching(kwargs)
         self.logger.debug(
             f"Making API call with model: {self.model}, api_base: {Agent.api_base}"
