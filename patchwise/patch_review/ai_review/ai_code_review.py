@@ -16,6 +16,7 @@ from patchwise.patch_review.ai_agent.agent import (
     KERNEL_REVIEW_PROMPTS_PATH,
     SUBSYSTEM_REVIEW_PROMPTS_PATH,
     _load_subsystem_guide,
+    build_system_message,
 )
 from patchwise.patch_review.ai_agent.tool_definitions import NAVIGATION_TOOLS
 from patchwise.patch_review.decorators import register_llm_review, register_long_review
@@ -221,8 +222,8 @@ reviewer applies across the unit's symbols, not a specific bug):
 # Plan Critic
 
 You critique a planner's work-list for a kernel patch. You have access to
-references the planner did not have — the kernel failure taxonomy below, the
-subsystem guide index below, and the kernel's own `Documentation/` — as well
+references the planner did not have — the kernel failure taxonomy above, the
+subsystem guide index above, and the kernel's own `Documentation/` — as well
 as the patch itself: its diff and commit message.
 You do **not** edit the work-list. You only give the planner feedback; the
 planner revises its own tasks.
@@ -235,7 +236,7 @@ Check the work-list against the diff and report:
    `Documentation/` the change touches counts too. Name the concern and the
    file/symbol it applies to. Coverage also includes code quality: comments,
    commit message, spelling/grammar, dead code, or tags that the coding-style or
-   patch-submission guidelines below speak to and no unit covers.
+   patch-submission guidelines above speak to and no unit covers.
 2. Patch-derived gaps: a question raised by the diff or commit message itself —
    evidence, examples, or design decisions in the patch that no unit examines.
 3. Variant coverage: whether the work-list spans the config, arch, and hardware
@@ -295,15 +296,6 @@ name the concern, do not write the analysis.
 ```
 """
 
-    CRITIC_INDEX_HEADER = """
-## Subsystem Guide Index
-
-Match the change's files and symbols against the triggers below and load each
-matching guide with `get_subsystem_review_guide(<file>)` to learn its
-subsystem-specific concerns, then check coverage: if a guide concern applies and
-no unit covers it, raise a coverage gap.
-
-"""
 
     # Phase 2 (EXECUTION) prompt
 
@@ -324,13 +316,13 @@ ground in it, even one no dimension named.
     EXECUTION_METHOD_BLOCK = """
 ## How to review
 
-Match your files and symbols against the Subsystem Review Guide Index below and
+Match your files and symbols against the Subsystem Review Guide Index above and
 load each matching guide with `get_subsystem_review_guide(<file>)`. Read kernel
 `Documentation/` sections when a contract is relevant. Trace the concrete execution
 path through the real code with the navigation tools, reading the actual implementation
 to confirm how the code behaves.
 
-The Kernel Technical Patterns below catalog common kernel defect classes.
+The Kernel Technical Patterns above catalog common kernel defect classes.
 
 Report every issue you can ground in the code by calling `record_finding(location,
 finding)` as you confirm it. Record findings as you go rather than saving them all
@@ -549,6 +541,26 @@ finding with record_verdict as you work through them.
         )
 
     # per-phase system prompts
+    #
+    # Keep the order for prompt prefix cache. Order segments widest-shared first.
+
+    def _system_prompt_header(self) -> str:
+        """The leading system-prompt segment *every* phase sends byte-identically.
+
+        Its own cache segment (see `build_system_message`) so the diff is written
+        once per run and reused by every later phase including the planner and
+        the FP filter, which skip the static guides that follow and would
+        otherwise share no cacheable prefix at all.
+        """
+        return self._date_header() + self._patch_context()
+
+    def _static_guides(self) -> str:
+        """The static doc stack, shared by the phases that review against it."""
+        return (
+            self.get_submitting_patches()
+            + self.get_kernel_coding_style()
+            + self.get_technical_patterns()
+        )
 
     def _date_header(self) -> str:
         return f"\nDate: {datetime.date.today().isoformat()}\n"
@@ -565,7 +577,7 @@ finding with record_verdict as you work through them.
             diff=self.diff,
         )
 
-    def _planner_system_prompt(self) -> str:
+    def _planner_system_prompt(self) -> tuple[str, ...]:
         # The planner only divides the work; it gets no taxonomy, no subsystem
         # index, and no coding-style/patch docs — those would prime it toward a
         # fixed menu of issues. The specifics live with the critic (coverage) and
@@ -573,13 +585,11 @@ finding with record_verdict as you work through them.
         # target either: complete coverage of the change's dimensions is the only
         # goal.
         return (
-            self._date_header()
-            + self._patch_context()
-            + self.PLANNER_INSTRUCTIONS
-            + self.PLANNER_OUTPUT_BLOCK
+            self._system_prompt_header(),
+            self.PLANNER_INSTRUCTIONS + self.PLANNER_OUTPUT_BLOCK,
         )
 
-    def _critic_system_prompt(self) -> str:
+    def _critic_system_prompt(self) -> tuple[str, ...]:
         # The critic gets get_subsystem_review_guide + read_doc (wired in
         # _critique_plan) but no code-reading/-search tools: it can load subsystem
         # guides and read Documentation/ contracts to judge coverage, but can't go
@@ -588,17 +598,14 @@ finding with record_verdict as you work through them.
         # per discovered bug). No unit-count target: the critic only ensures every
         # dimension the change warrants is covered.
         return (
-            self._date_header()
-            + self._patch_context()
-            + self.CRITIC_INSTRUCTIONS
-            + self.get_technical_patterns()
-            + self.CRITIC_INDEX_HEADER
+            self._system_prompt_header(),
+            self._static_guides(),
+            self.SUBSYSTEM_INDEX_BLOCK
             + self.get_subsystem_index()
-            + self.get_kernel_coding_style()
-            + self.get_submitting_patches()
+            + self.CRITIC_INSTRUCTIONS,
         )
 
-    def _execution_system_prompt(self, task: Dict[str, Any]) -> str:
+    def _execution_system_prompt(self, task: Dict[str, Any]) -> tuple[str, ...]:
         def _fmt_list(key: str) -> str:
             vals = task.get(key) or []
             if isinstance(vals, str):
@@ -612,25 +619,22 @@ finding with record_verdict as you work through them.
             f"- Symbols: {_fmt_list('symbols')}\n"
         )
         return (
-            self._date_header()
-            + self._patch_context()
-            + self.NAV_TOOLS_BLOCK
-            + self.get_kernel_coding_style()
-            + self.get_technical_patterns()
-            + self.SUBSYSTEM_INDEX_BLOCK
+            self._system_prompt_header(),
+            self._static_guides(),
+            self.SUBSYSTEM_INDEX_BLOCK
             + self.get_subsystem_index()
+            + self.NAV_TOOLS_BLOCK
             + self.EXECUTION_INSTRUCTIONS
             + self.EXECUTION_METHOD_BLOCK
-            + assignment
+            + assignment,
         )
 
-    def _fp_filter_system_prompt(self) -> str:
+    def _fp_filter_system_prompt(self) -> tuple[str, ...]:
         return (
-            self._date_header()
-            + self._patch_context()
-            + self.NAV_TOOLS_BLOCK
+            self._system_prompt_header(),
+            self.NAV_TOOLS_BLOCK
             + self.FP_FILTER_INSTRUCTIONS
-            + self.get_false_positive_guide()
+            + self.get_false_positive_guide(),
         )
 
     # lenient JSON parsing
@@ -980,7 +984,7 @@ finding with record_verdict as you work through them.
             })
         else:
             critic_messages.extend([
-                {"role": "system", "content": self._critic_system_prompt()},
+                build_system_message(*self._critic_system_prompt()),
                 {
                     "role": "user",
                     "content": self._render_loaded_refs(preloaded_guides)
@@ -1065,7 +1069,7 @@ finding with record_verdict as you work through them.
         # plan in light of the critic's feedback (planner -> critic -> planner).
         self.agent.current_label = "planner"
         plan_messages = [
-            {"role": "system", "content": self._planner_system_prompt()},
+            build_system_message(*self._planner_system_prompt()),
             {"role": "user", "content": shared_user + self._diff_digest_block()},
         ]
         raw = self.agent.run_agent_loop(
@@ -1194,7 +1198,7 @@ finding with record_verdict as you work through them.
         findings_path = self.agent.findings_path_for(f"exec:{tid}")
         findings_path.unlink(missing_ok=True)
         exec_messages = [
-            {"role": "system", "content": self._execution_system_prompt(task)},
+            build_system_message(*self._execution_system_prompt(task)),
             {"role": "user", "content": self.EXECUTION_DIRECTIVE + shared_user},
         ]
         result = self.agent.run_agent_loop(
@@ -1323,7 +1327,7 @@ finding with record_verdict as you work through them.
         issues_before = findings_text.count("\n### ") + 1
         fp_user = self.FP_FILTER_USER_TEMPLATE.format(findings=findings_text)
         fp_messages = [
-            {"role": "system", "content": self._fp_filter_system_prompt()},
+            build_system_message(*self._fp_filter_system_prompt()),
             {"role": "user", "content": fp_user},
         ]
         self.agent.current_label = "fp-filter"

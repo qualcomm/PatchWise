@@ -47,6 +47,22 @@ def _positive_int_env(name: str, default: int) -> int:
     return int(raw) if raw and raw.isdigit() and int(raw) > 0 else default
 
 
+def build_system_message(*segments: str) -> dict:
+    """Build a system message split into independently reusable segments.
+
+    Each segment boundary becomes a provider cache breakpoint (_inject_prompt_caching
+    marks every block but the last), so providers can reuse whichever leading run
+    of segments a phase shares.
+    
+    Without the breakpoints a prefix shared only *inside* a message may not be reusable:
+    OpenAI's implicit breakpoint lands at the end of the latest eligible
+    message (a user message or tool response), which sits past the whole system
+    prompt, so changing anything after the shared part misses.
+    """
+    blocks = [{"type": "text", "text": s} for s in segments if s]
+    return {"role": "system", "content": blocks}
+
+
 # @retry binds max_retries at decoration time, so it must be a constant read at import.
 DEFAULT_MAX_API_RETRIES = _positive_int_env("PATCHWISE_MAX_API_RETRIES", 10)
 
@@ -185,43 +201,77 @@ class Agent:
             self.output_tokens += getattr(usage, "completion_tokens", 0) or 0
         return response
 
+    # Anthropic rejects a request carrying more than this many cache_control blocks.
+    ANTHROPIC_BREAKPOINT_CAP = 4
+
+    @staticmethod
+    def _segment_breakpoints(kwargs: dict) -> List[dict]:
+        """The system-prompt blocks to cache, outermost prefix first.
+
+        Every block but the last, since a build_system_message segment boundary
+        is exactly where one phase's shared prefix can end.
+        """
+        system = next(
+            (m for m in kwargs["messages"] if m.get("role") == "system"), None
+        )
+        segments = system.get("content") if system else None
+        if not isinstance(segments, list):
+            return []
+        return [b for b in segments[:-1] if isinstance(b, dict)]
+
     @staticmethod
     def _inject_prompt_caching(kwargs: dict) -> None:
-        # Anthropic only caches a prefix ending at an explicit cache_control
-        # breakpoint; without one, Claude re-prefills the whole growing
-        # conversation every turn. OpenAI/Gemini providers cache prefixes on their
-        # own, so we skip them.
-        if "claude" not in kwargs["model"].lower():
+        """Translate segment boundaries into the provider's own cache markers.
+
+        Dispatch on the litellm provider prefix.
+        """
+        marked = Agent._segment_breakpoints(kwargs)
+        model = kwargs["model"].lower()
+        if model.startswith("anthropic"):
+            Agent._mark_anthropic(kwargs, marked)
+        elif model.startswith("openai"):
+            Agent._mark_openai(kwargs, marked)
+
+    @staticmethod
+    def _mark_openai(kwargs: dict, marked: List[dict]) -> None:
+        if not marked:
             return
+        for block in marked:
+            # OpenAI honors a per-block breakpoint only if the request opts in.
+            block["prompt_cache_breakpoint"] = {"mode": "explicit"}
+        # Keep the provider's own breakpoint on the newest user/tool message, so the
+        # growing conversation tail stays cached alongside our breakpoints.
+        kwargs.setdefault("prompt_cache_options", {"mode": "implicit"})
+
+    @staticmethod
+    def _mark_anthropic(kwargs: dict, marked: List[dict]) -> None:
+        """Anthropic caches only a prefix ending at an explicit cache_control.
+
+        Without one, Claude re-prefills the whole growing conversation every turn.
+        """
+        messages = kwargs["messages"]
+        # The conversation list is reused and grows across turns, so a mark left on
+        # a prior turn's last message persists and they soon exceed the cap (a hard
+        # 400). Clear all, then re-derive the ones this turn wants.
+        for m in messages:
+            content = m.get("content")
+            if isinstance(content, list):
+                for block in content:
+                    if isinstance(block, dict):
+                        block.pop("cache_control", None)
 
         def mark(message: dict) -> None:
             content = message.get("content")
             if isinstance(content, str):
-                message["content"] = [
-                    {
-                        "type": "text",
-                        "text": content,
-                        "cache_control": {"type": "ephemeral"},
-                    }
-                ]
-            elif isinstance(content, list) and content and isinstance(content[-1], dict):
+                message["content"] = [{"type": "text", "text": content}]
+                content = message["content"]
+            if isinstance(content, list) and content and isinstance(content[-1], dict):
                 content[-1]["cache_control"] = {"type": "ephemeral"}
 
-        messages = kwargs["messages"]
-        # The conversation list is reused and grows across turns, so a breakpoint
-        # left on a prior turn's last message persists; left uncleared they soon
-        # exceed Anthropic's cap of 4 cache_control blocks (a hard 400). Clear all,
-        # then re-derive exactly the two we want.
-        for m in messages:
-            c = m.get("content")
-            if isinstance(c, list):
-                for block in c:
-                    if isinstance(block, dict):
-                        block.pop("cache_control", None)
-        # First user turn caches the constant tools+system+patch prefix; the last
-        # message rolls the cache forward over the growing tool-output tail.
-        mark(next(m for m in messages if m["role"] == "user"))
+        # Spend the cap newest-first: the tail mark is the one that pays off.
         mark(messages[-1])
+        for block in reversed(marked[: Agent.ANTHROPIC_BREAKPOINT_CAP - 1]):
+            block["cache_control"] = {"type": "ephemeral"}
 
     def budget_remaining(self) -> bool:
         """True while the current phase's token ceiling is unset or not yet hit."""
