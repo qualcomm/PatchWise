@@ -1,15 +1,46 @@
 # Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 
+import contextlib
 import curses
+import sys
 import textwrap
+
+_TUI_SETUP_ERROR = (
+    "PatchWise needs an interactive terminal to complete the first-run setup. "
+    "Run PatchWise once in a normal terminal to confirm the API key disclaimer. "
+    "If you are running it headlessly, set no_reprompt to true under "
+    "api_key_disclaimer in ~/.config/patchwise_config.yaml:\n"
+    "api_key_disclaimer:\n"
+    "  no_reprompt: true"
+)
+
+
+def _restore_terminal(stdscr) -> None:
+    with contextlib.suppress(curses.error):
+        curses.nocbreak()
+    if stdscr is not None:
+        with contextlib.suppress(curses.error):
+            stdscr.keypad(False)
+    with contextlib.suppress(curses.error):
+        curses.echo()
+    with contextlib.suppress(curses.error):
+        curses.endwin()
 
 
 def display_prompt_with_options(message: str, options: list[str]) -> str:
-    stdscr = curses.initscr()
-    curses.noecho()
-    curses.cbreak()
-    stdscr.keypad(True)
+    if not sys.stdin.isatty() or not sys.stdout.isatty():
+        raise SystemExit(_TUI_SETUP_ERROR)
+
+    stdscr = None
+    try:
+        stdscr = curses.initscr()
+        curses.noecho()
+        curses.cbreak()
+        stdscr.keypad(True)
+    except curses.error:
+        _restore_terminal(stdscr)
+        raise SystemExit(_TUI_SETUP_ERROR) from None
 
     try:
         (y, x) = stdscr.getmaxyx()
@@ -47,7 +78,4 @@ def display_prompt_with_options(message: str, options: list[str]) -> str:
             elif key == ord("q"):
                 return ""
     finally:
-        curses.nocbreak()
-        stdscr.keypad(False)
-        curses.echo()
-        curses.endwin()
+        _restore_terminal(stdscr)
