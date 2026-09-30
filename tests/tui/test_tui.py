@@ -1,6 +1,7 @@
 # Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 
+import curses
 import pytest
 import yaml
 from unittest.mock import Mock, patch
@@ -50,7 +51,15 @@ def test_display_prompt_with_options(
     mock_newwin.return_value = mock_win
 
     # act
-    out = display_prompt_with_options(message, options)
+    fake_stdin = Mock()
+    fake_stdin.isatty.return_value = True
+    fake_stdout = Mock()
+    fake_stdout.isatty.return_value = True
+    with (
+        patch("patchwise.utils.tui.sys.stdin", fake_stdin),
+        patch("patchwise.utils.tui.sys.stdout", fake_stdout),
+    ):
+        out = display_prompt_with_options(message, options)
 
     # assert
     assert out == expected_result
@@ -61,6 +70,40 @@ def test_display_prompt_with_options(
     mock_win.clear.assert_called_once()
     mock_win.box.assert_called_once()
     mock_win.refresh.assert_called_once()
+
+
+def test_display_prompt_without_tty_exits_before_curses():
+    fake_stdin = Mock()
+    fake_stdin.isatty.return_value = False
+    fake_stdout = Mock()
+    fake_stdout.isatty.return_value = False
+
+    with (
+        patch("patchwise.utils.tui.sys.stdin", fake_stdin),
+        patch("patchwise.utils.tui.sys.stdout", fake_stdout),
+        patch("curses.initscr") as mock_initscr,
+    ):
+        with pytest.raises(SystemExit, match="interactive terminal"):
+            display_prompt_with_options(message, ["Yes", "No"])
+
+    mock_initscr.assert_not_called()
+
+
+def test_display_prompt_curses_setup_failure_exits_cleanly():
+    fake_stdin = Mock()
+    fake_stdin.isatty.return_value = True
+    fake_stdout = Mock()
+    fake_stdout.isatty.return_value = True
+
+    with (
+        patch("patchwise.utils.tui.sys.stdin", fake_stdin),
+        patch("patchwise.utils.tui.sys.stdout", fake_stdout),
+        patch("curses.initscr", return_value=Mock()),
+        patch("curses.noecho"),
+        patch("curses.cbreak", side_effect=curses.error("cbreak() returned ERR")),
+    ):
+        with pytest.raises(SystemExit, match="interactive terminal"):
+            display_prompt_with_options(message, ["Yes", "No"])
 
 
 def test_config(tmp_path):
