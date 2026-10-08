@@ -416,3 +416,62 @@ def test_render_keeps_gap_at_threshold_verbatim():
     assert "[ ... ]" not in out
     assert ">  	filler_0();" in out
     assert ">  	filler_9();" in out
+
+
+# ---- _gerrit_comments (ai.output_format: gerrit) -------------------------
+
+
+def test_gerrit_comments_follow_comment_input():
+    # Source lines: 1 subject, 2 blank, 3 body, 4 separator, 5 `diff --git`,
+    # 9 first hunk header, 10.. hunk body (context at new line 10, `+` from 13).
+    diff = SAMPLE_DIFF.replace(" \tif (!buf)", "-\tif (!buf)", 1)
+    diff += '\ndiff --git "a/\\303\\251.txt" "b/\\303\\251.txt"\n@@ -1 +1 @@\n-x\n+y'
+    review = _review("subject\n\nbody", diff)
+    review.commit = types.SimpleNamespace(parents=["p"])  # 6-line /COMMIT_MSG header
+    lookup = _numbered_lookup(review)
+    lines = {
+        1: "subject",
+        3: "body",
+        5: "file",
+        lookup[" \tint ret;"]: "context",
+        lookup["-\tif (!buf)"]: "removed",
+        lookup["+\tret = bar(buf);"]: "added",
+        lookup["+y"]: "quoted path",
+        999: "out of range",
+    }
+    findings = [
+        {"finding": f, "start_line": 1, "end_line": n} for n, f in lines.items()
+    ]
+
+    def c(message, **anchor):
+        return dict(anchor, message=message, unresolved=True)
+
+    assert review._gerrit_comments(findings) == {
+        "/COMMIT_MSG": [c("subject", line=7), c("body", line=9)],
+        "d.c": [
+            c("file"),
+            c("context", line=10),
+            c("removed", line=12, side="PARENT"),
+            c("added", line=13),
+        ],
+        "é.txt": [c("quoted path", line=1)],
+        "/PATCHSET_LEVEL": [c("out of range")],
+    }
+
+
+def test_gerrit_comments_preserve_multiple_findings_on_same_end_line():
+    review = _review("subject", SAMPLE_DIFF)
+    review.commit = types.SimpleNamespace(parents=[])
+    end_line = _numbered_lookup(review)["+\tret = bar(buf);"]
+
+    assert review._gerrit_comments(
+        [
+            {"finding": "first", "start_line": end_line, "end_line": end_line},
+            {"finding": "second", "start_line": end_line, "end_line": end_line},
+        ]
+    ) == {
+        "d.c": [
+            {"line": 13, "message": "first", "unresolved": True},
+            {"line": 13, "message": "second", "unresolved": True},
+        ]
+    }

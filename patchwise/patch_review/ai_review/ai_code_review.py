@@ -1,6 +1,7 @@
 # Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 
+import ast
 import datetime
 import json
 import os
@@ -23,6 +24,7 @@ from patchwise.patch_review.decorators import register_llm_review, register_long
 
 from patchwise.patch_review.ai_review.ai_review import AiReview
 from patchwise.ui import events
+from patchwise.utils.config import ai_output_format
 from patchwise.utils.repo_workspace import (
     project_layout_note,
     repo_project_note,
@@ -295,7 +297,6 @@ name the concern, do not write the analysis.
                 "t5 states a conclusion (\"verify foo returns -EINVAL for a NULL arg\") — reframe as an open question about what the NULL path does" ] }
 ```
 """
-
 
     # Phase 2 (EXECUTION) prompt
 
@@ -1567,11 +1568,88 @@ finding with record_verdict as you work through them.
             ),
         )
 
+        if ai_output_format() == "gerrit":
+            if findings is None:
+                self.logger.warning(
+                    "[cleanup] JSON parse failed; posting the review patchset-level."
+                )
+                findings = [{"finding": text, "end_line": 0}]
+            return json.dumps(self._gerrit_comments(findings), indent=2)
+
         if findings is None:
             self.logger.warning("[cleanup] JSON parse failed; falling back to raw text.")
             return text.strip()
 
         return super().format_chat_response(self._render_inline_review(findings).strip())
+
+    @property
+    def output_suffix(self) -> str:
+        return "json" if ai_output_format() == "gerrit" else "txt"
+
+    @staticmethod
+    def _diff_path(header: str) -> str:
+        """The new path from `diff --git a/<old> b/<new>`. Git C-quotes paths
+        with unusual characters (`"b/\\303\\251.txt"`)."""
+        if header.endswith('"'):
+            quoted = header[header.rindex(' "b/') + 1 :]
+            return ast.literal_eval("b" + quoted).decode()[2:]
+        return header.rsplit(" b/", 1)[-1]
+
+    def _gerrit_anchors(self) -> list[tuple[str, dict]]:
+        """Map each numbered-source line (0-based) to a Gerrit (path,
+        CommentInput) anchor, per the REST API's CommentInput entity.
+
+        Message lines go to the /COMMIT_MSG magic file, below the header Gerrit
+        generates above the message (MagicFile.createCommitMessageHeader: one
+        line per parent, Author, AuthorDate, Commit, CommitDate, blank). File
+        and hunk headers get a file comment; anything else is patchset-level."""
+        raw_lines = self._numbered_source.split("\n")
+        anchors: list[tuple[str, dict]] = [("/PATCHSET_LEVEL", {})] * len(raw_lines)
+        header = len(self.commit.parents) + 5
+        diff_start = self._diff_start_line(self.commit_message) - 1
+        for i in range(diff_start - 1):
+            anchors[i] = ("/COMMIT_MSG", {"line": header + i + 1})
+        path, in_hunk, old, new = None, False, 0, 0
+        for i in range(diff_start, len(raw_lines)):
+            line = raw_lines[i]
+            hunk = re.match(r"@@ -(\d+)(?:,\d+)? \+(\d+)", line)
+            if line.startswith("diff --git"):
+                path, in_hunk = self._diff_path(line), False
+            elif hunk:
+                in_hunk, old, new = True, int(hunk.group(1)), int(hunk.group(2))
+            if path is None:
+                continue
+            anchors[i] = (path, {})
+            if not in_hunk or hunk:
+                continue
+            if line.startswith("+"):
+                anchors[i] = (path, {"line": new})
+                new += 1
+            elif line.startswith("-"):
+                anchors[i] = (path, {"line": old, "side": "PARENT"})
+                old += 1
+            elif line.startswith(" "):
+                anchors[i] = (path, {"line": new})
+                old, new = old + 1, new + 1
+        return anchors
+
+    def _gerrit_comments(self, findings: list) -> dict[str, list[dict]]:
+        """Findings as a Gerrit ReviewInput `comments` map (path -> list of
+        CommentInput), each anchored at its end line as the inline review
+        places it. An out-of-range line becomes a patchset-level comment."""
+        anchors = self._gerrit_anchors()
+        comments: dict[str, list[dict]] = defaultdict(list)
+        for e in findings:
+            end = e["end_line"]
+            path, anchor = (
+                anchors[end - 1]
+                if 1 <= end <= len(anchors)
+                else ("/PATCHSET_LEVEL", {})
+            )
+            comments[path].append(
+                dict(anchor, message=str(e["finding"]).strip(), unresolved=True)
+            )
+        return comments
 
     _SUBDIR = "ai_code_review"
 
