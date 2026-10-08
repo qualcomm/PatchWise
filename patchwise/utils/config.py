@@ -61,6 +61,14 @@ def redis_address() -> Tuple[str, int]:
     return cache["host"], int(cache["port"])
 
 
+def ai_output_format() -> str:
+    """Return `ai.output_format`: "inline" or "gerrit"."""
+    fmt = parse_config()["ai"].get("output_format", "inline")
+    if fmt not in ("inline", "gerrit"):
+        raise ValueError(f'ai.output_format must be "inline" or "gerrit", not {fmt!r}')
+    return fmt
+
+
 def update_user_config(dict: Dict[str, Any]) -> None:
     if not USER_CONFIG_PATH.exists():
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)

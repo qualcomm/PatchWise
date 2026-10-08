@@ -85,6 +85,9 @@ class PatchReview(abc.ABC):
             return specific_dockerfile
         return DOCKERFILES_PATH / "base.Dockerfile"
 
+    # Extension of the file main.py saves this review's result to
+    output_suffix = "txt"
+
     @abc.abstractmethod
     def setup(self) -> None:
         """
