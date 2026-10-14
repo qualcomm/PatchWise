@@ -69,6 +69,8 @@ _DOCKERFILES_PATH = PACKAGE_PATH / "dockerfiles"
 logger = logging.getLogger("patchwise.rootcauseanalysis")
 
 DUMP_MOUNT_POINT = "/dump"
+# Writable scratch directory in the container (see CrashdumpAgent.Dockerfile)
+WORK_DIR = "/work"
 
 
 class RootCauseAnalysis:
@@ -125,6 +127,7 @@ full. Explore it with `bash_timeout` using absolute paths:
   keep binary files (like memory images) out of recursive searches.
 - Probe binary images in bounded windows instead of scanning them whole
   (Ex: `od -A x -t x1z -j <off> -N <len>`, `strings -n 8 <file> | rg ...`).
+- Write decompressed or derived files under `{WORK_DIR}` (writable).
 
 Navigation tools other than bash_timeout work on the kernel source the
 crash originated from. bash_timeout also reaches the kernel tree (the
