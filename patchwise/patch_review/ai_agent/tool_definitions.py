@@ -15,6 +15,9 @@ text, so reach for the navigation tools when you want positions rather than
 prose.
 """
 
+# Cap on the timeout bash_timeout may request, in seconds
+BASH_MAX_TIMEOUT = 1800
+
 _NAME_PARAM = {
     "type": "object",
     "properties": {
@@ -275,7 +278,6 @@ TOOLS = [
         },
     },
     {
-        # TODO: add a `timeout` parameter
         "type": "function",
         "function": {
             "name": "bash",
@@ -307,6 +309,47 @@ TOOLS = [
                     },
                 },
                 "required": ["command"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "bash_timeout",
+            "description": (
+                "Run a shell command in the container, killed after `timeout` "
+                f"seconds (at most {BASH_MAX_TIMEOUT}). One-shot: each call is a fresh exec, "
+                "so no state (cwd, variables, environment) carries over — chain "
+                "related steps with `&&` or `;` in one command. stdout and "
+                "stderr are merged; output is truncated past a size cap. Keep "
+                "the timeout short for quick probes; raise it only for work "
+                "known to be slow, like reading a large file from a network "
+                "share or loading a debugger."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "Shell command, run via `sh -c`.",
+                    },
+                    "timeout": {
+                        "type": "integer",
+                        "description": (
+                            f"Seconds before the command is killed "
+                            f"(1-{BASH_MAX_TIMEOUT})."
+                        ),
+                    },
+                    "cwd": {
+                        "type": "string",
+                        "description": (
+                            "Working directory, workspace-relative (e.g. "
+                            "'drivers/usb') or absolute. Defaults to the "
+                            "workspace root."
+                        ),
+                    },
+                },
+                "required": ["command", "timeout"],
             },
         },
     },

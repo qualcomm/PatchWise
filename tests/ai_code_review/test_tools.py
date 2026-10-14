@@ -35,6 +35,7 @@ import pytest
 from git import GitCommandError, InvalidGitRepositoryError, NoSuchPathError, Repo
 
 from patchwise.docker import DockerManager
+from patchwise.patch_review.ai_agent.tool_definitions import BASH_MAX_TIMEOUT
 from patchwise.patch_review.ai_review.ai_code_review import AiCodeReview
 from patchwise import PACKAGE_NAME
 
@@ -1023,6 +1024,36 @@ def test_bash_timeout_reaps_the_process_in_the_container(
     assert (
         survivors["result"].strip() == "0"
     ), f"orphan survived in the container: {survivors['result']!r}"
+
+
+def test_bash_timeout_uses_the_requested_timeout(review: AiCodeReview) -> None:
+    """bash_timeout kills the command after the timeout the caller asked for."""
+    start = time.monotonic()
+    result = review.agent.dispatch_tool(
+        "bash_timeout", {"command": "sleep 60", "timeout": 2}
+    )
+    elapsed = time.monotonic() - start
+
+    assert result["timed_out"] is True
+    assert "timed out after 2s" in result["result"]
+    assert elapsed < 30, f"took {elapsed:.1f}s — timeout did not fire promptly"
+
+
+def test_bash_timeout_clamps_the_requested_timeout(
+    review: AiCodeReview, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Timeouts outside [1, BASH_MAX_TIMEOUT] are clamped, not passed through."""
+    seen = []
+
+    def fake_run_bash(command: str, cwd: Optional[str], timeout: int) -> dict:
+        seen.append(timeout)
+        return {"ok": True}
+
+    monkeypatch.setattr(review.agent, "_run_bash", fake_run_bash)
+    review.agent.dispatch_tool("bash_timeout", {"command": "true", "timeout": 10**6})
+    review.agent.dispatch_tool("bash_timeout", {"command": "true", "timeout": 0})
+
+    assert seen == [BASH_MAX_TIMEOUT, 1]
 
 
 def test_bash_closes_stdin(review: AiCodeReview) -> None:

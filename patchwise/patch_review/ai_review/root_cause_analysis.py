@@ -10,7 +10,7 @@ pipeline is deliberately just two roles:
     engineer  <->  maintainer  ->  report
 
   * ENGINEER — a single kernel engineer investigates the crashdump from the
-    evidence with kernel-navigation tools + bash over the read-only dump.
+    evidence with kernel-navigation tools + bash_timeout over the read-only dump.
     It carries no instructions on how to debug: any such framing can bound
     it to the listed classes (overfit). It derives the mechanism from the
     dump and the real kernel source and concludes with the fix.
@@ -90,14 +90,18 @@ class RootCauseAnalysis:
     ENGINEER_TOKEN_BUDGET = 20_000_000
     MAINTAINER_TOKEN_BUDGET = 10_000_000
 
-    # Tool split — the heart of this design
-    ENGINEER_TOOLS = NAVIGATION_TOOLS + [
+    # Tool split — the heart of this design. bash_timeout replaces bash:
+    # reading a large dump off a network share can outlast bash's fixed timeout.
+    _RCA_NAVIGATION_TOOLS = [
+        "bash_timeout" if t == "bash" else t for t in NAVIGATION_TOOLS
+    ]
+    ENGINEER_TOOLS = _RCA_NAVIGATION_TOOLS + [
         "record_finding",
         "task_add",
         "task_complete",
         "task_list",
     ]
-    MAINTAINER_TOOLS = NAVIGATION_TOOLS + [
+    MAINTAINER_TOOLS = _RCA_NAVIGATION_TOOLS + [
         "get_subsystem_review_guide",
     ]
 
@@ -109,10 +113,12 @@ class RootCauseAnalysis:
 The crashdump folder mounted read-only at `{DUMP_MOUNT_POINT}` is often on
 a slow network share: each file open and directory listing is a round-trip,
 and large memory images (multi-GB `.BIN` files) take minutes to read in
-full. Explore it with `bash` using absolute paths:
+full. Explore it with `bash_timeout` using absolute paths:
 
 - Do as much as possible in one call: batch related steps rather than many
   small calls.
+- Keep the timeout short for quick probes; raise it only for work you
+  expect to be slow, like reading a large file or loading a debugger.
 - Look at file names and sizes before opening them, and read slices
   (Ex: `sed -n 'A,Bp'`, `head`, `tail`) rather than whole large files.
 - Scope text artifact searches to the files or directories that matter;
@@ -120,8 +126,9 @@ full. Explore it with `bash` using absolute paths:
 - Probe binary images in bounded windows instead of scanning them whole
   (Ex: `od -A x -t x1z -j <off> -N <len>`, `strings -n 8 <file> | rg ...`).
 
-Navigation tools other than bash work on the kernel source the crash
-originated from. bash also reaches the kernel tree (the default cwd).
+Navigation tools other than bash_timeout work on the kernel source the
+crash originated from. bash_timeout also reaches the kernel tree (the
+default cwd).
 """
 
     PROMPT_TEMPLATE = """
@@ -330,7 +337,7 @@ site. Then end your turn with your final root cause, mechanism, and fix
         """Stand up a kernel container over `repo_path` (mirrors PatchReview's docker setup).
 
         The crashdump folder is bind-mounted read-only at DUMP_MOUNT_POINT;
-        the agent reads it with `bash` in the container, never host-side."""
+        the agent reads it with `bash_timeout` in the container, never host-side."""
 
         # Doesn't matter what we pass as the commit - it is just a workaround
         self._repo_managed = is_repo_managed(repo_path)

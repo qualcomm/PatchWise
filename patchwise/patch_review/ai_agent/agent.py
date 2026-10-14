@@ -19,7 +19,7 @@ from pathlib import Path
 
 from patchwise import PACKAGE_NAME, SANDBOX_PATH
 from patchwise.docker import DockerManager
-from patchwise.patch_review.ai_agent.tool_definitions import TOOLS
+from patchwise.patch_review.ai_agent.tool_definitions import BASH_MAX_TIMEOUT, TOOLS
 from patchwise.patch_review.ai_review.review_prompts import (
     SUBSYSTEM_REVIEW_PROMPTS_PATH,
     _load_subsystem_guide,
@@ -1336,6 +1336,20 @@ class Agent:
     _BASH_TIMEOUT = 120  # seconds per call
 
     def _tool_bash(self, command: str, cwd: Optional[str] = None) -> Dict[str, Any]:
+        """`bash`: run `command` with the fixed _BASH_TIMEOUT."""
+        return self._run_bash(command, cwd, self._BASH_TIMEOUT)
+
+    def _tool_bash_timeout(
+        self, command: str, timeout: int, cwd: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """`bash_timeout`: run `command` with the caller's timeout, clamped to
+        [1, BASH_MAX_TIMEOUT]."""
+        timeout = max(1, min(int(timeout), BASH_MAX_TIMEOUT))
+        return self._run_bash(command, cwd, timeout)
+
+    def _run_bash(
+        self, command: str, cwd: Optional[str], timeout: int
+    ) -> Dict[str, Any]:
         """Run a shell command in the container (one-shot, like `docker exec`).
 
         No path vetting: a shell command's reachable set is decided by what the
@@ -1356,12 +1370,12 @@ class Agent:
             if cwd
             else str(self.docker_manager.kernel_dir)
         )
-        wrapped = ["timeout", "-k", "5", str(self._BASH_TIMEOUT), "sh", "-c", command]
+        wrapped = ["timeout", "-k", "5", str(timeout), "sh", "-c", command]
         proc = self.docker_manager.run_command(
             wrapped, cwd=workdir, stdin=subprocess.DEVNULL
         )
         try:
-            stdout, stderr = proc.communicate(timeout=self._BASH_TIMEOUT + 15)
+            stdout, stderr = proc.communicate(timeout=timeout + 15)
         except subprocess.TimeoutExpired:
             proc.kill()
             stdout, stderr = proc.communicate()
@@ -1372,7 +1386,7 @@ class Agent:
         timed_out = proc.returncode in (124, 137)
         if timed_out:
             output += (
-                f"\n[timed out after {self._BASH_TIMEOUT}s and was killed. "
+                f"\n[timed out after {timeout}s and was killed. "
                 f"Narrow the command — scope a search to a subdirectory, or "
                 f"split it into steps.]"
             )
@@ -1782,6 +1796,7 @@ class Agent:
             "search_docs": self._tool_search_docs,
             "get_subsystem_review_guide": self._tool_get_subsystem_review_guide,
             "bash": self._tool_bash,
+            "bash_timeout": self._tool_bash_timeout,
             "run_checkpatch": self._tool_run_checkpatch,
             "run_sparse": self._tool_run_sparse,
             "record_finding": self._tool_record_finding,
