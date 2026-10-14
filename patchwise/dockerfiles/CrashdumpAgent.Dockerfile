@@ -9,4 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN pip3 install "pathspec>=0.12"
 
+# Scratch space for the agent
+RUN mkdir /work && chown patchwise:patchwise /work
+
 USER patchwise
