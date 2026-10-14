@@ -471,7 +471,7 @@ def test_gerrit_comments_preserve_multiple_findings_on_same_end_line():
         ]
     ) == {
         "d.c": [
-            {"line": 13, "message": "first", "unresolved": True},
-            {"line": 13, "message": "second", "unresolved": True},
+            {"line": 14, "message": "first", "unresolved": True},
+            {"line": 14, "message": "second", "unresolved": True},
         ]
     }
