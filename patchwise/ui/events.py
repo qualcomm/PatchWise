@@ -36,6 +36,7 @@ TASK = "task"                    # label, action (add|complete|resume), id, desc
 ENGINEER_ANSWER = "engineer_answer"  # label, text
 MAINTAINER = "maintainer"        # round, refuted, questions: [str], reason
 RUN_DONE = "run_done"            # summary: {...}
+REPORT_SAVED = "report_saved"    # path
 
 Listener = Callable[[str, Dict[str, Any]], None]
 

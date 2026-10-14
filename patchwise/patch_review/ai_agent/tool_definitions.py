@@ -275,6 +275,7 @@ TOOLS = [
         },
     },
     {
+        # TODO: add a `timeout` parameter
         "type": "function",
         "function": {
             "name": "bash",

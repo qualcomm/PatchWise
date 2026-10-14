@@ -132,6 +132,7 @@ class Dashboard:
         self._start = time.monotonic()
         self._spin = 0
         self.output_dir = output_dir
+        self.report_path = ""
 
         # Footer state.
         self.pipeline: Optional[str] = None
@@ -561,6 +562,10 @@ class Dashboard:
                     and self._last_engineer):
                 self._print_accepted(self._last_engineer)
 
+        elif kind == events.REPORT_SAVED:
+            with self._lock:
+                self.report_path = f.get("path", "") or ""
+
         self.update_footer()
 
     def add_alert(self, level: str, message: str) -> None:
@@ -600,8 +605,9 @@ class Dashboard:
                     (_oneline(text, 58), "default"),
                     no_wrap=True, overflow="crop"))
 
-        out = str(self.output_dir or SANDBOX_PATH)
-        body += [Text(), Text.assemble(("output  ", "bold dim"), (out, "dim"))]
+        output = self.report_path or str(self.output_dir or SANDBOX_PATH)
+        label = "report  " if self.report_path else "output  "
+        body += [Text(), Text.assemble((label, "bold dim"), (output, "dim"))]
         return Panel(Group(*body), title=Text("run complete", style="bold green"),
                      title_align="left", border_style="green", padding=(1, 2))
 

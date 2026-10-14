@@ -63,6 +63,7 @@ class DockerManager:
         repo_path: Path,
         commit_sha: str,
         git_subdir: str = "",
+        readonly_mounts: Optional[dict[Path, str]] = None,
     ):
         self.logger = logging.getLogger(
             f"{PACKAGE_NAME}.{self.__class__.__name__.lower()}"
@@ -80,6 +81,7 @@ class DockerManager:
         self.build_dir = self.sandbox_path / "build"
         self.kernel_dir = self.sandbox_path / "kernel"
         self._kernel_overlay_volume: Optional[str] = None
+        self.readonly_mounts = readonly_mounts or {}
         require_workspace_root(str(self.repo_path))
         self._repo_managed = is_repo_managed(str(self.repo_path))
 
@@ -729,6 +731,8 @@ class DockerManager:
             "-v",
             f"{self._kernel_overlay_volume}:{self.kernel_dir}",
         ]
+        for host, dst in self.readonly_mounts.items():
+            args += ["-v", f"{host}:{dst}:ro"]
         args += [
             self.image_tag,
             "tail",
