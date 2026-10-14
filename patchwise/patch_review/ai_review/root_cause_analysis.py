@@ -129,6 +129,22 @@ full. Explore it with `bash_timeout` using absolute paths:
   (Ex: `od -A x -t x1z -j <off> -N <len>`, `strings -n 8 <file> | rg ...`).
 - Write decompressed or derived files under `{WORK_DIR}` (writable).
 
+Binaries in the dump (`vmlinux`, `*.ko`, memory cores) may target a
+different architecture. Check with `file` first, then use
+architecture-neutral tools:
+
+- Addresses to source lines:
+  - `llvm-addr2line`
+  - `scripts/faddr2line` with `LLVM=1`
+- ELF contents and disassembly:
+  - `llvm-readelf`
+  - `llvm-objdump`
+  - `pyelftools`
+- Struct layouts and field offsets: `pahole`
+- Source, disassembly and expressions in one batch: `gdb-multiarch -batch`
+
+Avoid GNU `addr2line` and `objdump`: they are architecture dependent.
+
 Navigation tools other than bash_timeout work on the kernel source the
 crash originated from. bash_timeout also reaches the kernel tree (the
 default cwd).
