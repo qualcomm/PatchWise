@@ -17,7 +17,7 @@ Run with the patchwise venv active.
     source .venv/bin/activate
     pytest tests/ai_code_review/test_tools.py -v -s
 
-The first run is slow: init_kernel_tree() fetches linux-next.
+The first run is slow: it fetches the pinned linux-next commit.
 """
 
 import logging
@@ -32,15 +32,16 @@ KERNEL_DIR = TESTS_DIR / "linux"
 os.environ["PATCHWISE_SANDBOX_PATH"] = str(TESTS_DIR)
 
 import pytest
-from git import InvalidGitRepositoryError, NoSuchPathError, Repo
+from git import GitCommandError, InvalidGitRepositoryError, NoSuchPathError, Repo
 
 from patchwise.docker import DockerManager
 from patchwise.patch_review.ai_review.ai_code_review import AiCodeReview
-from patchwise.patch_review.kernel_tree import init_kernel_tree
+from patchwise import PACKAGE_NAME
 
 # Pin the kernel HEAD so IFDEF_CASES line numbers and other expectations
 # stay stable as linux-next advances.
 PINNED_COMMIT = "43cfbdda5af60ffc6272a7b8c5c37d1d0a181ca9"
+LINUX_NEXT_URL = "https://git.kernel.org/pub/scm/linux/kernel/git/next/linux-next.git"
 
 
 def _clear_stale_index_lock(repo_path: Path) -> None:
@@ -69,11 +70,28 @@ def _checkout_pinned_commit(repo: Any) -> None:
 
 
 def _open_or_init_kernel_repo(repo_path: Path) -> Repo:
-    """Reuse an existing local kernel repo when present; fetch only on first setup."""
+    """Reuse the local kernel repo, fetching the pinned commit when it is absent.
+
+    Keyed on the commit rather than the repo: an interrupted first fetch leaves
+    a valid but empty repo behind, which would otherwise never be refetched.
+    """
     try:
-        return Repo(repo_path)
+        repo = Repo(repo_path)
     except (InvalidGitRepositoryError, NoSuchPathError):
-        return init_kernel_tree(repo_path)
+        repo_path.mkdir(parents=True, exist_ok=True)
+        repo = Repo.init(repo_path)
+    try:
+        repo.git.cat_file("-e", f"{PINNED_COMMIT}^{{commit}}")
+        return repo
+    except GitCommandError:
+        pass
+    if PACKAGE_NAME not in [remote.name for remote in repo.remotes]:
+        repo.create_remote(PACKAGE_NAME, LINUX_NEXT_URL)
+    # Shallow: the pinned commit plus its parent, which AiCodeReview diffs
+    # against. No timeout, since even that is a large download.
+    print(f"Fetching pinned kernel commit {PINNED_COMMIT[:12]}...", flush=True)
+    repo.git.fetch("--depth=2", PACKAGE_NAME, PINNED_COMMIT)
+    return repo
 
 
 @pytest.fixture(scope="session")
@@ -1053,7 +1071,7 @@ def test_bash_composes_a_pipeline(review: AiCodeReview) -> None:
 
 def test_get_subsystem_review_guide_is_cached(review: AiCodeReview) -> None:
     """The guide is read from disk once and served from cache thereafter."""
-    from patchwise.patch_review.ai_agent.agent import _load_subsystem_guide
+    from patchwise.patch_review.ai_review.review_prompts import _load_subsystem_guide
 
     _load_subsystem_guide.cache_clear()
     first = review.agent.dispatch_tool(
@@ -1069,3 +1087,26 @@ def test_get_subsystem_review_guide_is_cached(review: AiCodeReview) -> None:
     info = _load_subsystem_guide.cache_info()
     assert info.misses == 1, f"expected one disk read, got {info}"
     assert info.hits >= 1, f"expected a cache hit, got {info}"
+
+
+# ---------------------------------------------------------------------------
+# hard-coded review prompts (technical patterns, FP guide, subsystem index)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "loader, title",
+    [
+        ("get_technical_patterns", "Kernel Technical Patterns"),
+        ("get_false_positive_guide", "False Positive Guide"),
+        ("get_subsystem_index", "Subsystem Review Guide Index"),
+    ],
+)
+def test_hard_coded_review_prompts_load(loader: str, title: str) -> None:
+    """Each fixed prompt doc exists and loads under its section header."""
+    from patchwise.patch_review.ai_review import review_prompts
+
+    content = getattr(review_prompts, loader)()
+    header = f"## {title}:\n\n"
+    assert content.startswith(header), f"missing header: {content[:80]!r}"
+    assert content[len(header):].strip(), f"{loader} returned an empty doc"

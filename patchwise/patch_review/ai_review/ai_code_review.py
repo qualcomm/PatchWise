@@ -10,14 +10,15 @@ import time
 from collections import OrderedDict, defaultdict
 from functools import cached_property
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from patchwise import SANDBOX_PATH, __version__
-from patchwise.patch_review.ai_agent.agent import (
-    KERNEL_REVIEW_PROMPTS_PATH,
-    SUBSYSTEM_REVIEW_PROMPTS_PATH,
+from patchwise.patch_review.ai_agent.agent import build_system_message
+from patchwise.patch_review.ai_review.review_prompts import (
     _load_subsystem_guide,
-    build_system_message,
+    get_false_positive_guide,
+    get_subsystem_index,
+    get_technical_patterns,
 )
 from patchwise.patch_review.ai_agent.tool_definitions import NAVIGATION_TOOLS
 from patchwise.patch_review.decorators import register_llm_review, register_long_review
@@ -67,7 +68,6 @@ class AiCodeReview(AiReview):
     CRITIC_ITER_CAP = 10
     EXEC_ITER_CAP = 100
     FP_ITER_CAP = 50
-    CLEANUP_JSON_RETRIES = 5
 
     # Reviewer loads guides and streams findings; the filter records verdicts.
     EXEC_TOOLS = NAVIGATION_TOOLS + [
@@ -437,21 +437,15 @@ finding with record_verdict as you work through them.
 
     # ---- prompt-bundle loaders ---------------------------------------------
 
-    def _load_prompt_bundle(
-        self, docs: List[Dict[str, Any]], from_docker_container: bool = False
-    ) -> str:
-        """Concatenate a list of {name, path} docs into a bundle."""
+    def _load_prompt_bundle(self, docs: List[Dict[str, Any]]) -> str:
+        """Concatenate a list of {name, path} kernel docs into a bundle."""
         bundle = ""
         for doc in docs:
-            if from_docker_container:
-                content = self.docker_manager.read_file(str(doc["path"]))
-                # Older kernels predate some of these docs; skip what is absent
-                # rather than failing the whole review.
-                if content is False:
-                    continue
-            else:
-                with open(doc["path"], "r") as f:
-                    content = f.read()
+            content = self.docker_manager.read_file(str(doc["path"]))
+            # Older kernels predate some of these docs; skip what is absent
+            # rather than failing the whole review.
+            if content is False:
+                continue
             bundle += f"## {doc['name']}:\n\n{content}"
         return bundle
 
@@ -491,7 +485,7 @@ finding with record_verdict as you work through them.
                     ),
                 }
             )
-        return self._load_prompt_bundle(docs, from_docker_container=True)
+        return self._load_prompt_bundle(docs)
 
     def get_submitting_patches(self) -> str:
         """Load the kernel patch-submission conventions (commit message, tags)."""
@@ -505,40 +499,6 @@ finding with record_verdict as you work through them.
                     ),
                 },
             ],
-            from_docker_container=True,
-        )
-
-    def get_technical_patterns(self) -> str:
-        """Load the failure taxonomy used to seed the plan critic."""
-        return self._load_prompt_bundle(
-            [
-                {
-                    "name": "Kernel Technical Patterns",
-                    "path": KERNEL_REVIEW_PROMPTS_PATH / "technical-patterns.md",
-                },
-            ],
-        )
-
-    def get_false_positive_guide(self) -> str:
-        """Load the prove-or-drop rubric used by the false-positive filter."""
-        return self._load_prompt_bundle(
-            [
-                {
-                    "name": "False Positive Guide",
-                    "path": KERNEL_REVIEW_PROMPTS_PATH / "false-positive-guide.md",
-                },
-            ],
-        )
-
-    def get_subsystem_index(self) -> str:
-        """Load the subsystem review guide index."""
-        return self._load_prompt_bundle(
-            [
-                {
-                    "name": "Subsystem Review Guide Index",
-                    "path": SUBSYSTEM_REVIEW_PROMPTS_PATH / "subsystem.md",
-                },
-            ]
         )
 
     # per-phase system prompts
@@ -560,7 +520,7 @@ finding with record_verdict as you work through them.
         return (
             self.get_submitting_patches()
             + self.get_kernel_coding_style()
-            + self.get_technical_patterns()
+            + get_technical_patterns()
         )
 
     def _date_header(self) -> str:
@@ -602,7 +562,7 @@ finding with record_verdict as you work through them.
             self._system_prompt_header(),
             self._static_guides(),
             self.SUBSYSTEM_INDEX_BLOCK
-            + self.get_subsystem_index()
+            + get_subsystem_index()
             + self.CRITIC_INSTRUCTIONS,
         )
 
@@ -623,7 +583,7 @@ finding with record_verdict as you work through them.
             self._system_prompt_header(),
             self._static_guides(),
             self.SUBSYSTEM_INDEX_BLOCK
-            + self.get_subsystem_index()
+            + get_subsystem_index()
             + self.NAV_TOOLS_BLOCK
             + self.EXECUTION_INSTRUCTIONS
             + self.EXECUTION_METHOD_BLOCK
@@ -635,84 +595,8 @@ finding with record_verdict as you work through them.
             self._system_prompt_header(),
             self.NAV_TOOLS_BLOCK
             + self.FP_FILTER_INSTRUCTIONS
-            + self.get_false_positive_guide(),
+            + get_false_positive_guide(),
         )
-
-    # lenient JSON parsing
-
-    @staticmethod
-    def _extract_json(text: str) -> Optional[Any]:
-        """Lenient extraction of a JSON value from possibly-fenced model text.
-
-        Decodes at every '{' / '[' (raw_decode stops at the value's end, so a
-        code fence or trailing prose is ignored) and keeps the widest value.
-        Widest-wins means an object wrapping an array isn't mistaken for the
-        inner array, and a stray `{}`/`[]` in prose can't shadow the real
-        answer. Returns the value or None.
-        """
-        decoder = json.JSONDecoder()
-        best_span, best_val = -1, None
-        for m in re.finditer(r"[{\[]", text or ""):
-            try:
-                val, end = decoder.raw_decode(text, m.start())
-            except ValueError:
-                continue
-            if end - m.start() > best_span:
-                best_span, best_val = end - m.start(), val
-        return best_val
-
-    def _complete_until_json(
-        self,
-        messages: List[dict],
-        validate: Callable[[Any], bool],
-        corrective: str,
-    ) -> Optional[Any]:
-        """Complete until `_extract_json` yields a value that `validate` accepts,
-        or the retry cap is hit (then return None).
-        """
-        cap = max(1, self._cleanup_json_retries())
-        for attempt in range(1, cap + 1):
-            response = self.agent.completion_with_retry(
-                messages=messages, stream=False
-            )
-            message = response.choices[0].message
-            value = self._extract_json((message.content or "").strip())
-            if validate(value):
-                return value
-            self.logger.warning(
-                f"[cleanup] response failed validation "
-                f"(attempt {attempt}/{cap}); re-prompting."
-            )
-            if attempt < cap:
-                messages.append(message.model_dump())
-                messages.append({"role": "user", "content": corrective})
-        return None
-
-    def _finalize_json(self, messages: List[dict], raw: str, kind: str) -> Optional[Any]:
-        """Extract JSON from `raw`; on failure, one bounded repair re-prompt.
-
-        `messages` is the loop's (mutated) message history, reused so the repair
-        keeps context. No litellm `response_format`, no finalize tool.
-        """
-        data = self._extract_json(raw)
-        if data is not None:
-            return data
-        self.logger.warning(f"[plan] could not parse {kind}; attempting one repair.")
-        messages.append(
-            {
-                "role": "user",
-                "content": (
-                    f"Your previous response could not be parsed. Return ONLY the "
-                    f"{kind} as a single JSON value inside one ```json fence, with no "
-                    f"prose and no tool calls."
-                ),
-            }
-        )
-        response = self.agent.completion_with_retry(
-            messages=messages, stream=False
-        )
-        raw2 = response.choices[0].message.content or ""
-        return self._extract_json(raw2)
 
     @staticmethod
     def _reported_issue_count(text: str) -> Optional[int]:
@@ -747,14 +631,10 @@ finding with record_verdict as you work through them.
         raw = os.environ.get("PATCHWISE_FP_ITER_CAP")
         return int(raw) if raw and raw.isdigit() and int(raw) > 0 else self.FP_ITER_CAP
 
-    def _cleanup_json_retries(self) -> int:
-        raw = os.environ.get("PATCHWISE_CLEANUP_JSON_RETRIES")
-        return int(raw) if raw and raw.isdigit() and int(raw) > 0 else self.CLEANUP_JSON_RETRIES
-
     def _select_subsystem_guides(self) -> set[str]:
         """Ask a bash-only agent which subsystem guides apply to this change."""
         changed_files = list(self.commit.stats.files)
-        subsystem_index = self.get_subsystem_index()
+        subsystem_index = get_subsystem_index()
         messages = [
             {
                 "role": "system",
@@ -791,24 +671,29 @@ finding with record_verdict as you work through them.
             },
         ]
 
-        raw = self.agent.run_agent_loop(
+        self.agent.run_agent_loop(
             messages,
             force_tool_usage=False,
             max_iterations=self.SUBSYSTEM_SELECTOR_ITER_CAP,
             allowed_tools=["bash"],
             label="subsystem-selector",
         )
-        parsed = self._extract_json(raw)
-        requested = (
-            parsed.get("subsystem_guides") if isinstance(parsed, dict) else None
+        parsed = self.agent.complete_until_json(
+            messages,
+            validate=lambda v: isinstance(v, dict)
+            and isinstance(v.get("subsystem_guides"), list),
+            corrective=(
+                "Your response was not the expected JSON. Return ONLY "
+                '{"subsystem_guides": ["guide.md"]} inside one ```json fence.'
+            ),
         )
-        if not isinstance(requested, list):
+        if parsed is None:
             self.logger.warning(
                 "[preload] subsystem selector returned invalid JSON; loading no guides"
             )
             return set()
 
-        return {name for name in requested if isinstance(name, str)}
+        return {name for name in parsed["subsystem_guides"] if isinstance(name, str)}
 
     def _pregather_critic_docs(self) -> OrderedDict[str, str]:
         gathered: OrderedDict[str, str] = OrderedDict()
@@ -1013,32 +898,17 @@ finding with record_verdict as you work through them.
             "read_binding",
             "search_docs",
         ]
-        raw = self.agent.run_agent_loop(
+        self.agent.run_agent_loop(
             critic_messages,
             force_tool_usage=False,
             max_iterations=self._critic_iter_cap(),
             allowed_tools=allowed,
         )
-        verdict = self._extract_json(raw)
-        if not isinstance(verdict, dict):
-            # Resume the same conversation so the critic repairs with full context.
-            self.logger.warning("[plan] critic verdict unparseable; resuming for repair.")
-            critic_messages.append({
-                "role": "user",
-                "content": (
-                    "Your previous response could not be parsed as JSON. "
-                    "Return ONLY the critique as a single JSON object inside "
-                    "one ```json fence."
-                ),
-            })
-            raw2 = self.agent.run_agent_loop(
-                critic_messages,
-                force_tool_usage=False,
-                max_iterations=1,
-                allowed_tools=[],
-            )
-            verdict = self._extract_json(raw2)
-        if not isinstance(verdict, dict):
+        verdict = self.agent.complete_until_json(
+            critic_messages,
+            validate=lambda v: isinstance(v, dict),
+        )
+        if verdict is None:
             return {"material": False, "feedback": []}
         return verdict
 
@@ -1062,13 +932,20 @@ finding with record_verdict as you work through them.
         plan_messages.append(
             {"role": "user", "content": self.PLANNER_REVISE_TEMPLATE.format(feedback=fb_text)}
         )
-        raw = self.agent.run_agent_loop(
+        self.agent.run_agent_loop(
             plan_messages,
             force_tool_usage=False,
             use_tools=False,
         )
-        revised = self._finalize_json(plan_messages, raw, "revised unit list (a JSON array)")
-        return revised if isinstance(revised, list) and revised else None
+        return self.agent.complete_until_json(
+            plan_messages,
+            validate=lambda v: isinstance(v, list) and len(v) > 0,
+            corrective=(
+                "Your previous response could not be parsed. Return ONLY the "
+                "revised unit list as a non-empty JSON array inside one ```json "
+                "fence, with no prose."
+            ),
+        )
 
     def _plan_phase(self, shared_user: str, commit_text: str) -> Tuple[List[Dict[str, Any]], int, bool]:
         # Planner: split the diff into units, with no taxonomy/subsystem priors.
@@ -1079,13 +956,16 @@ finding with record_verdict as you work through them.
             build_system_message(*self._planner_system_prompt()),
             {"role": "user", "content": shared_user + self._diff_digest_block()},
         ]
-        raw = self.agent.run_agent_loop(
+        self.agent.run_agent_loop(
             plan_messages,
             force_tool_usage=False,
             use_tools=False,
         )
-        tasks = self._finalize_json(plan_messages, raw, "unit list (a JSON array)")
-        if not isinstance(tasks, list):
+        tasks = self.agent.complete_until_json(
+            plan_messages,
+            validate=lambda v: isinstance(v, list),
+        )
+        if tasks is None:
             tasks = []
         self.logger.debug(f"[plan] planner proposed {len(tasks)} unit(s).")
         events.emit(events.PLAN, tasks=tasks)
@@ -1341,7 +1221,7 @@ finding with record_verdict as you work through them.
         # Reset the verdicts file so a re-run in the same sandbox starts clean.
         verdicts_path = self.agent.verdicts_path_for("fp-filter")
         verdicts_path.unlink(missing_ok=True)
-        raw = self.agent.run_agent_loop(
+        self.agent.run_agent_loop(
             fp_messages,
             force_tool_usage=False,
             max_iterations=self._fp_iter_cap(),
@@ -1353,10 +1233,11 @@ finding with record_verdict as you work through them.
         # Note: This is fragile
         entries = self._load_verdicts(verdicts_path)
         if not entries:
-            parsed = self._extract_json(raw)
-            if not isinstance(parsed, list):
-                parsed = self._finalize_json(fp_messages, raw, "verdict array")
-            entries = [v for v in parsed if isinstance(v, dict)] if isinstance(parsed, list) else []
+            parsed = self.agent.complete_until_json(
+                fp_messages,
+                validate=lambda v: isinstance(v, list),
+            )
+            entries = [v for v in parsed or [] if isinstance(v, dict)]
         if not entries:
             # No verdicts at all: keep everything rather than risk dropping a real
             # defect. The cleanup pass still renders the raw findings.
@@ -1558,7 +1439,7 @@ finding with record_verdict as you work through them.
             review=text,
         )
         messages = [{"role": "user", "content": formatted_prompt}]
-        findings = self._complete_until_json(
+        findings = self.agent.complete_until_json(
             messages,
             validate=self._valid_cleanup_findings,
             corrective=(

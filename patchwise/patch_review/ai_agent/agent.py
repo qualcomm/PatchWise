@@ -9,8 +9,7 @@ import re
 import subprocess
 import time
 from collections import OrderedDict
-from functools import cache
-from typing import Any, Dict, List, Optional, Tuple, Set, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Set, Union
 from urllib.parse import unquote, urlparse
 import httpx
 import litellm
@@ -21,6 +20,10 @@ from pathlib import Path
 from patchwise import PACKAGE_NAME, SANDBOX_PATH
 from patchwise.docker import DockerManager
 from patchwise.patch_review.ai_agent.tool_definitions import TOOLS
+from patchwise.patch_review.ai_review.review_prompts import (
+    SUBSYSTEM_REVIEW_PROMPTS_PATH,
+    _load_subsystem_guide,
+)
 from patchwise.patch_review.ai_review.ts_cache import TsCache
 from patchwise.patch_review.ai_review.ts_indexer import TsIndex
 from patchwise.ui import events
@@ -68,29 +71,8 @@ def build_system_message(*segments: str) -> dict:
 # @retry binds max_retries at decoration time, so it must be a constant read at import.
 DEFAULT_MAX_API_RETRIES = _positive_int_env("PATCHWISE_MAX_API_RETRIES", 10)
 
-REVIEW_PROMPTS_PATH = (
-    Path(__file__).resolve().parents[3] / "thirdparty" / "review-prompts"
-)
-KERNEL_REVIEW_PROMPTS_PATH = REVIEW_PROMPTS_PATH / "kernel"
-SUBSYSTEM_REVIEW_PROMPTS_PATH = KERNEL_REVIEW_PROMPTS_PATH / "subsystem"
-
-
-@cache
-def _load_subsystem_guide(safe_name: str) -> Optional[str]:
-    """Read a subsystem guide's content, cached for the process lifetime.
-
-    The guides are immutable on disk, so the first read serves every later
-    call across reviews, phases, and critic rounds (the critic re-fetches the
-    same guide each round). Returns None when the guide does not exist.
-    """
-    if os.path.basename(safe_name) != safe_name or not safe_name.endswith(".md"):
-        return None
-    try:
-        with open(SUBSYSTEM_REVIEW_PROMPTS_PATH / safe_name, "r") as f:
-            return f.read()
-    except FileNotFoundError:
-        return None
-
+# Corrective re-prompts complete_until_json spends on validation errors
+AGENT_JSON_RETRIES = 5
 
 def uri_to_path(uri: str) -> str:
     """Convert a file:// URI to file path."""
@@ -441,11 +423,71 @@ class Agent:
         messages.append({"role": "user", "content": final_prompt})
         response = self.completion_with_retry(**completion_kwargs)
         msg = response.choices[0].message
+        messages.append(msg.model_dump())
         if msg.tool_calls:
             self._dispatch_tool_calls(msg.tool_calls, messages)
         content = msg.content or ""
         self._log_final_response(response, content)
         return content
+
+    # JSON replies
+
+    @staticmethod
+    def extract_json(text: str) -> Optional[Any]:
+        """Lenient extraction of a JSON value from possibly-fenced model text.
+
+        Decodes at every '{' / '[' (raw_decode stops at the value's end, so a
+        code fence or trailing prose is ignored) and keeps the widest value.
+        Widest-wins means an object wrapping an array isn't mistaken for the
+        inner array, and a stray `{}`/`[]` in prose can't shadow the real
+        answer. Returns the value or None.
+        """
+        decoder = json.JSONDecoder()
+        best_span, best_val = -1, None
+        for m in re.finditer(r"[{\[]", text or ""):
+            try:
+                val, end = decoder.raw_decode(text, m.start())
+            except ValueError:
+                continue
+            if end - m.start() > best_span:
+                best_span, best_val = end - m.start(), val
+        return best_val
+
+    def complete_until_json(
+        self,
+        messages: List[dict],
+        validate: Callable[[Any], bool],
+        corrective: str = (
+            "Your previous response could not be parsed. Return ONLY the "
+            "requested JSON value inside one ```json fence, with no prose and "
+            "no tool calls."
+        ),
+    ) -> Optional[Any]:
+        """Return the JSON value of the latest assistant reply in `messages`
+        once `validate` accepts it, or None after AGENT_JSON_RETRIES retires.
+
+        `messages` normally ends with the reply to check (run_agent_loop
+        appends its final message); when it ends with any other turn, a
+        completion is requested first.
+        """
+        for attempt in range(AGENT_JSON_RETRIES + 1):
+            if messages[-1].get("role") != "assistant":
+                response = self.completion_with_retry(
+                    messages=messages,
+                    stream=False,
+                    max_tokens=AGENT_MAX_OUTPUT_TOKENS,
+                )
+                messages.append(response.choices[0].message.model_dump())
+            value = self.extract_json(messages[-1].get("content") or "")
+            if validate(value):
+                return value
+            if attempt < AGENT_JSON_RETRIES:
+                self.logger.warning(
+                    f"[json] {self.current_label}: reply failed validation "
+                    f"(retry {attempt + 1}/{AGENT_JSON_RETRIES})."
+                )
+                messages.append({"role": "user", "content": corrective})
+        return None
 
     def _dispatch_tool_calls(self, tool_calls: list, messages: list[dict]) -> None:
         """Dispatch each requested tool call and append its result to messages."""
@@ -1633,10 +1675,9 @@ class Agent:
 
     def _tool_task_complete(self, id: str, result: str = "", note: str = "") -> dict:
         """Append one task-complete event to the per-phase tasks file. `result`
-        should be 'found' (record_finding was called for this task) or 'clean'
-        (nothing to report). The review reads the file back to detect any
-        task_add without a matching task_complete and, on incompleteness,
-        resumes the reviewer to finish those tasks."""
+        is a one-word outcome such as 'done', 'clean', 'found' or 'abandoned'.
+        task_list reads the file back so the model can see which tasks are
+        still open."""
         path = self.tasks_path_for(self.current_label or "unit")
         record = {"event": "complete", "id": id, "result": result, "note": note}
         with open(path, "a") as f:

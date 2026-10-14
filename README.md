@@ -205,7 +205,7 @@ flowchart TD
     A["Crashdump"] --> B["Engineer\n(root-cause from evidence)"]
     B -->|"1 root cause + 1 fix"| C["Maintainer\n(challenges the answer)"]
     C -->|refuted, budget remains| B
-    C -->|accepted / budget spent| D(["rca_report.md"])
+    C -->|accepted / budget spent| D(["rca_report_YYYYMMDD_HHMMSS_MICROS.md"])
 ```
 
 Each role draws from its own iteration/token budget (cumulative across resumes), overridable via env:
@@ -344,7 +344,7 @@ PatchWise merges [`patchwise/default_config.yaml`](patchwise/default_config.yaml
 ### Crashdump RCA Options (require `--rca`)
 
 - `--rca`: Root-cause a kernel crashdump folder instead of reviewing commits.
-- `--dump`: Path to the crashdump folder (must contain a dmesg/console log).
+- `--dump`: Local path to the crashdump folder (mount network shares first).
 
 The kernel tree is given with `--repo-path`; `--model`, `--provider`, `--additional-context`, and `--output-dir` are shared with the other modes.
 
