@@ -39,6 +39,8 @@ logger = logging.getLogger("patchwise.mail_handler.handler")
 KERNEL_TREE = os.path.join(SANDBOX_PATH, "kernel")
 
 BASE_COMMIT_RE = re.compile(r"(?m)^base-commit:\s*([0-9a-f]{40})\s*$")
+# "[PATCH 0/3]", "[RFC PATCH v2 00/12]": the cover letter is patch zero
+COVER_SUBJECT_RE = re.compile(r"^\[[^\]]*\b0+/\d+\]")
 PATCHWISE_SERIES_REF_PREFIX = "refs/patchwise/series"
 
 
@@ -269,7 +271,11 @@ def get_patch_series(
     for sibling in siblings:
         if subject_is_reply(sibling.get("Subject", "")):
             continue
-        if sibling.get("Message-Id") == in_reply_to:
+        # Without a cover letter, later patches reply to patch 1/N, which
+        # belongs in the series rather than being taken as the cover.
+        if sibling.get("Message-Id") == in_reply_to and COVER_SUBJECT_RE.match(
+            decode_header_value(sibling.get("Subject", ""))
+        ):
             cover = sibling
         else:
             patches.append(sibling)
