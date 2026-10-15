@@ -106,3 +106,61 @@ def test_format_series_context_lists_git_refs() -> None:
         f"{handler.PATCHWISE_SERIES_REF_PREFIX}/2 [PATCH 2/2] two"
         " <-- current patch under review"
     ) in context
+
+
+class _FakeMailClient:
+    def __init__(self, messages: list[EmailMessage]) -> None:
+        self._messages = messages
+
+    def fetch_patch_series(self, in_reply_to_id: str) -> list[EmailMessage]:
+        return [
+            msg
+            for msg in self._messages
+            if in_reply_to_id in (msg["Message-Id"], msg.get("In-Reply-To"))
+        ]
+
+
+def _series_message(
+    message_id: str, subject: str, minute: int, in_reply_to: Optional[str] = None
+) -> EmailMessage:
+    msg = _message(message_id, subject)
+    msg["Date"] = f"Mon, 12 Oct 2026 10:{minute:02d}:00 +0000"
+    if in_reply_to:
+        msg["In-Reply-To"] = in_reply_to
+    return msg
+
+
+def test_get_patch_series_with_cover_letter() -> None:
+    cover = _series_message("<cover@example.com>", "[PATCH 0/2] series", 0)
+    first = _series_message(
+        "<p1@example.com>", "[PATCH 1/2] one", 1, "<cover@example.com>"
+    )
+    second = _series_message(
+        "<p2@example.com>", "[PATCH 2/2] two", 2, "<cover@example.com>"
+    )
+
+    series, _, found_cover = handler.get_patch_series(
+        second, _FakeMailClient([cover, first, second])
+    )
+
+    assert found_cover is cover
+    assert series == [first, second]
+
+
+def test_get_patch_series_without_cover_letter_keeps_first_patch() -> None:
+    # git send-email without --cover-letter threads every later patch under 1/N
+    first = _series_message("<p1@example.com>", "[PATCH 1/3] one", 1)
+    second = _series_message(
+        "<p2@example.com>", "[PATCH 2/3] two", 2, "<p1@example.com>"
+    )
+    third = _series_message(
+        "<p3@example.com>", "[PATCH 3/3] three", 3, "<p1@example.com>"
+    )
+
+    series, base_commit, found_cover = handler.get_patch_series(
+        third, _FakeMailClient([first, second, third])
+    )
+
+    assert found_cover is None
+    assert base_commit is None
+    assert series == [first, second, third]
