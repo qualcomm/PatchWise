@@ -5,6 +5,7 @@ from email.message import EmailMessage
 from pathlib import Path
 from typing import Optional
 
+import pytest
 from git import Repo
 
 from patchwise.mail_handler import handler
@@ -164,3 +165,41 @@ def test_get_patch_series_without_cover_letter_keeps_first_patch() -> None:
     assert found_cover is None
     assert base_commit is None
     assert series == [first, second, third]
+
+
+@pytest.mark.parametrize(
+    "subject, is_cover",
+    [
+        ("[PATCH 0/3] series", True),
+        ("[RFC PATCH v2 00/12] series", True),
+        ("[PATCH net-next 0/5] series", True),
+        ("[PATCH 00/14 v2] series", True),
+        ("[PATCH RESEND 0/2] series", True),
+        ("[OE-core][wrynose][PATCH 0/3] series", True),
+        ("[PATCH 1/3] one", False),
+        ("[PATCH 10/14 v2] ten", False),
+        ("[OE-core][PATCH 1/3] one", False),
+        ("[PATCH] single", False),
+    ],
+)
+def test_cover_subject_re(subject: str, is_cover: bool) -> None:
+    assert bool(handler.COVER_SUBJECT_RE.match(subject)) is is_cover
+
+
+def test_get_patch_series_without_cover_letter_reads_base_commit_from_first_patch() -> (
+    None
+):
+    base = "0123456789abcdef0123456789abcdef01234567"
+    first = _series_message("<p1@example.com>", "[PATCH 1/2] one", 1)
+    first.set_content(f"patch body\n\nbase-commit: {base}\n")
+    second = _series_message(
+        "<p2@example.com>", "[PATCH 2/2] two", 2, "<p1@example.com>"
+    )
+
+    series, base_commit, found_cover = handler.get_patch_series(
+        second, _FakeMailClient([first, second])
+    )
+
+    assert found_cover is None
+    assert series == [first, second]
+    assert base_commit == base
