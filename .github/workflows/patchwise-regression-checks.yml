@@ -6,9 +6,10 @@ on:
   workflow_dispatch:
 
 jobs:
-  cli-help:
-    name: CLI help
-    runs-on: ubuntu-slim
+  regressions-check:
+    name: Regressions Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - name: Check out repository
@@ -35,3 +36,6 @@ jobs:
 
       - name: Run PatchWise help
         run: patchwise --help
+
+      - name: Run regression tests
+        run: python -m pytest tests/
