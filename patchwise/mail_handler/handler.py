@@ -67,13 +67,16 @@ def is_plain_text(message: EmailMessage) -> bool:
 
 
 def sent_to_list(message: EmailMessage, test: Callable[[str], bool]) -> bool:
-    for header in ["To", "Cc"]:
-        if not message.get(header):
-            continue
-        for address in decode_header_value(message.get(header)).split(","):
-            _, email = utils.parseaddr(address.strip())
-            if test(email):
-                return True
+    """True if *test* accepts any To/Cc address, passed to it lowercased."""
+    # getaddresses keeps a quoted display name containing a comma whole
+    headers = [
+        decode_header_value(value)
+        for header in ["To", "Cc"]
+        for value in message.get_all(header, [])
+    ]
+    for _, email in utils.getaddresses(headers):
+        if email and test(email.lower()):
+            return True
     return False
 
 
@@ -86,8 +89,8 @@ def find_deprecated_list(
     and was *not* also sent to its replacement.
     """
     for list_addr, info in deprecated_lists.items():
-        sent_to_dep = sent_to_list(msg, lambda addr: addr == list_addr)
-        sent_to_repl = sent_to_list(msg, lambda addr: addr == info.replacement)
+        sent_to_dep = sent_to_list(msg, lambda addr: addr == list_addr.lower())
+        sent_to_repl = sent_to_list(msg, lambda addr: addr == info.replacement.lower())
         if sent_to_dep and not sent_to_repl:
             return info
     return None
@@ -99,7 +102,8 @@ def should_ignore(msg: EmailMessage, config: MailConfig) -> bool:
         logger.info(f"Sender domain not accepted: {msg['From']}")
         return True
 
-    if not sent_to_list(msg, lambda addr: addr in config.accepted_lists):
+    accepted_lists = {address.lower() for address in config.accepted_lists}
+    if not sent_to_list(msg, lambda addr: addr in accepted_lists):
         logger.info(f"Not sent to any of the accepted lists: {msg['To']}")
         return True
 
