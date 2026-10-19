@@ -39,6 +39,18 @@ logger = logging.getLogger("patchwise.mail_handler.handler")
 KERNEL_TREE = os.path.join(SANDBOX_PATH, "kernel")
 
 BASE_COMMIT_RE = re.compile(r"(?m)^base-commit:\s*([0-9a-f]{40})\s*$")
+# Cover-letter subjects use patch number 0/N. They may include:
+# - Additional list prefixes: [OE-core][wrynose]
+# - Version tags before or after the number: [PATCH v2 0/3] or [PATCH 00/14 v2]
+COVER_SUBJECT_RE = re.compile(
+    r"""
+    ^                           # Start of the subject line
+    (?:\[[^\]]*\]\s*)*          # Optional prefixes, such as [OE-core]
+    \[[^\]]*\b0+/\d+            # Cover marker, such as `[PATCH v2 0/3` or `[PATCH 00/14`
+    [^\]]*\]                    # Optional suffix, such as v2 or RESEND, and closing ]
+    """,
+    re.MULTILINE | re.VERBOSE,
+)
 PATCHWISE_SERIES_REF_PREFIX = "refs/patchwise/series"
 
 
@@ -269,16 +281,22 @@ def get_patch_series(
     for sibling in siblings:
         if subject_is_reply(sibling.get("Subject", "")):
             continue
-        if sibling.get("Message-Id") == in_reply_to:
+        # Without a cover letter, later patches reply to patch 1/N, which
+        # belongs in the series rather than being taken as the cover.
+        if sibling.get("Message-Id") == in_reply_to and COVER_SUBJECT_RE.match(
+            decode_header_value(sibling.get("Subject", ""))
+        ):
             cover = sibling
         else:
             patches.append(sibling)
 
     patches.sort(key=lambda m: utils.parsedate_to_datetime(m["Date"]))
 
+    # Without a cover letter, base-commit is in the first patch
     base_commit: Optional[str] = None
-    if cover:
-        match = BASE_COMMIT_RE.search(_decode_body(cover))
+    base_commit_source = cover or (patches[0] if patches else None)
+    if base_commit_source:
+        match = BASE_COMMIT_RE.search(_decode_body(base_commit_source))
         if match:
             base_commit = match.group(1)
 
