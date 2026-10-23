@@ -64,13 +64,11 @@ class PatchReview(abc.ABC):
 
         # Initialize shared build volume once using base container
         if not DockerManager.build_volume_initialized:
-            DockerManager.initialize_shared_build_volume(
-                mount_root, self.commit.hexsha
-            )
+            DockerManager.initialize_shared_build_volume(mount_root, self.commit.hexsha)
             DockerManager.build_volume_initialized = True
 
         # Start container with shared volume
-        self.docker_manager.start_container_with_shared_volume()
+        self.docker_manager.start_container()
 
         self.setup()
 

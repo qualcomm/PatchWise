@@ -56,17 +56,4 @@ RUN mkdir /home/patchwise/build && chown -R patchwise:patchwise /home/patchwise/
 RUN python3 -m venv /home/patchwise/.venv
 ENV PATH="/home/patchwise/.venv/bin:$PATH"
 
-# Create initialization script for shared build directory
-COPY <<EOF /home/patchwise/init-build-dir.sh
-#!/bin/bash
-set -e
-echo "Initializing shared build directory..."
-mkdir -p /shared/build
-chown -R patchwise:patchwise /shared/build
-chmod -R 755 /shared/build
-echo "Build directory initialized successfully"
-EOF
-
-RUN chmod +x /home/patchwise/init-build-dir.sh
-
 USER patchwise

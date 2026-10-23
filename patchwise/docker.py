@@ -43,6 +43,9 @@ class DockerManager:
     # Class-level tracking for initialization
     build_volume_initialized = False
     _build_volume_name = "patchwise-shared-build"
+    sandbox_path = Path("/home") / PACKAGE_NAME
+    build_dir = sandbox_path / "build"
+    kernel_dir = sandbox_path / "kernel"
 
     # Nothing we run in a container needs network (packages are installed at image
     # build time), and the agent runs model-composed shell commands over an
@@ -63,7 +66,6 @@ class DockerManager:
         repo_path: Path,
         commit_sha: str,
         git_subdir: str = "",
-        readonly_mounts: Optional[dict[Path, str]] = None,
     ):
         self.logger = logging.getLogger(
             f"{PACKAGE_NAME}.{self.__class__.__name__.lower()}"
@@ -77,11 +79,7 @@ class DockerManager:
         # kernel_platform --project common`). Empty => the mount root is the git
         # tree (the common case), so existing callers are unchanged.
         self.git_subdir = (git_subdir or "").strip("/")
-        self.sandbox_path = Path("/home") / PACKAGE_NAME
-        self.build_dir = self.sandbox_path / "build"
-        self.kernel_dir = self.sandbox_path / "kernel"
         self._kernel_overlay_volume: Optional[str] = None
-        self.readonly_mounts = readonly_mounts or {}
         require_workspace_root(str(self.repo_path))
         self._repo_managed = is_repo_managed(str(self.repo_path))
 
@@ -124,7 +122,7 @@ class DockerManager:
             subprocess.run(["docker", "volume", "rm", "-f", vol], capture_output=True)
 
         # Create the backing volume that will hold upper/ and work/.
-        self.logger.info(
+        self.logger.debug(
             f"Creating kernel overlay backing volume '{backing_volume}' "
             f"for {self.container_name}..."
         )
@@ -174,7 +172,7 @@ class DockerManager:
         upper = f"{backing_mountpoint}/upper"
         work = f"{backing_mountpoint}/work"
 
-        self.logger.info(
+        self.logger.debug(
             f"Creating kernel overlay volume '{volume_name}' for {self.container_name}..."
         )
         subprocess.run(
@@ -195,7 +193,7 @@ class DockerManager:
             check=True,
             capture_output=True,
         )
-        self.logger.info(f"Kernel overlay volume '{volume_name}' created.")
+        self.logger.debug(f"Kernel overlay volume '{volume_name}' created.")
         return volume_name
 
     def _cleanup_kernel_overlay(self) -> None:
@@ -264,8 +262,13 @@ class DockerManager:
                 f"Tool-specific image {self.image_tag} built successfully."
             )
 
-    def start_container(self, build_path: Path) -> None:
-        """Legacy method for backward compatibility. Use start_container_with_shared_volume instead."""
+    def _start_container(
+        self,
+        mounts: list[str],
+        *,
+        reset_tree: bool = True,
+    ) -> None:
+        """Start a container and run the common post-start preparation."""
         try:
             self._kernel_overlay_volume = self._setup_kernel_overlay()
         except subprocess.CalledProcessError as e:
@@ -281,6 +284,10 @@ class DockerManager:
             ["docker", "rm", "-f", self.container_name],
             capture_output=True,
         )
+        overlay = self._kernel_overlay_volume
+        if overlay is None:
+            raise RuntimeError("kernel overlay volume was not created")
+        mounts = [*mounts, f"{overlay}:{self.kernel_dir}"]
         args = [
             "docker",
             "run",
@@ -288,18 +295,11 @@ class DockerManager:
             "--name",
             self.container_name,
             *self._NETWORK_ARGS,
-            "-v",
-            f"{build_path}:{self.build_dir}",
-            "-v",
-            f"{self._kernel_overlay_volume}:{self.kernel_dir}",
-            self.image_tag,
-            "tail",
-            "-f",
-            "/dev/null",
         ]
-        self.logger.info(
-            f"Starting container {self.container_name} with args {' '.join(args)}..."
-        )
+        for mount in mounts:
+            args += ["-v", mount]
+        args += [self.image_tag, "tail", "-f", "/dev/null"]
+        self.logger.info(f"Starting container {self.container_name}...")
         try:
             subprocess.run(
                 args,
@@ -324,13 +324,44 @@ class DockerManager:
             raise
 
         try:
-            self._prepare_kernel_tree()
+            self._prepare_kernel_tree(reset_tree=reset_tree)
         except subprocess.CalledProcessError as e:
             self.logger.error(
                 f"Failed to prepare kernel tree at {self.commit_sha}: {e}\nstderr: {e.stderr}"
             )
             self._cleanup_kernel_overlay()
             raise
+
+    def start_container(
+        self,
+        mounts: dict[Path, str] = {},
+        *,
+        mount_shared_build: bool = True,
+        reset_tree: bool = True,
+    ) -> None:
+        """Start a container with caller-selected mounts.
+
+        Mount destinations may include Docker options, such as ``:ro``.
+        """
+        docker_mounts = []
+        if mount_shared_build:
+            docker_mounts.append(f"{self._build_volume_name}:{self.build_dir}")
+        docker_mounts.extend(f"{host}:{dest}" for host, dest in mounts.items())
+
+        # Don't reset repo-managed trees; simply assume review-ready
+        if self._repo_managed:
+            reset_tree = False
+        self._start_container(docker_mounts, reset_tree=reset_tree)
+
+        if mount_shared_build:
+            try:
+                self._fix_build_directory_permissions()
+            except subprocess.CalledProcessError as e:
+                self.logger.error(
+                    f"Failed to fix build directory permissions: {e}\nstderr: {e.stderr}"
+                )
+                self._cleanup_kernel_overlay()
+                raise
 
     def run_command(
         self, command: list[str], cwd: Optional[str], **kwargs: Any
@@ -507,13 +538,13 @@ class DockerManager:
             return
         except subprocess.CalledProcessError:
             # Volume doesn't exist, create it
-            logger.info(f"Creating shared build volume {cls._build_volume_name}...")
+            logger.debug(f"Creating shared build volume {cls._build_volume_name}...")
             subprocess.run(
                 ["docker", "volume", "create", cls._build_volume_name],
                 check=True,
                 capture_output=True,
             )
-            logger.info(f"Volume {cls._build_volume_name} created successfully.")
+            logger.debug(f"Volume {cls._build_volume_name} created successfully.")
 
     @classmethod
     def initialize_shared_build_volume(
@@ -526,7 +557,7 @@ class DockerManager:
             logger.debug("Build volume already initialized, skipping.")
             return
 
-        logger.info("Initializing shared build volume...")
+        logger.debug("Initializing shared build volume...")
 
         # Ensure the volume exists
         cls.create_shared_build_volume()
@@ -546,7 +577,7 @@ class DockerManager:
                     init_container_name,
                     *cls._NETWORK_ARGS,
                     "-v",
-                    f"{cls._build_volume_name}:/shared/build",
+                    f"{cls._build_volume_name}:{cls.build_dir}",
                     base_image_tag,
                     "tail",
                     "-f",
@@ -570,9 +601,9 @@ class DockerManager:
                     (
                         "set -e; "
                         "echo 'Initializing shared build directory...'; "
-                        "mkdir -p /shared/build; "
-                        "chown -R patchwise:patchwise /shared/build; "
-                        "chmod -R 755 /shared/build; "
+                        f"mkdir -p {cls.build_dir}; "
+                        f"chown -R patchwise:patchwise {cls.build_dir}; "
+                        f"chmod -R 755 {cls.build_dir}; "
                         "echo 'Build directory initialized successfully'"
                     ),
                 ],
@@ -580,7 +611,7 @@ class DockerManager:
                 capture_output=True,
             )
 
-            logger.info("Shared build volume initialized successfully.")
+            logger.debug("Shared build volume initialized successfully.")
             cls.build_volume_initialized = True
 
         finally:
@@ -637,7 +668,7 @@ class DockerManager:
                 cls.ts_cache_initialized = True
                 return
             # Exists but stopped — restart it rather than recreate (name is taken).
-            logger.info(
+            logger.debug(
                 f"Restarting stopped ts-cache container {cls._ts_cache_container}..."
             )
             subprocess.run(
@@ -649,7 +680,7 @@ class DockerManager:
             cls.ts_cache_initialized = True
             return
 
-        logger.info(f"Starting ts-cache container {cls._ts_cache_container}...")
+        logger.debug(f"Starting ts-cache container {cls._ts_cache_container}...")
         host, port = redis_address()
         subprocess.run(
             [
@@ -677,7 +708,7 @@ class DockerManager:
             capture_output=True,
         )
         cls._wait_ts_cache_ready()
-        logger.info(f"ts-cache container {cls._ts_cache_container} started.")
+        logger.debug(f"ts-cache container {cls._ts_cache_container} started.")
         cls.ts_cache_initialized = True
 
     @classmethod
@@ -700,142 +731,34 @@ class DockerManager:
                 )
             time.sleep(1)
 
-    def start_container_with_shared_volume(self) -> None:
-        """Start container with the shared build volume instead of bind mount."""
-        try:
-            self._kernel_overlay_volume = self._setup_kernel_overlay()
-        except subprocess.CalledProcessError as e:
-            self.logger.error(
-                f"Failed to create kernel overlay volume: {e}\nstderr:{e.stderr}"
-            )
-            raise
-
-        # Always remove any existing container (running or stopped) with this
-        # name and start fresh, so a stale container from a crashed run can
-        # never be reused or block `docker run` on the name.
-        subprocess.run(
-            ["docker", "rm", "-f", self.container_name],
-            capture_output=True,
-        )
-        args = [
-            "docker",
-            "run",
-            "-d",
-            "--name",
-            self.container_name,
-            *self._NETWORK_ARGS,
-            "-v",
-            f"{self._build_volume_name}:/shared/build",
-            "-v",
-            f"{self._build_volume_name}:{self.build_dir}",
-            "-v",
-            f"{self._kernel_overlay_volume}:{self.kernel_dir}",
-        ]
-        for host, dst in self.readonly_mounts.items():
-            args += ["-v", f"{host}:{dst}:ro"]
-        args += [
-            self.image_tag,
-            "tail",
-            "-f",
-            "/dev/null",
-        ]
-        self.logger.info(
-            f"Starting container {self.container_name} with shared volume..."
-        )
-        try:
-            subprocess.run(
-                args,
-                check=True,
-                capture_output=True,
-            )
-        except subprocess.CalledProcessError as e:
-            self.logger.error(
-                f"Failed to start container {self.container_name}: {e}\nstderr: {e.stderr}"
-            )
-            self._cleanup_kernel_overlay()
-            raise
-        self.logger.info(f"Container {self.container_name} started successfully.")
-
-        # Ensure the specific build directory has proper permissions
-        try:
-            self._fix_build_directory_permissions()
-        except subprocess.CalledProcessError as e:
-            self.logger.error(
-                f"Failed to fix build directory permissions: {e}\nstderr: {e.stderr}"
-            )
-            self._cleanup_kernel_overlay()
-            raise
-
-        try:
-            self._configure_git_identity()
-        except subprocess.CalledProcessError as e:
-            self.logger.error(
-                f"Failed to configure git identity: {e}\nstderr: {e.stderr}"
-            )
-            self._cleanup_kernel_overlay()
-            raise
-
-        try:
-            self._prepare_kernel_tree()
-        except subprocess.CalledProcessError as e:
-            self.logger.error(
-                f"Failed to prepare kernel tree at {self.commit_sha}: {e}\nstderr: {e.stderr}"
-            )
-            self._cleanup_kernel_overlay()
-            raise
-
-    def _prepare_kernel_tree(self) -> None:
-        """Configure git trust and, for standalone (upstream) kernels, reset the
-        tree to the commit under review.
-
-        Skipped for downstream repo(1) workspaces: the caller already checked out
-        the change and only the read-only AiCodeReview runs. (The tree is an
-        overlay, so reset/clean/chown never reach the caller's on-disk tree.)"""
+    def _prepare_kernel_tree(self, *, reset_tree: bool = True) -> None:
+        """Configure Git trust and optionally reset the tree under review."""
         self.logger.debug(
             f"Preparing kernel tree at {self.commit_sha} in {self.container_name}..."
         )
+
+        # Trust all repositories for Git commands in the container
         subprocess.run(
             [
                 "docker",
                 "exec",
                 "--user",
                 "root",
-                "--workdir",
-                self._git_workdir,
                 self.container_name,
                 "git",
                 "config",
-                "--global",
+                "--system",
                 "--add",
                 "safe.directory",
-                self._git_workdir,
+                "*",
             ],
             check=True,
             capture_output=True,
         )
 
-        # Downstream: the tree is left as mounted (foreign-owned, never chowned)
-        # and git runs as the agent user across projects, so trust every store.
-        if self._repo_managed:
-            subprocess.run(
-                [
-                    "docker",
-                    "exec",
-                    "--user",
-                    "root",
-                    self.container_name,
-                    "git",
-                    "config",
-                    "--system",
-                    "--add",
-                    "safe.directory",
-                    "*",
-                ],
-                check=True,
-                capture_output=True,
-            )
+        if not reset_tree:
             self.logger.debug(
-                "repo-managed workspace: leaving tree as mounted (read-only)."
+                "leaving the kernel tree as mounted without resetting it."
             )
             return
 
@@ -872,11 +795,8 @@ class DockerManager:
             check=True,
             capture_output=True,
         )
-        # Give the agent ownership of the git tree (where git wrote during reset).
-        # Only the project subtree is chown'd, not the whole mount: when repo_path
-        # is a broad workspace, recursively chowning every sibling project would be
-        # huge and pointless — kernel source is world-readable, so the agent reads
-        # siblings (e.g. out-of-tree modules) without owning them.
+        # Give the agent ownership of the git tree (where git wrote during reset)
+        # TODO: Does resetting outside the container in --mail mode avoid this?
         subprocess.run(
             [
                 "docker",
@@ -937,7 +857,7 @@ class DockerManager:
                 self.container_name,
                 "mkdir",
                 "-p",
-                f"/shared/build/{self.commit_sha}",
+                str(self.build_dir / self.commit_sha),
             ],
             check=True,
             capture_output=True,
@@ -953,7 +873,7 @@ class DockerManager:
                 "chown",
                 "-R",
                 "patchwise:patchwise",
-                f"/shared/build/{self.commit_sha}",
+                str(self.build_dir / self.commit_sha),
             ],
             check=True,
             capture_output=True,
@@ -969,7 +889,7 @@ class DockerManager:
                 "chmod",
                 "-R",
                 "755",
-                f"/shared/build/{self.commit_sha}",
+                str(self.build_dir / self.commit_sha),
             ],
             check=True,
             capture_output=True,

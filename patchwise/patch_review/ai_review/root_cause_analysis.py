@@ -3,9 +3,9 @@
 
 """Root-cause analysis of Linux kernel crashdumps.
 
-Input is a crashdump folder (dmesg++); output is a timestamped RCA report
-with exactly one root cause and one fix as a kernel-source diff. The
-pipeline is deliberately just two roles:
+Input is a crashdump folder (dmesg++) and, optionally, the matching kernel
+build output; output is a timestamped RCA report with exactly one root cause
+and one fix as a kernel-source diff. The pipeline is deliberately just two roles:
 
     engineer  <->  maintainer  ->  report
 
@@ -68,6 +68,7 @@ _DOCKERFILES_PATH = PACKAGE_PATH / "dockerfiles"
 
 logger = logging.getLogger("patchwise.rootcauseanalysis")
 
+BUILD_MOUNT_POINT = "/build"
 DUMP_MOUNT_POINT = "/dump"
 # Writable scratch directory in the container (see CrashdumpAgent.Dockerfile)
 WORK_DIR = "/work"
@@ -112,10 +113,10 @@ class RootCauseAnalysis:
     TOOLS_BLOCK = f"""
 ## Tools
 
-The crashdump folder mounted read-only at `{DUMP_MOUNT_POINT}` is often on
-a slow network share: each file open and directory listing is a round-trip,
-and large memory images (multi-GB `.BIN` files) take minutes to read in
-full. Explore it with `bash_timeout` using absolute paths:
+The read-only crashdump and build artifacts folders are often on a slow
+network share: each file open and directory listing is a round-trip, and
+large memory images (multi-GB `.BIN` files) take minutes to read in full.
+Explore it with `bash_timeout` using absolute paths:
 
 - Do as much as possible in one call: batch related steps rather than many
   small calls.
@@ -129,9 +130,8 @@ full. Explore it with `bash_timeout` using absolute paths:
   (Ex: `od -A x -t x1z -j <off> -N <len>`, `strings -n 8 <file> | rg ...`).
 - Write decompressed or derived files under `{WORK_DIR}` (writable).
 
-Binaries in the dump (`vmlinux`, `*.ko`, memory cores) may target a
-different architecture. Check with `file` first, then use
-architecture-neutral tools:
+Binaries (`vmlinux`, `*.ko`, memory cores) may target a different
+architecture. Check with `file` first, then use architecture-neutral tools:
 
 - Addresses to source lines:
   - `llvm-addr2line`
@@ -153,9 +153,14 @@ default cwd).
     PROMPT_TEMPLATE = """
 # Crashdump under analysis
 
-## Crashdump folder: `{folder}` (read-only)
+## Crashdump folder: `{dump_dir}` (read-only)
 
+{build_block}
 {additional_context}
+"""
+
+    BUILD_BLOCK_TEMPLATE = """
+## Kernel build artifacts folder: `{build_dir}` (read-only)
 """
 
     ADDITIONAL_CONTEXT_TEMPLATE = """
@@ -333,6 +338,7 @@ site. Then end your turn with your final root cause, mechanism, and fix
         crashdump_dir: str,
         additional_context: str = "",
         repo_path: Optional[str] = None,
+        build_dir: Optional[str] = None,
     ):
         self.logger = logger
         self.crashdump_dir = Path(crashdump_dir).resolve()
@@ -340,6 +346,9 @@ site. Then end your turn with your final root cause, mechanism, and fix
             raise NotADirectoryError(
                 f"crashdump path is not a directory: {crashdump_dir}"
             )
+        self.build_dir = Path(build_dir).resolve() if build_dir else None
+        if self.build_dir is not None and not self.build_dir.is_dir():
+            raise NotADirectoryError(f"build path is not a directory: {build_dir}")
         if not repo_path:
             raise ValueError(
                 "repo_path is required: the engineer navigates the kernel source "
@@ -355,8 +364,8 @@ site. Then end your turn with your final root cause, mechanism, and fix
     def _build_docker_manager(self, repo_path: str) -> DockerManager:
         """Stand up a kernel container over `repo_path` (mirrors PatchReview's docker setup).
 
-        The crashdump folder is bind-mounted read-only at DUMP_MOUNT_POINT;
-        the agent reads it with `bash_timeout` in the container, never host-side."""
+        The crashdump folder and optional build output are bind-mounted
+        read-only at DUMP_MOUNT_POINT and BUILD_MOUNT_POINT."""
 
         # Doesn't matter what we pass as the commit - it is just a workaround
         self._repo_managed = is_repo_managed(repo_path)
@@ -384,7 +393,6 @@ site. Then end your turn with your final root cause, mechanism, and fix
             repo_path=root,
             commit_sha=commit_sha,
             git_subdir=git_subdir,
-            readonly_mounts={self.crashdump_dir: DUMP_MOUNT_POINT},
         )
         self.logger.info(
             "[docker] building base + crashdump image, starting kernel container "
@@ -393,11 +401,11 @@ site. Then end your turn with your final root cause, mechanism, and fix
         dm.build_image(dockerfile)
         # Register for the atexit/signal container cleanup in patch_review
         CONTAINERS_BUILT[container_name] = dm
-        if not DockerManager.build_volume_initialized:
-            DockerManager.initialize_shared_build_volume(Path(repo_path), commit_sha)
-            DockerManager.build_volume_initialized = True
         DockerManager.ensure_ts_cache_service()
-        dm.start_container_with_shared_volume()
+        mounts = {self.crashdump_dir: f"{DUMP_MOUNT_POINT}:ro"}
+        if self.build_dir is not None:
+            mounts[self.build_dir] = f"{BUILD_MOUNT_POINT}:ro"
+        dm.start_container(mounts, mount_shared_build=False, reset_tree=False)
         return dm
 
     # per-role system prompts
@@ -496,9 +504,7 @@ site. Then end your turn with your final root cause, mechanism, and fix
             maintainer_messages.append(
                 {
                     "role": "user",
-                    "content": self.MAINTAINER_USER_TEMPLATE.format(
-                        folder=DUMP_MOUNT_POINT, findings=answer
-                    ),
+                    "content": self.MAINTAINER_USER_TEMPLATE.format(findings=answer),
                 }
             )
         else:
@@ -758,7 +764,12 @@ site. Then end your turn with your final root cause, mechanism, and fix
         layout_note = "" if self._repo_managed else project_layout_note(self.git_subdir)
         additional_context = layout_note + repo_project_note(self.repo_path) + ctx_block
         shared_user = self.PROMPT_TEMPLATE.format(
-            folder=DUMP_MOUNT_POINT,
+            dump_dir=DUMP_MOUNT_POINT,
+            build_block=(
+                self.BUILD_BLOCK_TEMPLATE.format(build_dir=BUILD_MOUNT_POINT)
+                if self.build_dir is not None
+                else ""
+            ),
             additional_context=additional_context,
         )
         self._dump("prompt.md", shared_user)
@@ -848,6 +859,15 @@ def add_rca_arguments(group: argparse._ArgumentGroup) -> None:
         metavar="<path>",
         help="Path to the crashdump folder (must contain a dmesg/console log).",
     )
+    group.add_argument(
+        "--build",
+        default="",
+        metavar="<path>",
+        help=(
+            "Path to the kernel build output (for example, containing vmlinux); "
+            "it is bind-mounted read-only in the RCA container."
+        ),
+    )
 
 
 def run_rca_mode(args: argparse.Namespace) -> None:
@@ -856,6 +876,7 @@ def run_rca_mode(args: argparse.Namespace) -> None:
         crashdump_dir=args.dump or None,
         additional_context=args.additional_context,
         repo_path=args.repo_path,
+        build_dir=args.build or None,
     )
     report = rca.run()
     out_dir = Path(args.output_dir)
