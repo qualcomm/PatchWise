@@ -171,10 +171,13 @@ Artifacts land in `SANDBOX_PATH`:
 
 Root-cause a kernel crashdump instead of reviewing a patch. Point `--dump` at a
 folder containing the dmesg/console log (and any parser output), and `--repo-path`
-at the kernel source tree the crash came from:
+at the kernel source tree the crash came from. Optionally pass `--build` with the
+kernel build output (including `vmlinux` and any modules); supplied dump/build
+directories are bind-mounted read-only into the RCA container:
 
 ```bash
-patchwise --rca --dump <crashdump-folder> --repo-path <kernel-source>
+patchwise --rca --dump <crashdump-folder> --build <kernel-build-output> \
+  --repo-path <kernel-source>
 ```
 
 `--repo-path` can be a standalone upstream `.git` kernel tree or a repo(1)-managed
@@ -187,7 +190,8 @@ unstated assumptions, symptom-only fixes, and incorrect causes — until it hold
 Give the engineer a head start with any debugging you've already done:
 
 ```bash
-patchwise --rca --dump <crashdump-folder> --repo-path <kernel-source> \
+patchwise --rca --dump <crashdump-folder> --build <kernel-build-output> \
+  --repo-path <kernel-source> \
   --additional-context "perf_fuzzer + cpu-hotplug + stress-ng reproduces this"
 ```
 
@@ -345,6 +349,7 @@ PatchWise merges [`patchwise/default_config.yaml`](patchwise/default_config.yaml
 
 - `--rca`: Root-cause a kernel crashdump folder instead of reviewing commits.
 - `--dump`: Local path to the crashdump folder (mount network shares first).
+- `--build`: Optional local path to the kernel build output, including `vmlinux` and modules.
 
 The kernel tree is given with `--repo-path`; `--model`, `--provider`, `--additional-context`, and `--output-dir` are shared with the other modes.
 
