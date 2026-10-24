@@ -24,6 +24,7 @@ import logging
 import os
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Dict, Optional
 
 TESTS_DIR = Path(__file__).resolve().parent.parent
@@ -38,6 +39,7 @@ from patchwise.docker import DockerManager
 from patchwise.patch_review.ai_agent.tool_definitions import BASH_MAX_TIMEOUT
 from patchwise.patch_review.ai_review.ai_code_review import AiCodeReview
 from patchwise import PACKAGE_NAME
+from patchwise.ui import events
 
 # Pin the kernel HEAD so IFDEF_CASES line numbers and other expectations
 # stay stable as linux-next advances.
@@ -1054,6 +1056,37 @@ def test_bash_timeout_clamps_the_requested_timeout(
     review.agent.dispatch_tool("bash_timeout", {"command": "true", "timeout": 0})
 
     assert seen == [BASH_MAX_TIMEOUT, 1]
+
+
+def test_loop_without_tools_reports_a_single_iteration(
+    review: AiCodeReview, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A tool-less loop ends on its first reply, so its iteration cap is 1."""
+    reply = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                finish_reason="stop",
+                message=SimpleNamespace(
+                    content="done", tool_calls=None, model_dump=lambda: {}
+                ),
+            )
+        ],
+        usage=None,
+    )
+    monkeypatch.setattr(review.agent, "completion_with_retry", lambda **kw: reply)
+    caps = []
+
+    def listener(kind: str, fields: dict) -> None:
+        if kind == events.ITERATION:
+            caps.append((fields["n"], fields["cap"]))
+
+    events.subscribe(listener)
+    try:
+        review.agent.run_agent_loop([], max_iterations=50, use_tools=False)
+    finally:
+        events.unsubscribe(listener)
+
+    assert caps == [(1, 1)]
 
 
 def test_bash_closes_stdin(review: AiCodeReview) -> None:
