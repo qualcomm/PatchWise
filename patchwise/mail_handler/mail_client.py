@@ -7,7 +7,8 @@ import email.policy
 from email.message import EmailMessage
 import logging
 import os
-from smtplib import SMTP, SMTP_SSL
+import ssl
+from smtplib import SMTP, SMTP_SSL, SMTPConnectError, SMTPServerDisconnected
 import imaplib
 from typing import List, Optional
 from imapclient import FLAGGED, IMAPClient
@@ -20,7 +21,21 @@ from patchwise.utils.decorators import retry
 
 logger = logging.getLogger("patchwise.mail_handler.mail_client")
 
-_MAX_IMAP_RETRIES = 10
+_MAX_RETRIES = 10
+
+_IMAP_ERRORS = (imaplib.IMAP4.abort, imaplib.IMAP4.error, OSError, ConnectionError)
+# Connection-level failures. Excludes IMAP4.error so a LoginError (bad
+# credentials) fails immediately instead of being retried.
+_IMAP_CONNECT_ERRORS = (imaplib.IMAP4.abort, OSError)
+# Transient transport failures only. Not plain OSError: SMTPException
+# subclasses it, so auth/recipient errors would be retried pointlessly.
+_SMTP_ERRORS = (
+    SMTPServerDisconnected,
+    SMTPConnectError,
+    ConnectionError,
+    TimeoutError,
+    ssl.SSLError,
+)
 
 
 class MailClient:
@@ -39,7 +54,12 @@ class MailClient:
         self._send = send
         self._imap: IMAPClient
 
-        self._imap_connect()
+        self._imap_open()
+
+    @retry(max_retries=_MAX_RETRIES, exceptions=_IMAP_CONNECT_ERRORS)
+    def _imap_open(self) -> None:
+        """Connect with backoff; each attempt tears down any partial session."""
+        self._imap_reconnect()
 
     def _imap_connect(self) -> None:
         """Establish a fresh IMAP connection and select INBOX."""
@@ -59,12 +79,35 @@ class MailClient:
         self._imap_connect()
 
     def _imap_noop_or_reconnect(self, *args, **kwargs) -> None:
-        """Send a NOOP to keep the connection alive; reconnect if it fails."""
+        """Send a NOOP to keep the connection alive; reconnect if it fails.
+        
+        Do not use directly: this is only for on_retry of @retry(). Use
+        ensure_connected() instead."""
         try:
             self._imap.noop()
         except Exception:
-            self._imap_reconnect()
+            # Don't raise here: @retry calls this between attempts, and an exception
+            # from it would end the retry loop early. Log it and let the next attempt
+            # fail and reconnect again.
+            try:
+                self._imap_reconnect()
+            except _IMAP_CONNECT_ERRORS as e:
+                logger.warning(f"IMAP reconnect failed: {e}")
 
+    def ensure_connected(self) -> None:
+        """Reuse the live IMAP session, reconnecting only if it has died.
+
+        Unlike _imap_noop_or_reconnect(), raises if reconnecting fails."""
+        try:
+            self._imap.noop()
+        except Exception:
+            self._imap_open()
+
+    @retry(
+        max_retries=_MAX_RETRIES,
+        exceptions=_IMAP_ERRORS,
+        on_retry=_imap_noop_or_reconnect,
+    )
     def search(self, criteria) -> SearchIds:
         select_info = self._imap.select_folder("INBOX")
         logger.debug(f"{select_info=}")
@@ -73,8 +116,8 @@ class MailClient:
         return search_ids
 
     @retry(
-        max_retries=_MAX_IMAP_RETRIES,
-        exceptions=(imaplib.IMAP4.abort, imaplib.IMAP4.error, OSError, ConnectionError),
+        max_retries=_MAX_RETRIES,
+        exceptions=_IMAP_ERRORS,
         on_retry=_imap_noop_or_reconnect,
     )
     def fetch_message(self, search_id: int) -> EmailMessage:
@@ -95,6 +138,12 @@ class MailClient:
             smtp.starttls()
         smtp.login(self._config.email, self._config.password)
         return smtp
+
+    @retry(max_retries=_MAX_RETRIES, exceptions=_SMTP_ERRORS)
+    def _smtp_send(self, msg: EmailMessage) -> None:
+        """Send *msg* over a fresh SMTP connection, reconnecting on drops."""
+        with self._smtp_builder() as smtp:
+            smtp.send_message(msg)
 
     def _apply_recipients(
         self, out: EmailMessage, message: EmailMessage, send_mode: int
@@ -208,8 +257,7 @@ class MailClient:
                 charset="utf-8",
                 filename=os.path.basename(attachment),
             )
-        with self._smtp_builder() as smtp:
-            smtp.send_message(reply)
+        self._smtp_send(reply)
 
         return reply
 
@@ -246,14 +294,13 @@ class MailClient:
         self._apply_threading(out, message, reply_to)
 
         out.set_content(body, subtype="plain", charset="utf-8", cte="8bit")
-        with self._smtp_builder() as smtp:
-            smtp.send_message(out)
+        self._smtp_send(out)
 
         return out
 
     @retry(
-        max_retries=_MAX_IMAP_RETRIES,
-        exceptions=(imaplib.IMAP4.error, imaplib.IMAP4.abort, OSError, ConnectionError),
+        max_retries=_MAX_RETRIES,
+        exceptions=_IMAP_ERRORS,
         on_retry=_imap_noop_or_reconnect,
     )
     def fetch_patch_series(self, in_reply_to_id: str) -> List[EmailMessage]:
@@ -282,8 +329,8 @@ class MailClient:
         return messages
 
     @retry(
-        max_retries=_MAX_IMAP_RETRIES,
-        exceptions=(imaplib.IMAP4.error, imaplib.IMAP4.abort, OSError, ConnectionError),
+        max_retries=_MAX_RETRIES,
+        exceptions=_IMAP_ERRORS,
         on_retry=_imap_noop_or_reconnect,
     )
     def mark_as_processed(self, search_id) -> None:
