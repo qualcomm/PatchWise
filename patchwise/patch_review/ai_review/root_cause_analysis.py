@@ -116,7 +116,7 @@ class RootCauseAnalysis:
 The read-only crashdump and build artifacts folders are often on a slow
 network share: each file open and directory listing is a round-trip, and
 large memory images (multi-GB `.BIN` files) take minutes to read in full.
-Explore it with `bash_timeout` using absolute paths:
+Explore it with `bash` using absolute paths:
 
 - Do as much as possible in one call: batch related steps rather than many
   small calls.
@@ -145,9 +145,8 @@ architecture. Check with `file` first, then use architecture-neutral tools:
 
 Avoid GNU `addr2line` and `objdump`: they are architecture dependent.
 
-Navigation tools other than bash_timeout work on the kernel source the
-crash originated from. bash_timeout also reaches the kernel tree (the
-default cwd).
+Navigation tools other than bash work on the kernel source the crash
+originated from. bash also reaches the kernel tree (the default cwd).
 """
 
     PROMPT_TEMPLATE = """

@@ -3,8 +3,8 @@
 
 """Unit tests for the review-cleanup render/collapse logic (no LLM/docker/git).
 
-`_render_inline_review`, `_is_diff_marker`, `_diff_start_line`, and `_number_lines`
-are pure functions of `self.commit_message` / `self.diff` (plus their arguments),
+`_render_inline_review`, `_is_diff_marker`, `_diff_start_line`, `_label_lines`,
+and `_source_line` are pure functions of `self.commit_message` / `self.diff` (plus their arguments),
 so we drive them against an instance built with `__new__` — no Agent, no docker,
 no git — and assert on the rendered text one frame at a time."""
 
@@ -54,12 +54,12 @@ SAMPLE_DIFF = "\n".join(
 
 def test_valid_cleanup_findings_accepts_well_formed_list():
     assert AiCodeReview._valid_cleanup_findings(
-        [{"finding": "leak", "start_line": 1, "end_line": 2}]
+        [{"finding": "leak", "start_line": "P1", "end_line": "P2"}]
     )
     assert AiCodeReview._valid_cleanup_findings(
         [
-            {"finding": "a", "start_line": 3, "end_line": 3},
-            {"finding": "b", "start_line": 1, "end_line": 9},
+            {"finding": "a", "start_line": "C3", "end_line": "C3"},
+            {"finding": "b", "start_line": "C1", "end_line": "P9"},
         ]
     )
 
@@ -67,44 +67,86 @@ def test_valid_cleanup_findings_accepts_well_formed_list():
 def test_valid_cleanup_findings_rejects_bad_shapes():
     assert not AiCodeReview._valid_cleanup_findings(None)      # not parseable
     assert not AiCodeReview._valid_cleanup_findings({"finding": "x"})  # dict, not list
-    assert not AiCodeReview._valid_cleanup_findings([])        # empty -> re-prompt
     assert not AiCodeReview._valid_cleanup_findings(["not a dict"])
     # blank finding
     assert not AiCodeReview._valid_cleanup_findings(
-        [{"finding": "  ", "start_line": 1, "end_line": 1}]
+        [{"finding": "  ", "start_line": "P1", "end_line": "P1"}]
     )
-    # missing line numbers -> re-prompt (renderer no longer defaults them)
+    # missing labels -> re-prompt (renderer no longer defaults them)
     assert not AiCodeReview._valid_cleanup_findings([{"finding": "x"}])
-    # non-integer line numbers
-    assert not AiCodeReview._valid_cleanup_findings(
-        [{"finding": "x", "start_line": "1", "end_line": 2}]
-    )
-    assert not AiCodeReview._valid_cleanup_findings(
-        [{"finding": "x", "start_line": 1, "end_line": None}]
-    )
-    # bool is an int subclass but never a line number
-    assert not AiCodeReview._valid_cleanup_findings(
-        [{"finding": "x", "start_line": True, "end_line": 2}]
-    )
+    # not a C<n>/P<n> label
+    for bad in [1, "1", "P", "X1", "P1 ", "p1", None, True]:
+        assert not AiCodeReview._valid_cleanup_findings(
+            [{"finding": "x", "start_line": bad, "end_line": "P2"}]
+        ), bad
     # one bad element fails the whole batch
     assert not AiCodeReview._valid_cleanup_findings(
         [
-            {"finding": "ok", "start_line": 1, "end_line": 1},
+            {"finding": "ok", "start_line": "P1", "end_line": "P1"},
             {"note": "no finding key"},
         ]
     )
 
 
-# ---- _number_lines --------------------------------------------------------
+def test_valid_cleanup_findings_accepts_empty_list():
+    # [] = the review reported no actual issue (issue #130)
+    assert AiCodeReview._valid_cleanup_findings([])
 
-def test_number_lines_is_one_based_and_maps_to_split_index():
+
+# ---- no-issues path (issue #130) ------------------------------------------
+
+class _FakeAgent:
+    def __init__(self, reply):
+        self.reply = reply
+        self.current_label = ""
+        self.prompts = []
+
+    def complete_until_json(self, messages, validate, corrective=""):
+        self.prompts.append(messages)
+        return self.reply if validate(self.reply) else None
+
+
+def test_format_chat_response_empty_findings_returns_empty():
+    obj = _review("Subject\n", SAMPLE_DIFF)
+    obj.agent = _FakeAgent([])
+    assert obj.format_chat_response("No issues found.") == ""
+    system = obj.agent.prompts[0][0]["content"]
+    assert "return an empty JSON array" in system[-1]["text"]
+
+
+# ---- cleanup prompt cache prefix ------------------------------------------
+
+def test_cleanup_shares_the_planner_cache_prefix():
+    # The labeled patch is the first system segment of every phase, cleanup
+    # included, so cleanup is a cache hit on the prefix the planner wrote.
+    obj = _review("Subject\n\nbody", SAMPLE_DIFF)
+    obj.agent = _FakeAgent([])
+    obj.format_chat_response("No issues found.")
+    system = obj.agent.prompts[0][0]
+    assert system["role"] == "system"
+    assert system["content"][0]["text"] == obj._planner_system_prompt()[0]
+    assert "C3 | body" in system["content"][0]["text"]
+    assert "P1 | diff --git a/d.c b/d.c" in system["content"][0]["text"]
+
+
+# ---- _label_lines / _source_line ------------------------------------------
+
+def test_label_lines_is_one_based_and_maps_to_split_index():
     text = "alpha\nbeta\ngamma"
-    numbered = AiCodeReview._number_lines(text)
-    assert numbered.splitlines()[0] == "1: alpha"
-    assert numbered.splitlines()[2] == "3: gamma"
-    # Line N of the numbered patch == text.split("\n")[N-1] — the contract the
-    # renderer relies on to reconstruct raw lines from commit_message + diff.
-    assert text.split("\n")[2] == "gamma"
+    labeled = AiCodeReview._label_lines(text, "P")
+    assert labeled.splitlines()[0] == "P1 | alpha"
+    assert labeled.splitlines()[2] == "P3 | gamma"
+
+
+def test_source_line_maps_labels_onto_numbered_source():
+    # C<n> is commit line n; P<n> is diff line n, after the blank separator.
+    cm = "subject line\n\nbody one"
+    review = _review(cm, SAMPLE_DIFF)
+    raw = review._numbered_source.split("\n")
+    assert raw[review._source_line("C1") - 1] == "subject line"
+    assert raw[review._source_line("C3") - 1] == "body one"
+    assert raw[review._source_line("P1") - 1] == "diff --git a/d.c b/d.c"
+    assert raw[review._source_line("P9") - 1] == "+\t\treturn -ENOMEM;"
 
 
 # ---- _diff_start_line -----------------------------------------------------
@@ -176,15 +218,10 @@ def test_is_diff_marker_body_line_that_reads_like_a_header():
 # ---- _render_inline_review ------------------------------------------------
 
 def _numbered_lookup(review: AiCodeReview):
-    """Map raw source line -> 1-based number, to pick anchor line numbers the way
-    the model would (off the numbered patch)."""
-    numbered = AiCodeReview._number_lines(
-        f"{review.commit_message}\n\n{review.diff}"
-    )
+    """Map raw source line -> 1-based `_numbered_source` line, the number a
+    cleanup label resolves to (see `_source_line`)."""
     return {
-        line.split(": ", 1)[1]: int(line.split(": ", 1)[0])
-        for line in numbered.split("\n")
-        if ": " in line
+        line: i for i, line in enumerate(review._numbered_source.split("\n"), 1)
     }
 
 

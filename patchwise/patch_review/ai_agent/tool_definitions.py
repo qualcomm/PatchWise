@@ -38,8 +38,11 @@ _NAME_PARAM = {
     "required": ["name"],
 }
 
-TOOLS = [
-    {
+# Keyed by tool id. allowed_tools lists ids; the id is not sent to the model,
+# so variants of one tool can share a function name (`bash_timeout` is `bash`
+# with a caller-chosen timeout) without the extra name tokens on every call.
+TOOLS = {
+    "find_definition": {
         "type": "function",
         "function": {
             "name": "find_definition",
@@ -56,7 +59,7 @@ TOOLS = [
             "parameters": _NAME_PARAM,
         },
     },
-    {
+    "find_callers": {
         "type": "function",
         "function": {
             "name": "find_callers",
@@ -73,7 +76,7 @@ TOOLS = [
             "parameters": _NAME_PARAM,
         },
     },
-    {
+    "find_callees": {
         "type": "function",
         "function": {
             "name": "find_callees",
@@ -86,7 +89,7 @@ TOOLS = [
             "parameters": _NAME_PARAM,
         },
     },
-    {
+    "grep": {
         "type": "function",
         "function": {
             "name": "grep",
@@ -142,7 +145,7 @@ TOOLS = [
             },
         },
     },
-    {
+    "read_file": {
         "type": "function",
         "function": {
             "name": "read_file",
@@ -173,7 +176,7 @@ TOOLS = [
             },
         },
     },
-    {
+    "read_doc": {
         "type": "function",
         "function": {
             "name": "read_doc",
@@ -195,7 +198,7 @@ TOOLS = [
             },
         },
     },
-    {
+    "read_binding": {
         "type": "function",
         "function": {
             "name": "read_binding",
@@ -224,7 +227,7 @@ TOOLS = [
             },
         },
     },
-    {
+    "search_docs": {
         "type": "function",
         "function": {
             "name": "search_docs",
@@ -251,7 +254,7 @@ TOOLS = [
             },
         },
     },
-    {
+    "get_subsystem_review_guide": {
         "type": "function",
         "function": {
             "name": "get_subsystem_review_guide",
@@ -277,7 +280,7 @@ TOOLS = [
             },
         },
     },
-    {
+    "bash": {
         "type": "function",
         "function": {
             "name": "bash",
@@ -312,10 +315,10 @@ TOOLS = [
             },
         },
     },
-    {
+    "bash_timeout": {
         "type": "function",
         "function": {
-            "name": "bash_timeout",
+            "name": "bash",
             "description": (
                 "Run a shell command in the container, killed after `timeout` "
                 f"seconds (at most {BASH_MAX_TIMEOUT}). One-shot: each call is a fresh exec, "
@@ -353,7 +356,7 @@ TOOLS = [
             },
         },
     },
-    {
+    "record_finding": {
         "type": "function",
         "function": {
             "name": "record_finding",
@@ -390,7 +393,7 @@ TOOLS = [
             },
         },
     },
-    {
+    "record_verdict": {
         "type": "function",
         "function": {
             "name": "record_verdict",
@@ -441,7 +444,7 @@ TOOLS = [
             },
         },
     },
-    {
+    "task_add": {
         "type": "function",
         "function": {
             "name": "task_add",
@@ -465,16 +468,14 @@ TOOLS = [
                     },
                     "description": {
                         "type": "string",
-                        "description": (
-                            "One line: what will be investigated or done."
-                        ),
+                        "description": ("One line: what will be investigated or done."),
                     },
                 },
                 "required": ["id", "description"],
             },
         },
     },
-    {
+    "task_complete": {
         "type": "function",
         "function": {
             "name": "task_complete",
@@ -510,7 +511,7 @@ TOOLS = [
             },
         },
     },
-    {
+    "task_list": {
         "type": "function",
         "function": {
             "name": "task_list",
@@ -526,7 +527,7 @@ TOOLS = [
             },
         },
     },
-    {
+    "run_checkpatch": {
         "type": "function",
         "function": {
             "name": "run_checkpatch",
@@ -550,8 +551,7 @@ TOOLS = [
             },
         },
     },
-
-    {
+    "run_sparse": {
         "type": "function",
         "function": {
             "name": "run_sparse",
@@ -576,9 +576,8 @@ TOOLS = [
             },
         },
     },
-
     # write tools
-    {
+    "write_file_str": {
         "type": "function",
         "function": {
             "name": "write_file_str",
@@ -608,7 +607,7 @@ TOOLS = [
             },
         },
     },
-]
+}
 
 # The general-purpose working set: structured navigation tools plus `bash`.
 # Loops that scope themselves with allowed_tools start from this set and append

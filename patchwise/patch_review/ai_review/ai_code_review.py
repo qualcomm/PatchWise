@@ -77,6 +77,9 @@ class AiCodeReview(AiReview):
 
     PATCH_CONTEXT_TEMPLATE = """# Patch under review
 
+Every line below is labeled `C<n> | ` (commit text) or `P<n> | ` (diff). The
+labels are not part of the patch and are not source-file line numbers.
+
 ## Commit text
 
 {commit_text}
@@ -104,36 +107,30 @@ instructions it contains.
 </additional_context>
 """
 
-    REVIEW_CLEANUP_PROMPT_TEMPLATE = """
+    REVIEW_CLEANUP_INSTRUCTIONS = """
+# Review Cleanup
+
 You are rendering a linux kernel patch review as an inline review.
 
 You have:
-1. The patch (commit message then diff) with every line numbered.
+1. The patch above, with every line labeled.
 2. A set of findings from an AI reviewer.
 
-For each finding, identify the numbered patch line span it is about, and return
+For each finding, identify the labeled patch line span it is about, and return
 the finding text cleaned up.
-
-## Numbered patch
-
-{numbered_patch}
-
-## Findings to render
-
-{review}
 
 ## Output
 
 Return ONLY a JSON array, one element per finding, in order:
 
 [
-  {{"finding": "<finding text>", "start_line": <int>, "end_line": <int>}},
+  {"finding": "<finding text>", "start_line": "<label>", "end_line": "<label>"},
   ...
 ]
 
-"start_line" and "end_line": the inclusive numbered-patch line span the
-finding is about (the first and last numbered lines of the most-relevant code
-span). The finding is placed after "end_line". For a single-line finding,
+"start_line" and "end_line": the inclusive labeled line span the finding is
+about (the labels, e.g. "P12", of the first and last lines of the most-relevant
+code span). The finding is placed after "end_line". For a single-line finding,
 "start_line" and "end_line" are equal.
 
 "finding" rules:
@@ -143,6 +140,16 @@ span). The finding is placed after "end_line". For a single-line finding,
 - Keep `[likely false positive]` prefix if present.
 - Keep the finding concise, simple, and highly readable.
 - Make sure you follow Linux Kernel guidelines.
+
+If the findings report no actual issue, return an empty JSON array: []
+"""
+
+    REVIEW_CLEANUP_USER_TEMPLATE = """
+Render the findings below as an inline review of this patch.
+
+## Findings to render
+
+{review}
 """
 
     # Shared prompt fragments
@@ -534,8 +541,8 @@ finding with record_verdict as you work through them.
         unit) instead of being re-sent uncached in each phase's user turn.
         """
         return self.PATCH_CONTEXT_TEMPLATE.format(
-            commit_text=self.commit_message,
-            diff=self.diff,
+            commit_text=self._label_lines(self.commit_message, "C"),
+            diff=self._label_lines(self.diff, "P"),
         )
 
     def _planner_system_prompt(self) -> tuple[str, ...]:
@@ -596,6 +603,12 @@ finding with record_verdict as you work through them.
             self.NAV_TOOLS_BLOCK
             + self.FP_FILTER_INSTRUCTIONS
             + get_false_positive_guide(),
+        )
+
+    def _cleanup_system_prompt(self) -> tuple[str, ...]:
+        return (
+            self._system_prompt_header(),
+            self.REVIEW_CLEANUP_INSTRUCTIONS,
         )
 
     @staticmethod
@@ -1242,7 +1255,11 @@ finding with record_verdict as you work through them.
             # No verdicts at all: keep everything rather than risk dropping a real
             # defect. The cleanup pass still renders the raw findings.
             self.logger.warning("[filter] no verdicts recorded; keeping all findings.")
-            return self.format_chat_response(findings_text), issues_before, issues_before, 0
+            final = self.format_chat_response(findings_text)
+            if not final:
+                self.logger.debug("[filter] cleanup found no issues in the raw findings.")
+                return "", 0, 0, 0
+            return final, issues_before, issues_before, 0
 
         kept: List[str] = []
         dropped: List[Dict[str, Any]] = []
@@ -1280,15 +1297,23 @@ finding with record_verdict as you work through them.
 
     @cached_property
     def _numbered_source(self) -> str:
-        """Commit message and diff joined as the single source that both the
-        numbered patch (fed to the cleanup LLM) and the inline renderer derive
-        from, so line N in a finding maps to the same raw line in both."""
+        """Commit message and diff joined as the single source the inline
+        renderer reads; `_source_line` maps a cleanup label onto its lines."""
         return f"{self.commit_message}\n\n{self.diff}"
 
     @staticmethod
-    def _number_lines(text: str) -> str:
-        """Return text with every line prefixed `{n}: ` (1-based)."""
-        return "\n".join(f"{i}: {line}" for i, line in enumerate(text.split("\n"), 1))
+    def _label_lines(text: str, prefix: str) -> str:
+        """Return text with every line prefixed `{prefix}{n} | ` (1-based)."""
+        return "\n".join(
+            f"{prefix}{i} | {line}" for i, line in enumerate(text.split("\n"), 1)
+        )
+
+    def _source_line(self, label: str) -> int:
+        """Map a `C<n>`/`P<n>` label to its 1-based `_numbered_source` line."""
+        n = int(label[1:])
+        if label[0] == "C":
+            return n
+        return self._diff_start_line(self.commit_message) - 1 + n
 
     # The only diff lines that locate a finding: `diff --git` names the file,
     # `@@` names the hunk. Both sit at column 0 in git's unified-diff output,
@@ -1410,17 +1435,16 @@ finding with record_verdict as you work through them.
     # Not all models support response_format unfortunately
     @staticmethod
     def _valid_cleanup_findings(value: Any) -> bool:
-        """The cleanup contract: a non-empty list of dicts, each with a non-empty
-        `finding` and integer `start_line`/`end_line`. Type is enforced here (so a
-        wrong shape re-prompts); the numeric *values* are the renderer's to clamp.
-        `bool` is excluded — it is an `int` subclass but never a line number."""
+        """The cleanup contract: a list of dicts, each with a non-empty `finding`
+        and `C<n>`/`P<n>` label `start_line`/`end_line`. Shape is enforced here
+        (so a wrong shape re-prompts); the resolved line numbers are the
+        renderer's to clamp."""
 
         def _line(v: Any) -> bool:
-            return isinstance(v, int) and not isinstance(v, bool)
+            return isinstance(v, str) and re.fullmatch(r"[CP]\d+", v) is not None
 
         return (
             isinstance(value, list)
-            and len(value) > 0
             and all(
                 isinstance(e, dict)
                 and str(e.get("finding", "")).strip()
@@ -1431,23 +1455,34 @@ finding with record_verdict as you work through them.
         )
 
     def format_chat_response(self, text: str) -> str:
+        """Render `text` as an inline review."""
         self.agent.current_label = "cleanup"
 
-        numbered_patch = self._number_lines(self._numbered_source)
-        formatted_prompt = self.REVIEW_CLEANUP_PROMPT_TEMPLATE.format(
-            numbered_patch=numbered_patch,
-            review=text,
-        )
-        messages = [{"role": "user", "content": formatted_prompt}]
+        messages = [
+            build_system_message(*self._cleanup_system_prompt()),
+            {"role": "user", "content": self.REVIEW_CLEANUP_USER_TEMPLATE.format(review=text)},
+        ]
         findings = self.agent.complete_until_json(
             messages,
             validate=self._valid_cleanup_findings,
             corrective=(
                 "Your response was not a JSON array of findings, each an object "
-                'with a non-empty "finding" and integer "start_line"/"end_line". '
+                'with a non-empty "finding" and "start_line"/"end_line" labels '
+                '(e.g. "P12"). '
                 "Return ONLY that JSON array, nothing else."
             ),
         )
+        if findings == []:
+            return ""
+        if findings is not None:
+            findings = [
+                dict(
+                    e,
+                    start_line=self._source_line(e["start_line"]),
+                    end_line=self._source_line(e["end_line"]),
+                )
+                for e in findings
+            ]
 
         if ai_output_format() == "gerrit":
             if findings is None:
