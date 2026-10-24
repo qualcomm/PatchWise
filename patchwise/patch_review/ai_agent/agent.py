@@ -318,8 +318,9 @@ class Agent:
             self.current_label = label
         self.current_iteration = 0
 
-        max_iters = max_iterations or AGENT_MAX_ITERATIONS
         tools = self.get_tools(allowed_tools) if use_tools else None
+        # Without tools the first reply is final
+        max_iters = (max_iterations or AGENT_MAX_ITERATIONS) if tools else 1
 
         completion_kwargs: dict = {
             "messages": messages,
