@@ -1058,6 +1058,38 @@ def test_bash_timeout_clamps_the_requested_timeout(
     assert seen == [BASH_MAX_TIMEOUT, 1]
 
 
+def test_bash_timeout_is_offered_to_the_model_as_bash(
+    review: AiCodeReview, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The bash_timeout id is sent as `bash`, and a `bash` call from that loop
+    dispatches back to bash_timeout; loops that ask for `bash` keep plain bash."""
+    seen = []
+
+    def fake_dispatch(name: str, args: dict) -> dict:
+        seen.append(name)
+        return {"ok": True}
+
+    def call_bash() -> None:
+        call = SimpleNamespace(
+            id="1",
+            function=SimpleNamespace(name="bash", arguments='{"command": "true"}'),
+        )
+        review.agent._dispatch_tool_calls([call], [])
+
+    monkeypatch.setattr(review.agent, "dispatch_tool", fake_dispatch)
+
+    (tool,) = review.agent.get_tools(["bash_timeout"])
+    assert tool["function"]["name"] == "bash"
+    assert "timeout" in tool["function"]["parameters"]["properties"]
+    call_bash()
+
+    (tool,) = review.agent.get_tools(["bash"])
+    assert "timeout" not in tool["function"]["parameters"]["properties"]
+    call_bash()
+
+    assert seen == ["bash_timeout", "bash"]
+
+
 def test_loop_without_tools_reports_a_single_iteration(
     review: AiCodeReview, monkeypatch: pytest.MonkeyPatch
 ) -> None:

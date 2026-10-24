@@ -9,7 +9,7 @@ import re
 import subprocess
 import time
 from collections import OrderedDict
-from typing import Any, Callable, Dict, List, Optional, Tuple, Set, Union
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Set, Union
 from urllib.parse import unquote, urlparse
 import httpx
 import litellm
@@ -19,7 +19,11 @@ from pathlib import Path
 
 from patchwise import PACKAGE_NAME, SANDBOX_PATH
 from patchwise.docker import DockerManager
-from patchwise.patch_review.ai_agent.tool_definitions import BASH_MAX_TIMEOUT, TOOLS
+from patchwise.patch_review.ai_agent.tool_definitions import (
+    BASH_MAX_TIMEOUT,
+    NAVIGATION_TOOLS,
+    TOOLS,
+)
 from patchwise.patch_review.ai_review.review_prompts import (
     SUBSYSTEM_REVIEW_PROMPTS_PATH,
     _load_subsystem_guide,
@@ -103,6 +107,7 @@ class Agent:
         self.docker_manager = docker_manager
         self.enable_edit_tools = enable_edit_tools
         self.seen_files: Set[str] = set()
+        self.tool_ids: Dict[str, str] = {}
 
         # Connect to the Redis ts-cache and set up the host-side index
         blocklist = parse_config().get("indexing", {}).get("blocklist") or []
@@ -288,7 +293,7 @@ class Agent:
         force_tool_usage=False,
         max_iterations: Optional[int] = None,
         use_tools: bool = True,
-        allowed_tools: Optional[List[str]] = None,
+        allowed_tools: Sequence[str] = NAVIGATION_TOOLS,
         label: Optional[str] = None,
     ) -> str:
         """Run the agent loop, calling the LLM iteratively until it stops requesting tools.
@@ -302,8 +307,8 @@ class Agent:
             use_tools: When False, run without any tools (a single completion
                 from the prompt). The planner uses this so it divides the work
                 from the diff alone rather than investigating.
-            allowed_tools: When set (and use_tools is True), restrict the loop to
-                only these tool names; an empty list means no tools. E.g. the
+            allowed_tools: The TOOLS ids this loop may use (when use_tools is
+                True), NAVIGATION_TOOLS by default; empty means no tools. E.g. the
                 plan critic is given only `get_subsystem_review_guide` (to load
                 guides for coverage) while the code-navigation tools are withheld
                 so it can't go hunting specific bugs.
@@ -497,7 +502,7 @@ class Agent:
             try:
                 args = json.loads(tool_call.function.arguments)
                 self.logger.debug(f"Tool call: {name}({args})")
-                result = self.dispatch_tool(name, args)
+                result = self.dispatch_tool(self.tool_ids.get(name, name), args)
                 self.logger.debug(f"Tool result: {name} -> {result}")
             except json.JSONDecodeError as e:
                 self.logger.error(f"Error parsing tool args for '{name}': {e}")
@@ -728,17 +733,12 @@ class Agent:
             key=lambda c: (tier(c), c["file"], c["start_line"]),
         )
 
-    def get_tools(
-        self, allowed: Optional[List[str]] = None
-    ) -> Optional[List[Dict[str, Any]]]:
-        """Return tool schemas."""
-        if allowed is None:
-            return TOOLS
-        allowed_set = set(allowed)
-        filtered = [
-            t for t in TOOLS if t.get("function", {}).get("name") in allowed_set
-        ]
-        return filtered or None
+    def get_tools(self, allowed: Sequence[str]) -> Optional[List[Dict[str, Any]]]:
+        """Return the schemas for TOOLS ids `allowed`, and map each function
+        name back to its id so tool calls dispatch to the right variant."""
+        ids = [k for k in allowed if k in TOOLS]
+        self.tool_ids = {TOOLS[k]["function"]["name"]: k for k in ids}
+        return [TOOLS[k] for k in ids] or None
 
     _DEFINITION_LIMIT = 50
     _CALLEES_LIMIT = 200
@@ -1785,7 +1785,7 @@ class Agent:
         return {"ok": True, "recorded": verdict or "verdict"}
 
     def dispatch_tool(self, name: str, args: dict) -> dict:
-        """Dispatch an agent tool by name. Returns {ok, ...}."""
+        """Dispatch an agent tool by TOOLS id. Returns {ok, ...}."""
         read_tools = {
             "find_definition": self._tool_find_definition,
             "find_callers": self._tool_find_callers,
