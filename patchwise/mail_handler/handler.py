@@ -418,16 +418,14 @@ def decode_single_header(contents):
 
 
 def process_mail(
+    mail_client: MailClient,
     criteria,
     reviews: set[str],
     config: MailConfig,
-    send: bool = False,
     fix: bool = False,
 ):
-    logger.info(f"IMAP: {config.imap.server}:{config.imap.port}")
-    logger.info(f"SMTP: {config.smtp.server}:{config.smtp.port}")
-
-    mail_client = MailClient(config, send=send)
+    # The session may have been dropped while idle between watch cycles.
+    mail_client.ensure_connected()
 
     search_ids = mail_client.search(criteria)
 
