@@ -67,7 +67,6 @@ def test_valid_cleanup_findings_accepts_well_formed_list():
 def test_valid_cleanup_findings_rejects_bad_shapes():
     assert not AiCodeReview._valid_cleanup_findings(None)      # not parseable
     assert not AiCodeReview._valid_cleanup_findings({"finding": "x"})  # dict, not list
-    assert not AiCodeReview._valid_cleanup_findings([])        # empty -> re-prompt
     assert not AiCodeReview._valid_cleanup_findings(["not a dict"])
     # blank finding
     assert not AiCodeReview._valid_cleanup_findings(
@@ -93,6 +92,31 @@ def test_valid_cleanup_findings_rejects_bad_shapes():
             {"note": "no finding key"},
         ]
     )
+
+
+def test_valid_cleanup_findings_accepts_empty_list():
+    # [] = the review reported no actual issue (issue #130)
+    assert AiCodeReview._valid_cleanup_findings([])
+
+
+# ---- no-issues path (issue #130) ------------------------------------------
+
+class _FakeAgent:
+    def __init__(self, reply):
+        self.reply = reply
+        self.current_label = ""
+        self.prompts = []
+
+    def complete_until_json(self, messages, validate, corrective=""):
+        self.prompts.append(messages[0]["content"])
+        return self.reply if validate(self.reply) else None
+
+
+def test_format_chat_response_empty_findings_returns_empty():
+    obj = _review("Subject\n", SAMPLE_DIFF)
+    obj.agent = _FakeAgent([])
+    assert obj.format_chat_response("No issues found.") == ""
+    assert "return an empty JSON array" in obj.agent.prompts[0]
 
 
 # ---- _number_lines --------------------------------------------------------

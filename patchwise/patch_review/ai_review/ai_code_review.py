@@ -143,6 +143,8 @@ span). The finding is placed after "end_line". For a single-line finding,
 - Keep `[likely false positive]` prefix if present.
 - Keep the finding concise, simple, and highly readable.
 - Make sure you follow Linux Kernel guidelines.
+
+If the findings report no actual issue, return an empty JSON array: []
 """
 
     # Shared prompt fragments
@@ -1242,7 +1244,11 @@ finding with record_verdict as you work through them.
             # No verdicts at all: keep everything rather than risk dropping a real
             # defect. The cleanup pass still renders the raw findings.
             self.logger.warning("[filter] no verdicts recorded; keeping all findings.")
-            return self.format_chat_response(findings_text), issues_before, issues_before, 0
+            final = self.format_chat_response(findings_text)
+            if not final:
+                self.logger.debug("[filter] cleanup found no issues in the raw findings.")
+                return "", 0, 0, 0
+            return final, issues_before, issues_before, 0
 
         kept: List[str] = []
         dropped: List[Dict[str, Any]] = []
@@ -1410,9 +1416,9 @@ finding with record_verdict as you work through them.
     # Not all models support response_format unfortunately
     @staticmethod
     def _valid_cleanup_findings(value: Any) -> bool:
-        """The cleanup contract: a non-empty list of dicts, each with a non-empty
-        `finding` and integer `start_line`/`end_line`. Type is enforced here (so a
-        wrong shape re-prompts); the numeric *values* are the renderer's to clamp.
+        """The cleanup contract: a list of dicts, each with a non-empty `finding`
+        and integer `start_line`/`end_line`. Type is enforced here (so a wrong
+        shape re-prompts); the numeric *values* are the renderer's to clamp.
         `bool` is excluded — it is an `int` subclass but never a line number."""
 
         def _line(v: Any) -> bool:
@@ -1420,7 +1426,6 @@ finding with record_verdict as you work through them.
 
         return (
             isinstance(value, list)
-            and len(value) > 0
             and all(
                 isinstance(e, dict)
                 and str(e.get("finding", "")).strip()
@@ -1431,6 +1436,8 @@ finding with record_verdict as you work through them.
         )
 
     def format_chat_response(self, text: str) -> str:
+        """Render `text` as an inline review, or "" if the cleanup finds that
+        `text` reports no actual issue."""
         self.agent.current_label = "cleanup"
 
         numbered_patch = self._number_lines(self._numbered_source)
@@ -1448,6 +1455,8 @@ finding with record_verdict as you work through them.
                 "Return ONLY that JSON array, nothing else."
             ),
         )
+        if findings == []:
+            return ""
 
         if ai_output_format() == "gerrit":
             if findings is None:
