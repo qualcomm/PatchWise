@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "patchwise"
-version = "0.9.3"
+version = "0.9.4"
 description = "AI Code Review, Root Cause Analysis and Static Analysis for the Linux kernel"
 authors = [
     { name = "Qualcomm Technologies, Inc.", email = "qc.opensource@qti.qualcomm.com" }
@@ -15,7 +15,7 @@ maintainers = [
 requires-python = ">=3.10"
 dependencies = [
     "Sphinx>=8.1.3",
-    "litellm>=1.74,<1.97",
+    "litellm>=1.74,<=1.105.4",
     "cachetools>=5.5.2",
     "chromadb>=0.4.0",
     # "dtschema>=2025.2",
