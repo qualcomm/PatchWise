@@ -24,9 +24,6 @@ logger = logging.getLogger("patchwise.mail_handler.mail_client")
 _MAX_RETRIES = 10
 
 _IMAP_ERRORS = (imaplib.IMAP4.abort, imaplib.IMAP4.error, OSError, ConnectionError)
-# Connection-level failures. Excludes IMAP4.error so a LoginError (bad
-# credentials) fails immediately instead of being retried.
-_IMAP_CONNECT_ERRORS = (imaplib.IMAP4.abort, OSError)
 # Transient transport failures only. Not plain OSError: SMTPException
 # subclasses it, so auth/recipient errors would be retried pointlessly.
 _SMTP_ERRORS = (
@@ -56,7 +53,7 @@ class MailClient:
 
         self._imap_open()
 
-    @retry(max_retries=_MAX_RETRIES, exceptions=_IMAP_CONNECT_ERRORS)
+    @retry(max_retries=_MAX_RETRIES, exceptions=_IMAP_ERRORS)
     def _imap_open(self) -> None:
         """Connect with backoff; each attempt tears down any partial session."""
         self._imap_reconnect()
@@ -91,7 +88,7 @@ class MailClient:
             # fail and reconnect again.
             try:
                 self._imap_reconnect()
-            except _IMAP_CONNECT_ERRORS as e:
+            except _IMAP_ERRORS as e:
                 logger.warning(f"IMAP reconnect failed: {e}")
 
     def ensure_connected(self) -> None:
