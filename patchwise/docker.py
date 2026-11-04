@@ -301,6 +301,8 @@ class DockerManager:
         if input is None:
             result = container.exec_run(command, workdir=cwd, user=user, environment=environment, demux=True)
             stdout, stderr = result.output or (b"", b"")
+            # With demux=True, the SDK uses None for an empty output stream.
+            stdout, stderr = stdout or b"", stderr or b""
             code = result.exit_code
         else:
             created = self.client.api.exec_create(
