@@ -53,11 +53,10 @@ class AiCodeReview(AiReview):
                  the plan: it adds a unit for any missed defect class or uncovered
                  subsystem concern.
       2. EXEC  — the planned angles are folded into one combined unit
-                 (_merge_units) that a single reviewer works as a checklist,
-                 covering every dimension in one pass. It matches its
-                 files/symbols against the subsystem guide index and loads the
-                 matching guide(s) itself, then emits free-form, evidence-bearing
-                 findings.
+                 (_merge_units) that a single reviewer takes as the planner's
+                 survey, an incomplete map of what to cover in one pass. It loads
+                 the matching subsystem guide(s) itself, then emits free-form,
+                 evidence-bearing findings.
       3. FILTER— one pass proves-or-drops each finding against the false-positive
                  guide, emitting the survivors unchanged. A separate cleanup pass
                  (format_chat_response) renders them into the inline review.
@@ -196,10 +195,10 @@ robustness, and quality expectations of the kernel. You enumerate the dimensions
 the reviewer finds the bugs.
 
 Read the diff and decide which dimensions this change calls for. Create one unit
-per dimension the change exercises, scoped to the files and symbols it covers,
-and name that dimension in its `dimension` field. A single function may warrant
-several dimensions, and one dimension may span several functions. Each unit is a
-dimension the reviewer investigates exhaustively.
+per dimension the change exercises, and name that dimension in its `dimension`
+field. A single function may warrant several dimensions, and one dimension may
+span several functions. Each unit is a dimension the reviewer investigates
+exhaustively.
 
 Treat the patch's decisions as open questions, not settled facts. Beyond
 dimensions covering whether the change is implemented correctly, create a unit
@@ -213,14 +212,12 @@ right one.
 
 Emit only a fenced ```json array of units. `dimension` names the single
 analysis angle this unit covers (a short noun phrase you choose — the lens a
-reviewer applies across the unit's symbols, not a specific bug):
+reviewer applies, not a specific bug):
 
 ```json
 [ { "id": "t1",
     "dimension": "the analysis angle this unit covers",
     "focus": "what this reviewer should examine",
-    "files": ["drivers/x/y.c"],
-    "symbols": ["foo_get", "foo_put"],
     "rationale": "why this is its own unit" } ]
 ```
 """
@@ -310,33 +307,35 @@ name the concern, do not write the analysis.
     EXECUTION_INSTRUCTIONS = """
 # Patch Reviewer
 
-You are a Linux kernel maintainer. Review this patch across every analysis
-dimension listed below, examining each one thoroughly across the files and
-symbols it covers. Each dimension points you to where to begin; pursue every
-dimension to its end and report every issue you can ground in the code. The
-dimensions are a floor, not a ceiling: they are where you start, not the limit
-of the review — follow the code wherever it leads and report any issue you can
-ground in it, even one no dimension named.
+You are a Linux kernel maintainer. Review this patch exhaustively and report
+every issue you can ground in the code. A planner surveyed the areas this patch
+puts at risk; its survey is below. The planner saw only the diff and had no
+tools, so its survey is incomplete. Your review covers these areas and
+everything else the patch affects. The issues a patch introduces can lie
+anywhere in the kernel, in the diff or in the code it affects, under any kernel
+configuration. Every question you raise during the review carries the same
+weight as the planner's areas: pursue it to its end in the code it reaches.
+Hold the code the patch affects to the same standard as the diff.
 
-## Assignment
+## Planner's survey
 """
 
     EXECUTION_METHOD_BLOCK = """
-## How to review
+## References and reporting
 
-Match your files and symbols against the Subsystem Review Guide Index above and
-load each matching guide with `get_subsystem_review_guide(<file>)`. Read kernel
-`Documentation/` sections when a contract is relevant. Trace the concrete execution
-path through the real code with the navigation tools, reading the actual implementation
-to confirm how the code behaves.
+Load the guide for each subsystem the review touches from the Subsystem Review
+Guide Index above with `get_subsystem_review_guide(<file>)`. Read kernel
+`Documentation/` sections when a contract is relevant. Ground each issue in a
+concrete execution path through the real code: the actual implementation behind
+every behaviour the issue relies on.
 
 The Kernel Technical Patterns above catalog common kernel defect classes.
 
 Report every issue you can ground in the code by calling `record_finding(location,
 finding)` as you confirm it. Record findings as you go rather than saving them all
 for a final message — a recorded finding is preserved even if the review is cut
-short, and lets you move on to the next dimension without carrying it. Recording a
-finding does not mean you stop; work through every dimension in your assignment.
+short, and lets you move on without carrying it. Recording a finding does not
+end the review; continue until you have reviewed everything the patch affects.
 """
 
     # Phase 3 (FALSE-POSITIVE FILTER) prompt
@@ -404,8 +403,8 @@ A plan critic reviewed your work-list and raised these points:
 {feedback}
 
 Revise your work-list to address them — add, merge, split, or rescope subtasks
-as needed, keeping them disjoint and each scoped to real files/symbols. Output
-the full updated JSON array in the same format as before.
+as needed, keeping them disjoint. Output the full updated JSON array in the
+same format as before.
 """
 
     CRITIC_RESUME_TEMPLATE = """
@@ -574,18 +573,7 @@ finding with record_verdict as you work through them.
         )
 
     def _execution_system_prompt(self, task: Dict[str, Any]) -> tuple[str, ...]:
-        def _fmt_list(key: str) -> str:
-            vals = task.get(key) or []
-            if isinstance(vals, str):
-                vals = [vals]
-            return ", ".join(str(v) for v in vals) if vals else "(none specified)"
-
-        assignment = (
-            f"{task.get('prose', '(unspecified)')}\n\n"
-            f"Full scope across all angles:\n"
-            f"- Files: {_fmt_list('files')}\n"
-            f"- Symbols: {_fmt_list('symbols')}\n"
-        )
+        assignment = f"{task.get('prose', '(unspecified)')}\n"
         return (
             self._system_prompt_header(),
             self._static_guides(),
@@ -960,7 +948,9 @@ finding with record_verdict as you work through them.
             ),
         )
 
-    def _plan_phase(self, shared_user: str, commit_text: str) -> Tuple[List[Dict[str, Any]], int, bool]:
+    def _plan_phase(
+        self, shared_user: str, commit_text: str
+    ) -> Tuple[List[Dict[str, Any]], int, bool, List[str]]:
         # Planner: split the diff into units, with no taxonomy/subsystem priors.
         # The conversation is reused across rounds so the planner revises its own
         # plan in light of the critic's feedback (planner -> critic -> planner).
@@ -1037,7 +1027,7 @@ finding with record_verdict as you work through them.
 
         final = self._normalize_tasks(tasks)
         events.emit(events.PLAN, tasks=final)
-        return final, plan_rounds, plan_converged
+        return final, plan_rounds, plan_converged, list(preloaded_guides)
 
     # Phase 2: EXECUTION
 
@@ -1047,44 +1037,18 @@ finding with record_verdict as you work through them.
         return int(raw) if raw and raw.isdigit() and int(raw) > 0 else self.EXEC_ITER_CAP
 
     @staticmethod
-    def _merge_units(tasks: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def _merge_units(
+        tasks: List[Dict[str, Any]], guides: List[str]
+    ) -> Dict[str, Any]:
         """Collapse all planned units into one combined unit for a single worker."""
-        def _vals(t: Dict[str, Any], key: str) -> List[str]:
-            vals = t.get(key) or []
-            if isinstance(vals, str):
-                vals = [vals]
-            return [str(v) for v in vals]
-
-        def _union(key: str) -> List[str]:
-            seen: OrderedDict[str, None] = OrderedDict()
-            for t in tasks:
-                for v in _vals(t, key):
-                    seen.setdefault(v, None)
-            return list(seen.keys())
-
-        # Each angle keeps the planner's own scope so the reviewer knows which
-        # files/symbols belong to which dimension; a flat union would lose that.
-        blocks = []
-        for i, t in enumerate(tasks, 1):
-            scope = ", ".join(_vals(t, "files") + _vals(t, "symbols"))
-            block = f"{i}. {t.get('dimension', '?')}: {t.get('focus', '(unspecified)')}"
-            if scope:
-                block += f"\n   Scope: {scope}"
-            blocks.append(block)
-        angles = "\n".join(blocks)
-        prose = (
-            "Review the entire patch exhaustively. Investigate EVERY one of the "
-            "following analysis angles thoroughly and independently — treat each "
-            "as a separate pass, do not stop early once you have found one issue:\n"
-            f"{angles}"
-        )
-        return {
-            "id": "t1",
-            "prose": prose,
-            "files": _union("files"),
-            "symbols": _union("symbols"),
-            "source": "merged",
-        }
+        notes = [
+            f"{t.get('dimension', '?')}: {t.get('focus', '(unspecified)')}"
+            for t in tasks
+        ]
+        if guides:
+            notes.append(f"Suggested subsystem guides: {', '.join(guides)}")
+        prose = "\n".join(f"{i}. {note}" for i, note in enumerate(notes, 1))
+        return {"id": "t1", "prose": prose, "source": "merged"}
 
     def _run_unit(
         self, idx: int, n: int, task: Dict[str, Any], shared_user: str
@@ -1619,7 +1583,9 @@ finding with record_verdict as you work through them.
 
         # Phase 1: PLAN (planner splits, critic refines with taxonomy + guides).
         events.emit(events.PHASE, name="plan")
-        tasks, plan_rounds, plan_converged = self._plan_phase(shared_user, self.commit_message)
+        tasks, plan_rounds, plan_converged, guides = self._plan_phase(
+            shared_user, self.commit_message
+        )
         self._dump("plan.json", json.dumps(tasks, indent=2))
         # Count the dimensions in the final plan before they are merged into the
         # single execution unit below (else len(tasks) would always read 1).
@@ -1631,7 +1597,7 @@ finding with record_verdict as you work through them.
         # design, not an option — fanning out one reviewer per unit fragments
         # the review and multiplies tokens for no recall gain.
         if tasks:
-            tasks = [self._merge_units(tasks)]
+            tasks = [self._merge_units(tasks, guides)]
             self.logger.debug("[plan] collapsed to 1 combined execution unit.")
 
         # Context-window guard: bound the worker's per-request INPUT size so it

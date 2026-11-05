@@ -130,8 +130,8 @@
 ### AI Code Review
 
 `AiCodeReview` reviews a patch in three phases: **PLAN** (a planner ↔ critic
-loop splits the diff into analysis angles), **EXEC** (a focused reviewer works
-those angles as a checklist against the real code), and **FILTER** (drops
+loop splits the diff into analysis angles), **EXEC** (a single reviewer covers
+all the angles in one pass against the real code), and **FILTER** (drops
 proven false positives) before rendering the final inline review.
 
 ```bash
@@ -149,7 +149,7 @@ flowchart TD
     end
 
     B(( )) --> P
-    C -->|converged| D["EXEC\n(focused review)"]
+    C -->|converged| D["EXEC\n(review)"]
     D --> E["FILTER\n(drop false positives)"]
     E --> F(["Inline review"])
 ```
