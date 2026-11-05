@@ -17,6 +17,7 @@ from typing import Any, Literal, Optional, Union
 import docker
 from docker.errors import APIError, DockerException, NotFound
 from docker.models.containers import Container
+from docker.utils.socket import STDERR, STDOUT, frames_iter
 
 from patchwise import PACKAGE_NAME, PACKAGE_PATH
 from patchwise.utils.config import parse_config, redis_address
@@ -103,6 +104,7 @@ class DockerExecProcess:
         self._result: tuple[Any, Any] = ("" if text else b"", "" if text else b"")
         self._error: Optional[BaseException] = None
         self._complete = threading.Event()
+        self._start_lock = threading.Lock()
         self._thread: Optional[threading.Thread] = None
 
     def _run(self, input: Any) -> None:
@@ -123,13 +125,18 @@ class DockerExecProcess:
     def communicate(
         self, input: Any = None, timeout: Optional[float] = None
     ) -> tuple[Any, Any]:
-        if self._thread is None:
-            self._thread = threading.Thread(
-                target=self._run, args=(input,), daemon=True
-            )
-            self._thread.start()
-        elif input is not None:
-            raise ValueError("stdin can only be supplied to the first communicate call")
+        with self._start_lock:
+            if self._thread is None:
+                if input is not None and self._stdin is None:
+                    raise ValueError("stdin was not requested for this command")
+                self._thread = threading.Thread(
+                    target=self._run, args=(input,), daemon=True
+                )
+                self._thread.start()
+            elif input is not None:
+                raise ValueError(
+                    "stdin can only be supplied to the first communicate call"
+                )
         if not self._complete.wait(timeout):
             raise subprocess.TimeoutExpired(self._command, timeout)
         if self._error is not None:
@@ -266,18 +273,24 @@ class DockerManager:
         self.logger.debug("Kernel overlay for %s cleaned up.", self.container_name)
 
     def _build(self, dockerfile: Path, tag: str) -> None:
+        """Build an image while draining SDK build output into the debug log."""
         try:
-            image, logs = self.client.images.build(
-                dockerfile=str(dockerfile), tag=tag, path=str(PACKAGE_PATH)
+            logs = self.client.api.build(
+                dockerfile=str(dockerfile), tag=tag, path=str(PACKAGE_PATH), decode=True
             )
+            for entry in logs:
+                message = (
+                    entry.get("stream") or entry.get("status") or entry.get("error")
+                )
+                if message:
+                    self.logger.debug(message.rstrip())
+                if entry.get("error"):
+                    raise RuntimeError(
+                        f"Docker failed to build image {tag}: {entry['error']}"
+                    )
+            self.client.images.get(tag)
         except DockerException as error:
             raise _docker_error(f"build image {tag}", error) from error
-        for entry in logs:
-            message = entry.get("stream") or entry.get("status") or entry.get("error")
-            if message:
-                self.logger.debug(message.rstrip())
-        if image is None:
-            raise RuntimeError(f"Docker did not produce image {tag}")
 
     def build_image(self, dockerfile_path: Path) -> None:
         base_image_tag = "patchwise-base:latest"
@@ -364,20 +377,6 @@ class DockerManager:
                 self._cleanup_kernel_overlay()
                 raise
 
-    @staticmethod
-    def _decode_frames(data: bytes) -> tuple[bytes, bytes]:
-        """Decode Docker's non-TTY multiplexed stdout/stderr stream."""
-        stdout, stderr, offset = bytearray(), bytearray(), 0
-        while offset + 8 <= len(data):
-            stream, size = data[offset], int.from_bytes(
-                data[offset + 4 : offset + 8], "big"
-            )
-            offset += 8
-            payload = data[offset : offset + size]
-            offset += size
-            (stdout if stream == 1 else stderr).extend(payload)
-        return bytes(stdout), bytes(stderr)
-
     def _exec(
         self,
         command: list[str],
@@ -418,17 +417,17 @@ class DockerManager:
                 sock.shutdown(socket.SHUT_WR)
             except OSError:
                 pass
-            chunks: list[bytes] = []
+            stdout, stderr = bytearray(), bytearray()
             try:
-                while True:
-                    chunk = sock.recv(65536)
-                    if not chunk:
-                        break
-                    chunks.append(chunk)
+                for stream, data in frames_iter(sock, tty=False):
+                    if stream == STDOUT:
+                        stdout.extend(data)
+                    elif stream == STDERR:
+                        stderr.extend(data)
             finally:
                 raw_socket.close()
-            stdout, stderr = self._decode_frames(b"".join(chunks))
             code = self.client.api.exec_inspect(exec_id)["ExitCode"]
+            stdout, stderr = bytes(stdout), bytes(stderr)
         if text:
             return code, (
                 stdout.decode(errors="replace"),
@@ -458,10 +457,31 @@ class DockerManager:
             environment=environment,
         )
 
+    def run_stdin_command(
+        self, command: list[str], cwd: Optional[str], **kwargs: Any
+    ) -> DockerExecProcess:
+        """Run a buffered command whose complete standard input is supplied to communicate.
+
+        Docker SDK exec does not offer the incremental stdio contract implied by
+        ``Popen``. Use this method for commands that consume all input before
+        producing their result.
+        """
+        return self.run_command(command, cwd, stdin=subprocess.PIPE, **kwargs)
+
     def run_interactive_command(
         self, command: list[str], cwd: Optional[str], **kwargs: Any
     ) -> DockerExecProcess:
-        return self.run_command(command, cwd, stdin=subprocess.PIPE, **kwargs)
+        """Deprecated alias for :meth:`run_stdin_command`.
+
+        It is buffered, not an incremental interactive stdio session.
+        """
+        warnings.warn(
+            "run_interactive_command() is deprecated; use run_stdin_command() "
+            "for buffered standard input.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.run_stdin_command(command, cwd, **kwargs)
 
     def run_cmd_with_timer(
         self, cmd: list[str], desc: str, cwd: Optional[str] = None, **kwargs: Any
@@ -498,7 +518,7 @@ class DockerManager:
         return stdout
 
     def write_file(self, path: str, content: str) -> bool:
-        proc = self.run_interactive_command(["tee", path], cwd=None)
+        proc = self.run_stdin_command(["tee", path], cwd=None)
         _, stderr = proc.communicate(input=content)
         if proc.returncode != 0:
             self.logger.debug("write_file(%s) failed: %s", path, stderr.strip())

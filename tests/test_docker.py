@@ -1,3 +1,4 @@
+import socket
 import subprocess
 import threading
 from types import SimpleNamespace
@@ -49,6 +50,32 @@ def test_mount_preserves_destination_mode(target, expected):
     assert DockerManager._mount("host", target) == expected
 
 
+def test_exec_demuxes_interleaved_socket_frames_and_writes_stdin():
+    manager = object.__new__(DockerManager)
+    manager.client = Mock()
+    container = Mock(id="container-id")
+    manager._container = Mock(return_value=container)
+    manager.client.api.exec_create.return_value = {"Id": "exec-id"}
+    manager.client.api.exec_inspect.return_value = {"ExitCode": 0}
+    client_socket, daemon_socket = socket.socketpair()
+    manager.client.api.exec_start.return_value = client_socket
+
+    def frame(stream, payload):
+        return bytes([stream, 0, 0, 0]) + len(payload).to_bytes(4, "big") + payload
+
+    daemon_socket.sendall(frame(1, b"out-") + frame(2, b"err") + frame(1, b"put"))
+    daemon_socket.shutdown(socket.SHUT_WR)
+
+    exit_code, streams = manager._exec(
+        ["cat"], "/tmp", input="input", text=True, user=None, environment=None
+    )
+
+    assert exit_code == 0
+    assert streams == ("out-put", "err")
+    assert daemon_socket.recv(5) == b"input"
+    daemon_socket.close()
+
+
 def test_exec_process_honors_host_timeout_then_returns_result():
     manager = Mock()
     manager.logger = Mock()
@@ -83,6 +110,24 @@ def test_exec_process_kill_warns_that_docker_exec_cannot_be_stopped():
     manager.logger.warning.assert_called_once()
 
 
+def test_exec_process_rejects_input_when_stdin_was_not_requested():
+    manager = Mock()
+    process = DockerExecProcess(manager, ["true"], "/tmp")
+
+    with pytest.raises(ValueError, match="stdin was not requested"):
+        process.communicate(input="input")
+
+
+def test_interactive_command_alias_warns_and_uses_buffered_stdin():
+    manager = object.__new__(DockerManager)
+    manager.run_stdin_command = Mock(return_value="process")
+
+    with pytest.deprecated_call(match="run_interactive_command"):
+        assert manager.run_interactive_command(["cat"], "/tmp") == "process"
+
+    manager.run_stdin_command.assert_called_once_with(["cat"], "/tmp")
+
+
 def test_exec_process_rejects_stdin_after_execution_has_started():
     manager = Mock()
     manager._exec.return_value = (0, ("", ""))
@@ -115,12 +160,27 @@ def test_build_error_includes_image_and_daemon_detail():
     manager = object.__new__(DockerManager)
     manager.client = Mock()
     manager.logger = Mock()
-    manager.client.images.build.side_effect = DockerException("daemon unavailable")
+    manager.client.api.build.side_effect = DockerException("daemon unavailable")
 
     with pytest.raises(
-        RuntimeError, match="Failed to build image patchwise-base:latest: daemon unavailable"
+        RuntimeError,
+        match="Failed to build image patchwise-base:latest: daemon unavailable",
     ):
         manager._build("Dockerfile", "patchwise-base:latest")
+
+
+def test_build_streams_logs_and_confirms_image_exists():
+    manager = object.__new__(DockerManager)
+    manager.client = Mock()
+    manager.logger = Mock()
+    manager.client.api.build.return_value = iter(
+        [{"stream": "step 1\\n"}, {"status": "done"}]
+    )
+
+    manager._build("Dockerfile", "patchwise-base:latest")
+
+    manager.logger.debug.assert_has_calls([call("step 1\\n"), call("done")])
+    manager.client.images.get.assert_called_once_with("patchwise-base:latest")
 
 
 def test_start_container_cleans_container_and_overlay_after_preparation_failure():
@@ -171,7 +231,9 @@ def test_ts_cache_creates_container_when_absent(monkeypatch):
 
     DockerManager.ensure_ts_cache_service()
 
-    assert client.containers.run.call_args.kwargs["ports"] == {"6379/tcp": ("127.0.0.1", 6380)}
+    assert client.containers.run.call_args.kwargs["ports"] == {
+        "6379/tcp": ("127.0.0.1", 6380)
+    }
     DockerManager._wait_ts_cache_ready.assert_called_once_with(container)
 
 
@@ -180,7 +242,10 @@ def test_run_cmd_with_timer_updates_terminal_until_command_finishes(monkeypatch)
     manager.logger = Mock()
     manager.logger.isEnabledFor.return_value = True
     process = Mock()
-    process.communicate.side_effect = [subprocess.TimeoutExpired(["make"], 5), ("out", "err")]
+    process.communicate.side_effect = [
+        subprocess.TimeoutExpired(["make"], 5),
+        ("out", "err"),
+    ]
     manager.run_command = Mock(return_value=process)
     monkeypatch.setattr("patchwise.ui.events.has_subscribers", lambda: False)
     writes = []
