@@ -158,7 +158,7 @@ Each phase has its own iteration budget, each overridable via env:
 
 | Phase | Default cap | Override env |
 |-------|-------------|---------------|
-| Critic loop | `MAX_PLAN_ITERATIONS = 10` rounds | `PATCHWISE_MAX_PLAN_ITERATIONS` |
+| Critic loop | `MAX_PLAN_ITERATIONS = 5` rounds | `PATCHWISE_MAX_PLAN_ITERATIONS` |
 | Critic (per round) | `CRITIC_ITER_CAP = 10` | `PATCHWISE_CRITIC_ITER_CAP` |
 | Execution | `EXEC_ITER_CAP = 100` | `PATCHWISE_EXEC_ITER_CAP` |
 | FP filter | `FP_ITER_CAP = 50` | `PATCHWISE_FP_ITER_CAP` |
