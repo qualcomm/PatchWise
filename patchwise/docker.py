@@ -28,12 +28,29 @@ def _error_text(error: BaseException) -> str:
     return str(getattr(error, "explanation", error)).strip()
 
 
+def _has_cause(error: BaseException, exception_type: type[BaseException]) -> bool:
+    """Return whether an exception or one of its causes has the given type."""
+    seen: set[int] = set()
+    while error is not None and id(error) not in seen:
+        if isinstance(error, exception_type):
+            return True
+        seen.add(id(error))
+        error = error.__cause__ or error.__context__
+    return False
+
+
 def check_docker_available() -> None:
     """Fail fast with a clear message if the Docker daemon cannot be used."""
     try:
         docker.from_env().ping()
     except DockerException as error:
         detail = _error_text(error)
+        if _has_cause(error, FileNotFoundError):
+            sys.exit(
+                "Docker is not installed or the Docker socket is unavailable. "
+                "Install and start Docker: "
+                f"https://docs.docker.com/engine/install/\n{detail}"
+            )
         if "permission denied" in detail.lower():
             sys.exit(
                 "Permission denied when talking to the Docker daemon. "
