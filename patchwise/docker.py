@@ -1,6 +1,7 @@
 # Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 
+import os
 import logging
 import subprocess
 import sys
@@ -564,7 +565,7 @@ class DockerManager:
 
         # Create a temporary base container to initialize the volume
         base_image_tag = "patchwise-base:latest"
-        init_container_name = f"patchwise-init-{current_commit_sha[:8]}"
+        init_container_name = f"patchwise-init-{current_commit_sha[:8]}-{os.getpid()}"
 
         try:
             # Start container with the shared volume mounted
