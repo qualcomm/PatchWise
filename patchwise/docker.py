@@ -674,6 +674,7 @@ class DockerManager:
         )
         if result.exit_code:
             stdout, stderr = result.output or (b"", b"")
+            stdout, stderr = stdout or b"", stderr or b""
             raise RuntimeError(
                 f"Container command failed ({result.exit_code}): {(stdout + stderr).decode(errors='replace')}"
             )

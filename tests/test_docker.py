@@ -183,6 +183,19 @@ def test_build_streams_logs_and_confirms_image_exists():
     manager.client.images.get.assert_called_once_with("patchwise-base:latest")
 
 
+@pytest.mark.parametrize("output", [(None, b"error"), (b"error", None)])
+def test_run_root_handles_empty_demuxed_streams(output):
+    manager = object.__new__(DockerManager)
+    manager._container = Mock(
+        return_value=Mock(
+            exec_run=Mock(return_value=SimpleNamespace(exit_code=1, output=output))
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="error"):
+        manager._run_root(["false"])
+
+
 def test_start_container_cleans_container_and_overlay_after_preparation_failure():
     manager = object.__new__(DockerManager)
     manager.client = Mock()
