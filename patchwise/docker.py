@@ -120,9 +120,13 @@ class DockerExecProcess:
         finally:
             self._complete.set()
 
-    def communicate(self, input: Any = None, timeout: Optional[float] = None) -> tuple[Any, Any]:
+    def communicate(
+        self, input: Any = None, timeout: Optional[float] = None
+    ) -> tuple[Any, Any]:
         if self._thread is None:
-            self._thread = threading.Thread(target=self._run, args=(input,), daemon=True)
+            self._thread = threading.Thread(
+                target=self._run, args=(input,), daemon=True
+            )
             self._thread.start()
         elif input is not None:
             raise ValueError("stdin can only be supplied to the first communicate call")
@@ -165,7 +169,9 @@ class DockerManager:
         commit_sha: str,
         git_subdir: str = "",
     ):
-        self.logger = logging.getLogger(f"{PACKAGE_NAME}.{self.__class__.__name__.lower()}")
+        self.logger = logging.getLogger(
+            f"{PACKAGE_NAME}.{self.__class__.__name__.lower()}"
+        )
         self.image_tag = image_tag
         self.container_name = container_name
         self.repo_path = repo_path.resolve()
@@ -211,7 +217,9 @@ class DockerManager:
         for volume in (volume_name, backing_volume):
             self._remove_volume(volume)
 
-        self.logger.debug("Creating kernel overlay backing volume '%s'...", backing_volume)
+        self.logger.debug(
+            "Creating kernel overlay backing volume '%s'...", backing_volume
+        )
         try:
             self.client.volumes.create(backing_volume)
             self.client.containers.run(
@@ -252,7 +260,9 @@ class DockerManager:
             try:
                 self._remove_volume(volume)
             except APIError as error:
-                self.logger.warning("Failed to remove overlay volume %s: %s", volume, _error_text(error))
+                self.logger.warning(
+                    "Failed to remove overlay volume %s: %s", volume, _error_text(error)
+                )
         self.logger.debug("Kernel overlay for %s cleaned up.", self.container_name)
 
     def _build(self, dockerfile: Path, tag: str) -> None:
@@ -277,19 +287,25 @@ class DockerManager:
         if self.image_tag != base_image_tag:
             self.logger.info("Building tool-specific image %s...", self.image_tag)
             self._build(dockerfile_path, self.image_tag)
-            self.logger.info("Tool-specific image %s built successfully.", self.image_tag)
+            self.logger.info(
+                "Tool-specific image %s built successfully.", self.image_tag
+            )
 
     def _container(self) -> Container:
         return self.client.containers.get(self.container_name)
 
-    def _start_container(self, mounts: dict[str, dict[str, str]], *, reset_tree: bool) -> None:
+    def _start_container(
+        self, mounts: dict[str, dict[str, str]], *, reset_tree: bool
+    ) -> None:
         try:
             self._kernel_overlay_volume = self._setup_kernel_overlay()
             try:
                 self._container().remove(force=True)
             except NotFound:
                 pass
-            mounts.update(self._mount(self._kernel_overlay_volume, str(self.kernel_dir)))
+            mounts.update(
+                self._mount(self._kernel_overlay_volume, str(self.kernel_dir))
+            )
             self.logger.info("Starting container %s...", self.container_name)
             self.client.containers.run(
                 self.image_tag,
@@ -312,7 +328,9 @@ class DockerManager:
                 pass
             self._cleanup_kernel_overlay()
             if isinstance(error, DockerException):
-                raise _docker_error(f"start container {self.container_name}", error) from error
+                raise _docker_error(
+                    f"start container {self.container_name}", error
+                ) from error
             raise
 
     def start_container(
@@ -324,7 +342,9 @@ class DockerManager:
     ) -> None:
         docker_mounts: dict[str, dict[str, str]] = {}
         if mount_shared_build:
-            docker_mounts.update(self._mount(self._build_volume_name, str(self.build_dir)))
+            docker_mounts.update(
+                self._mount(self._build_volume_name, str(self.build_dir))
+            )
         for host, destination in (mounts or {}).items():
             docker_mounts.update(self._mount(str(host), destination))
         # Repo-managed trees are already prepared for review; resetting them
@@ -349,7 +369,9 @@ class DockerManager:
         """Decode Docker's non-TTY multiplexed stdout/stderr stream."""
         stdout, stderr, offset = bytearray(), bytearray(), 0
         while offset + 8 <= len(data):
-            stream, size = data[offset], int.from_bytes(data[offset + 4 : offset + 8], "big")
+            stream, size = data[offset], int.from_bytes(
+                data[offset + 4 : offset + 8], "big"
+            )
             offset += 8
             payload = data[offset : offset + size]
             offset += size
@@ -357,20 +379,34 @@ class DockerManager:
         return bytes(stdout), bytes(stderr)
 
     def _exec(
-        self, command: list[str], cwd: str, *, input: Any, text: bool,
-        user: Optional[str], environment: Optional[dict[str, str]],
+        self,
+        command: list[str],
+        cwd: str,
+        *,
+        input: Any,
+        text: bool,
+        user: Optional[str],
+        environment: Optional[dict[str, str]],
     ) -> tuple[int, tuple[Any, Any]]:
         container = self._container()
         if input is None:
-            result = container.exec_run(command, workdir=cwd, user=user, environment=environment, demux=True)
+            result = container.exec_run(
+                command, workdir=cwd, user=user, environment=environment, demux=True
+            )
             stdout, stderr = result.output or (b"", b"")
             # With demux=True, the SDK uses None for an empty output stream.
             stdout, stderr = stdout or b"", stderr or b""
             code = result.exit_code
         else:
             created = self.client.api.exec_create(
-                container.id, command, stdin=True, stdout=True, stderr=True,
-                workdir=cwd, user=user, environment=environment,
+                container.id,
+                command,
+                stdin=True,
+                stdout=True,
+                stderr=True,
+                workdir=cwd,
+                user=user,
+                environment=environment,
             )
             exec_id = created["Id"]
             raw_socket = self.client.api.exec_start(exec_id, socket=True)
@@ -394,10 +430,15 @@ class DockerManager:
             stdout, stderr = self._decode_frames(b"".join(chunks))
             code = self.client.api.exec_inspect(exec_id)["ExitCode"]
         if text:
-            return code, (stdout.decode(errors="replace"), stderr.decode(errors="replace"))
+            return code, (
+                stdout.decode(errors="replace"),
+                stderr.decode(errors="replace"),
+            )
         return code, (stdout, stderr)
 
-    def run_command(self, command: list[str], cwd: Optional[str], **kwargs: Any) -> DockerExecProcess:
+    def run_command(
+        self, command: list[str], cwd: Optional[str], **kwargs: Any
+    ) -> DockerExecProcess:
         cwd = str(cwd or self.sandbox_path)
         text = kwargs.pop("text", True)
         stdin = kwargs.pop("stdin", None)
@@ -408,15 +449,28 @@ class DockerManager:
             raise TypeError(f"Unsupported Docker exec options: {unsupported}")
         self.logger.debug("Executing command in container: %s", command)
         return DockerExecProcess(
-            self, command, cwd, text=text, stdin=stdin, user=user, environment=environment,
+            self,
+            command,
+            cwd,
+            text=text,
+            stdin=stdin,
+            user=user,
+            environment=environment,
         )
 
-    def run_interactive_command(self, command: list[str], cwd: Optional[str], **kwargs: Any) -> DockerExecProcess:
+    def run_interactive_command(
+        self, command: list[str], cwd: Optional[str], **kwargs: Any
+    ) -> DockerExecProcess:
         return self.run_command(command, cwd, stdin=subprocess.PIPE, **kwargs)
 
-    def run_cmd_with_timer(self, cmd: list[str], desc: str, cwd: Optional[str] = None, **kwargs: Any) -> str:
+    def run_cmd_with_timer(
+        self, cmd: list[str], desc: str, cwd: Optional[str] = None, **kwargs: Any
+    ) -> str:
         from patchwise.ui import events
-        show_timer = self.logger.isEnabledFor(logging.INFO) and not events.has_subscribers()
+
+        show_timer = (
+            self.logger.isEnabledFor(logging.INFO) and not events.has_subscribers()
+        )
         start = time.time()
         proc = self.run_command(cmd, cwd=cwd, **kwargs)
         while True:
@@ -461,7 +515,9 @@ class DockerManager:
         except NotFound:
             self.logger.debug("Container %s was already removed.", self.container_name)
         except DockerException as error:
-            raise _docker_error(f"stop container {self.container_name}", error) from error
+            raise _docker_error(
+                f"stop container {self.container_name}", error
+            ) from error
         finally:
             self._cleanup_kernel_overlay()
 
@@ -477,7 +533,9 @@ class DockerManager:
             logger.debug("Volume %s created successfully.", cls._build_volume_name)
 
     @classmethod
-    def initialize_shared_build_volume(cls, repo_path: Path, current_commit_sha: str) -> None:
+    def initialize_shared_build_volume(
+        cls, repo_path: Path, current_commit_sha: str
+    ) -> None:
         del repo_path
         if cls.build_volume_initialized:
             return
@@ -490,16 +548,26 @@ class DockerManager:
             except NotFound:
                 pass
             container = client.containers.run(
-                "patchwise-base:latest", ["tail", "-f", "/dev/null"], detach=True, name=name,
+                "patchwise-base:latest",
+                ["tail", "-f", "/dev/null"],
+                detach=True,
+                name=name,
                 network_mode=cls._network_mode,
                 volumes=cls._mount(cls._build_volume_name, str(cls.build_dir)),
             )
             result = container.exec_run(
-                ["sh", "-lc", f"set -e; mkdir -p {cls.build_dir}; chown -R patchwise:patchwise {cls.build_dir}; chmod -R 755 {cls.build_dir}"],
-                user="root", demux=True,
+                [
+                    "sh",
+                    "-lc",
+                    f"set -e; mkdir -p {cls.build_dir}; chown -R patchwise:patchwise {cls.build_dir}; chmod -R 755 {cls.build_dir}",
+                ],
+                user="root",
+                demux=True,
             )
             if result.exit_code:
-                raise RuntimeError(f"Failed to initialize shared build volume: {result.output}")
+                raise RuntimeError(
+                    f"Failed to initialize shared build volume: {result.output}"
+                )
             cls.build_volume_initialized = True
         finally:
             try:
@@ -521,8 +589,20 @@ class DockerManager:
         except NotFound:
             host, port = redis_address()
             container = client.containers.run(
-                "redis:alpine", ["redis-server", "--maxmemory", "5gb", "--maxmemory-policy", "allkeys-lru", "--save", "900 1 300 100", "--dir", "/data"],
-                detach=True, name=cls._ts_cache_container,
+                "redis:alpine",
+                [
+                    "redis-server",
+                    "--maxmemory",
+                    "5gb",
+                    "--maxmemory-policy",
+                    "allkeys-lru",
+                    "--save",
+                    "900 1 300 100",
+                    "--dir",
+                    "/data",
+                ],
+                detach=True,
+                name=cls._ts_cache_container,
                 ports={f"{cls._ts_cache_container_port}/tcp": (host, port)},
                 volumes=cls._mount(cls._ts_cache_volume, "/data"),
             )
@@ -539,14 +619,20 @@ class DockerManager:
             if stdout.strip() == b"PONG":
                 return
             if time.monotonic() > deadline:
-                raise RuntimeError(f"ts-cache container {cls._ts_cache_container} not ready after {timeout}s: {(stdout + stderr).decode(errors='replace').strip()}")
+                raise RuntimeError(
+                    f"ts-cache container {cls._ts_cache_container} not ready after {timeout}s: {(stdout + stderr).decode(errors='replace').strip()}"
+                )
             time.sleep(1)
 
     def _run_root(self, command: list[str], *, workdir: Optional[str] = None) -> None:
-        result = self._container().exec_run(command, user="root", workdir=workdir, demux=True)
+        result = self._container().exec_run(
+            command, user="root", workdir=workdir, demux=True
+        )
         if result.exit_code:
             stdout, stderr = result.output or (b"", b"")
-            raise RuntimeError(f"Container command failed ({result.exit_code}): {(stdout + stderr).decode(errors='replace')}")
+            raise RuntimeError(
+                f"Container command failed ({result.exit_code}): {(stdout + stderr).decode(errors='replace')}"
+            )
 
     def _prepare_kernel_tree(self, *, reset_tree: bool = True) -> None:
         # Trust repositories mounted from the host, whose ownership differs from
@@ -554,14 +640,19 @@ class DockerManager:
         self._run_root(["git", "config", "--system", "--add", "safe.directory", "*"])
         if not reset_tree:
             return
-        self._run_root(["git", "reset", "--hard", self.commit_sha], workdir=self._git_workdir)
+        self._run_root(
+            ["git", "reset", "--hard", self.commit_sha], workdir=self._git_workdir
+        )
         self._run_root(["git", "clean", "-fdx"], workdir=self._git_workdir)
         # Give the agent ownership of the git tree after root performed the reset.
         # TODO: Does resetting outside the container in --mail mode avoid this?
         self._run_root(["chown", "-R", "patchwise:patchwise", self._git_workdir])
 
     def _configure_git_identity(self) -> None:
-        for key, value in (("user.name", _GIT_COMMITTER["name"]), ("user.email", _GIT_COMMITTER["email"])):
+        for key, value in (
+            ("user.name", _GIT_COMMITTER["name"]),
+            ("user.email", _GIT_COMMITTER["email"]),
+        ):
             self._run_root(["git", "config", "--system", key, value])
 
     def _fix_build_directory_permissions(self) -> None:
