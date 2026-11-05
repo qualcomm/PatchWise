@@ -41,7 +41,7 @@ urllib3.disable_warnings()
 # the console, repeatedly, and corrupts the live dashboard.
 litellm.suppress_debug_info = True
 
-DEFAULT_MODEL = "openai/Pro"
+DEFAULT_MODEL = "openai/responses/Pro"
 DEFAULT_API_BASE = "https://api.openai.com/v1"
 AGENT_MAX_ITERATIONS = 50
 
