@@ -8,7 +8,9 @@ import os
 import socket
 import subprocess
 import sys
+import threading
 import time
+import warnings
 from pathlib import Path
 from typing import Any, Literal, Optional, Union
 
@@ -39,6 +41,11 @@ def _has_cause(error: BaseException, exception_type: type[BaseException]) -> boo
     return False
 
 
+def _docker_error(action: str, error: DockerException) -> RuntimeError:
+    """Add operation context while preserving the Docker daemon's detail."""
+    return RuntimeError(f"Failed to {action}: {_error_text(error)}")
+
+
 def check_docker_available() -> None:
     """Fail fast with a clear message if the Docker daemon cannot be used."""
     try:
@@ -65,12 +72,13 @@ def check_docker_available() -> None:
 
 
 class DockerExecProcess:
-    """A small ``Popen``-compatible result object for a Docker SDK exec.
+    """A temporary, minimal ``Popen`` compatibility layer for SDK execs.
 
-    Keeping this interface avoids forcing all review tools to know whether their
-    command runs locally or in a container.  SDK execs are synchronous, so the
-    command is run when ``communicate`` is called; this also lets commands that
-    need stdin provide it there, as they did with ``subprocess.Popen``.
+    New callers should use a Docker-specific execution interface when one is
+    available. ``kill`` cannot terminate an individual Docker exec, so callers
+    must enforce a command timeout inside the container. This wrapper retains
+    ``communicate`` only while existing review tools are migrated away from its
+    subprocess-shaped API.
     """
 
     def __init__(
@@ -93,13 +101,12 @@ class DockerExecProcess:
         self._environment = environment
         self.returncode: Optional[int] = None
         self._result: tuple[Any, Any] = ("" if text else b"", "" if text else b"")
+        self._error: Optional[BaseException] = None
+        self._complete = threading.Event()
+        self._thread: Optional[threading.Thread] = None
 
-    def communicate(self, input: Any = None, timeout: Optional[float] = None) -> tuple[Any, Any]:
-        # Timeout is retained for Popen compatibility. Commands that need a hard
-        # limit use the in-container `timeout` utility, so daemon-side exec does
-        # not leave work running when a host-side client is interrupted.
-        del timeout
-        if self.returncode is None:
+    def _run(self, input: Any) -> None:
+        try:
             self.returncode, self._result = self._manager._exec(
                 self._command,
                 self._cwd,
@@ -108,12 +115,30 @@ class DockerExecProcess:
                 user=self._user,
                 environment=self._environment,
             )
+        except BaseException as error:
+            self._error = error
+        finally:
+            self._complete.set()
+
+    def communicate(self, input: Any = None, timeout: Optional[float] = None) -> tuple[Any, Any]:
+        if self._thread is None:
+            self._thread = threading.Thread(target=self._run, args=(input,), daemon=True)
+            self._thread.start()
+        elif input is not None:
+            raise ValueError("stdin can only be supplied to the first communicate call")
+        if not self._complete.wait(timeout):
+            raise subprocess.TimeoutExpired(self._command, timeout)
+        if self._error is not None:
+            raise self._error
         return self._result
 
     def kill(self) -> None:
-        # Docker's API has no per-exec kill endpoint.  Timed agent commands are
-        # guarded in-container; retain this no-op for callers handling Popen.
-        return None
+        message = (
+            "DockerExecProcess.kill() cannot stop an individual Docker exec and "
+            "is deprecated; enforce timeouts inside the container instead."
+        )
+        self._manager.logger.warning(message)
+        warnings.warn(message, DeprecationWarning, stacklevel=2)
 
 
 class DockerManager:
@@ -122,6 +147,9 @@ class DockerManager:
     sandbox_path = Path("/home") / PACKAGE_NAME
     build_dir = sandbox_path / "build"
     kernel_dir = sandbox_path / "kernel"
+    # Nothing we run in a container needs network (packages are installed at image
+    # build time), and the agent runs model-composed shell commands over an
+    # untrusted patch, so denying egress keeps a prompt injection sandboxed.
     _network_mode = "none"
 
     ts_cache_initialized = False
@@ -172,6 +200,12 @@ class DockerManager:
             pass
 
     def _setup_kernel_overlay(self) -> str:
+        """Create an overlay volume backed by Docker-managed storage.
+
+        The overlay upper and work directories must not depend on the host
+        sandbox path, which can be a small tmpfs. Keeping them in a Docker
+        volume places the writable overlay data in Docker's persistent storage.
+        """
         backing_volume = self._kernel_backing_volume_name
         volume_name = self._kernel_volume_name
         for volume in (volume_name, backing_volume):
@@ -222,7 +256,12 @@ class DockerManager:
         self.logger.debug("Kernel overlay for %s cleaned up.", self.container_name)
 
     def _build(self, dockerfile: Path, tag: str) -> None:
-        image, logs = self.client.images.build(dockerfile=str(dockerfile), tag=tag, path=str(PACKAGE_PATH))
+        try:
+            image, logs = self.client.images.build(
+                dockerfile=str(dockerfile), tag=tag, path=str(PACKAGE_PATH)
+            )
+        except DockerException as error:
+            raise _docker_error(f"build image {tag}", error) from error
         for entry in logs:
             message = entry.get("stream") or entry.get("status") or entry.get("error")
             if message:
@@ -263,7 +302,7 @@ class DockerManager:
             self._configure_git_identity()
             self._prepare_kernel_tree(reset_tree=reset_tree)
             self.logger.info("Container %s started successfully.", self.container_name)
-        except Exception:
+        except Exception as error:
             # Preparation may fail after the container has started. Remove it
             # before releasing its overlay volumes, otherwise Docker keeps the
             # volumes in use and teardown leaks both resources.
@@ -272,6 +311,8 @@ class DockerManager:
             except (DockerException, NotFound):
                 pass
             self._cleanup_kernel_overlay()
+            if isinstance(error, DockerException):
+                raise _docker_error(f"start container {self.container_name}", error) from error
             raise
 
     def start_container(
@@ -286,7 +327,12 @@ class DockerManager:
             docker_mounts.update(self._mount(self._build_volume_name, str(self.build_dir)))
         for host, destination in (mounts or {}).items():
             docker_mounts.update(self._mount(str(host), destination))
-        self._start_container(docker_mounts, reset_tree=False if self._repo_managed else reset_tree)
+        # Repo-managed trees are already prepared for review; resetting them
+        # would discard their workspace state.
+        self._start_container(
+            docker_mounts,
+            reset_tree=False if self._repo_managed else reset_tree,
+        )
         if mount_shared_build:
             try:
                 self._fix_build_directory_permissions()
@@ -370,12 +416,21 @@ class DockerManager:
 
     def run_cmd_with_timer(self, cmd: list[str], desc: str, cwd: Optional[str] = None, **kwargs: Any) -> str:
         from patchwise.ui import events
+        show_timer = self.logger.isEnabledFor(logging.INFO) and not events.has_subscribers()
         start = time.time()
         proc = self.run_command(cmd, cwd=cwd, **kwargs)
-        stdout, stderr = proc.communicate()
-        if self.logger.isEnabledFor(logging.INFO) and not events.has_subscribers():
-            sys.stdout.write("\r\033[K")
-            sys.stdout.flush()
+        while True:
+            try:
+                stdout, stderr = proc.communicate(timeout=5)
+                if show_timer:
+                    sys.stdout.write("\r\033[K")
+                    sys.stdout.flush()
+                break
+            except subprocess.TimeoutExpired:
+                elapsed = int(time.time() - start)
+                if show_timer:
+                    sys.stdout.write(f"\r\033[K{desc}... {elapsed}s elapsed")
+                    sys.stdout.flush()
         elapsed = int(time.time() - start)
         self.logger.debug("%s completed in %ss", desc, elapsed)
         return (stdout or "") + (stderr or "")
@@ -405,6 +460,8 @@ class DockerManager:
             self.logger.debug("Container %s stopped and removed.", self.container_name)
         except NotFound:
             self.logger.debug("Container %s was already removed.", self.container_name)
+        except DockerException as error:
+            raise _docker_error(f"stop container {self.container_name}", error) from error
         finally:
             self._cleanup_kernel_overlay()
 
@@ -492,11 +549,15 @@ class DockerManager:
             raise RuntimeError(f"Container command failed ({result.exit_code}): {(stdout + stderr).decode(errors='replace')}")
 
     def _prepare_kernel_tree(self, *, reset_tree: bool = True) -> None:
+        # Trust repositories mounted from the host, whose ownership differs from
+        # the container's users.
         self._run_root(["git", "config", "--system", "--add", "safe.directory", "*"])
         if not reset_tree:
             return
         self._run_root(["git", "reset", "--hard", self.commit_sha], workdir=self._git_workdir)
         self._run_root(["git", "clean", "-fdx"], workdir=self._git_workdir)
+        # Give the agent ownership of the git tree after root performed the reset.
+        # TODO: Does resetting outside the container in --mail mode avoid this?
         self._run_root(["chown", "-R", "patchwise:patchwise", self._git_workdir])
 
     def _configure_git_identity(self) -> None:
@@ -505,7 +566,13 @@ class DockerManager:
 
     def _fix_build_directory_permissions(self) -> None:
         if not self.commit_sha:
+            # Normal manager construction always supplies a commit SHA, but keep
+            # this defensive warning for malformed external callers.
+            self.logger.warning(
+                "No commit SHA available, cannot fix build directory permissions"
+            )
             return
+        # Create and fix permissions for the commit-specific build directory.
         directory = str(self.build_dir / self.commit_sha)
         self._run_root(["mkdir", "-p", directory])
         self._run_root(["chown", "-R", "patchwise:patchwise", directory])
