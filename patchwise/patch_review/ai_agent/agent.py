@@ -228,6 +228,8 @@ class Agent:
     def _mark_openai(kwargs: dict, marked: List[dict]) -> None:
         if not marked:
             return
+        # TODO: LiteLLM's openai/responses/ bridge drops these markers as of
+        # 1.105.4. Remove this note once upstream preserves the breakpoints.
         for block in marked:
             # OpenAI honors a per-block breakpoint only if the request opts in.
             block["prompt_cache_breakpoint"] = {"mode": "explicit"}
