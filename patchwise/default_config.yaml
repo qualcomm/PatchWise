@@ -17,7 +17,7 @@ git_committer:
     name: "Patchwise"
     email: "patchwise@qualcomm.com"
 ai:
-    model: "openai/Pro"
+    model: "openai/responses/Pro"
     provider: "https://api.openai.com/v1"
     # API key for the AI model API. Leave empty to fall back to the provider's
     # usual environment variable (e.g. OPENAI_API_KEY). Override in
@@ -28,7 +28,7 @@ ai:
     # ~/.config/patchwise_config.yaml, e.g.:
     #   ai:
     #     models:
-    #       openai/Pro: "GPT-5"
+    #       openai/responses/Pro: "The Pro model"
     models: {}
     # Accepts: "inline" or "gerrit".
     output_format: "inline"

@@ -340,7 +340,7 @@ PatchWise merges [`patchwise/default_config.yaml`](patchwise/default_config.yaml
 
 ### Ai Review Options
 
-- `--model`: Specify the AI model to use for code review. (default: `openai/Pro`).
+- `--model`: Specify the AI model to use for code review. (default: `openai/responses/Pro`). Use the `openai/responses/` prefix for OpenAI models, e.g. `openai/responses/gpt-6.1-sol`, which routes requests through the `/v1/responses`.
 - `--provider`: The base URL for the AI model API. (default: `https://api.openai.com/v1`)
 - `--reasoning-effort`: Reasoning-effort hint for reasoning models, e.g. `low`/`medium`/`high`. Unset uses the model default.
 - `--additional-context`: Extra text injected into the review/analysis prompt (e.g. a known reproducer or debugging notes). Shared across review and `--rca` modes.
