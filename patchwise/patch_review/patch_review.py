@@ -3,6 +3,7 @@
 
 import abc
 import logging
+import os
 import subprocess
 import sys
 import time
@@ -47,7 +48,9 @@ class PatchReview(abc.ABC):
             image_tag = "patchwise-base:latest"
         else:
             image_tag = f"{PACKAGE_NAME.lower()}-{self.__class__.__name__.lower()}"
-        container_name = f"{image_tag.replace(':', '-')}-{self.commit.hexsha}"
+        container_name = (
+            f"{image_tag.replace(':', '-')}-{self.commit.hexsha}-{os.getpid()}"
+        )
 
         self.docker_manager = DockerManager(
             image_tag=image_tag,
