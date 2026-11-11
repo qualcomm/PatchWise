@@ -25,7 +25,7 @@ from patchwise.patch_review.decorators import register_llm_review, register_long
 
 from patchwise.patch_review.ai_review.ai_review import AiReview
 from patchwise.ui import events
-from patchwise.utils.config import ai_output_format
+from patchwise.utils.config import ai_output_format, parse_config
 from patchwise.utils.repo_workspace import (
     project_layout_note,
     repo_project_note,
@@ -137,6 +137,7 @@ code span). The finding is placed after "end_line". For a single-line finding,
 - Line-wrap at 75 columns (never wrap code, tags, or quoted text).
 - Remove internal reasoning and thinking.
 - Keep `[likely false positive]` prefix if present.
+- Keep severity prefixes (`[low]`, `[medium]`, `[high]`) if present; do not add them.
 - Keep the finding concise, simple, and highly readable.
 - Make sure you follow Linux Kernel guidelines.
 
@@ -1137,14 +1138,19 @@ finding with record_verdict as you work through them.
         return cls._is_proven_drop(entry)
 
     @classmethod
-    def _render_kept(cls, entry: Dict[str, Any]) -> str:
+    def _render_kept(
+        cls, entry: Dict[str, Any], *, output_severity: bool = False
+    ) -> str:
         """Finding text for a kept entry. A high-impact finding the filter wanted
         to drop is kept by the recall floor but prefixed `[likely false positive]`,
         so the reviewer sees the filter judged it a likely FP (proof is in
         fp_verdicts.json) rather than the floor silently passing it through."""
         text = str(entry.get("finding") or "").strip()
         if text and cls._is_proven_drop(entry) and cls._impact_is_high(entry):
-            return f"[likely false positive] {text}"
+            text = f"[likely false positive] {text}"
+        impact = str(entry.get("impact", "")).strip().lower()
+        if text and output_severity and impact in ("low", "medium", "high"):
+            text = f"[{impact}] {text}"
         return text
 
     @staticmethod
@@ -1227,11 +1233,17 @@ finding with record_verdict as you work through them.
 
         kept: List[str] = []
         dropped: List[Dict[str, Any]] = []
+        output_severity = (
+            parse_config()
+            .get("ai", {})
+            .get("code_review", {})
+            .get("output_severity", False)
+        )
         for e in entries:
             if self._is_dropped(e):
                 dropped.append(e)
                 continue
-            text = self._render_kept(e)
+            text = self._render_kept(e, output_severity=output_severity)
             if text:
                 kept.append(text)
 
