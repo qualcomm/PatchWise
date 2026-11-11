@@ -69,6 +69,19 @@ def ai_output_format() -> str:
     return fmt
 
 
+def ai_output_severity() -> bool:
+    """Return `ai.code_review.output_severity`: whether findings get a severity prefix."""
+    code_review = parse_config()["ai"].get("code_review") or {}
+    if not isinstance(code_review, dict):
+        raise ValueError(f"ai.code_review must be a mapping, not {code_review!r}")
+    enabled = code_review.get("output_severity", False)
+    if not isinstance(enabled, bool):
+        raise ValueError(
+            f"ai.code_review.output_severity must be true or false, not {enabled!r}"
+        )
+    return enabled
+
+
 def update_user_config(dict: Dict[str, Any]) -> None:
     if not USER_CONFIG_PATH.exists():
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)

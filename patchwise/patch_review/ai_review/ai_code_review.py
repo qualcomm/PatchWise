@@ -25,7 +25,7 @@ from patchwise.patch_review.decorators import register_llm_review, register_long
 
 from patchwise.patch_review.ai_review.ai_review import AiReview
 from patchwise.ui import events
-from patchwise.utils.config import ai_output_format
+from patchwise.utils.config import ai_output_format, ai_output_severity
 from patchwise.utils.repo_workspace import (
     project_layout_note,
     repo_project_note,
@@ -136,7 +136,8 @@ code span). The finding is placed after "end_line". For a single-line finding,
 - ASCII characters only.
 - Line-wrap at 75 columns (never wrap code, tags, or quoted text).
 - Remove internal reasoning and thinking.
-- Keep `[likely false positive]` prefix if present.
+- Keep the `[high]`, `[medium]` or `[low]` severity prefix and the
+  `[likely false positive]` prefix if present.
 - Keep the finding concise, simple, and highly readable.
 - Make sure you follow Linux Kernel guidelines.
 
@@ -1136,15 +1137,35 @@ finding with record_verdict as you work through them.
             return False
         return cls._is_proven_drop(entry)
 
+    @staticmethod
+    def _severity_prefix(entry: Dict[str, Any]) -> str:
+        """`[high] `, `[medium] ` or `[low] ` from the filter's `impact` rating.
+
+        Empty when the filter gave no rating or an unrecognised one: the recall
+        floor treats those as high, but printing `[high]` would claim a rating
+        the filter never made."""
+        impact = str(entry.get("impact", "")).strip().lower()
+        if impact in ("high", "medium", "low"):
+            return f"[{impact}] "
+        return ""
+
     @classmethod
-    def _render_kept(cls, entry: Dict[str, Any]) -> str:
+    def _render_kept(cls, entry: Dict[str, Any], output_severity: bool = False) -> str:
         """Finding text for a kept entry. A high-impact finding the filter wanted
         to drop is kept by the recall floor but prefixed `[likely false positive]`,
         so the reviewer sees the filter judged it a likely FP (proof is in
-        fp_verdicts.json) rather than the floor silently passing it through."""
+        fp_verdicts.json) rather than the floor silently passing it through.
+
+        With `output_severity` (`ai.code_review.output_severity`), the filter's
+        impact rating goes in front, e.g. `[medium] ...` or
+        `[high] [likely false positive] ...`."""
         text = str(entry.get("finding") or "").strip()
-        if text and cls._is_proven_drop(entry) and cls._impact_is_high(entry):
-            return f"[likely false positive] {text}"
+        if not text:
+            return text
+        if cls._is_proven_drop(entry) and cls._impact_is_high(entry):
+            text = f"[likely false positive] {text}"
+        if output_severity:
+            text = cls._severity_prefix(entry) + text
         return text
 
     @staticmethod
@@ -1227,11 +1248,12 @@ finding with record_verdict as you work through them.
 
         kept: List[str] = []
         dropped: List[Dict[str, Any]] = []
+        output_severity = ai_output_severity()
         for e in entries:
             if self._is_dropped(e):
                 dropped.append(e)
                 continue
-            text = self._render_kept(e)
+            text = self._render_kept(e, output_severity)
             if text:
                 kept.append(text)
 
