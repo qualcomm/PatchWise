@@ -293,6 +293,19 @@ mail:
 
 PatchWise merges [`patchwise/default_config.yaml`](patchwise/default_config.yaml) (shipped defaults) under `~/.config/patchwise_config.yaml` (user overrides) — see that file for all available options.
 
+To include the false-positive filter's severity rating in code-review findings, set:
+
+```yaml
+ai:
+  code_review:
+    output_severity: true
+```
+
+This adds `[low]`, `[medium]`, or `[high]` before each rated finding in inline and
+Gerrit output, alongside `[likely false positive]` when applicable. Findings with
+missing or unrecognized ratings remain unlabeled. The default is `false`; this
+option does not change which findings are kept or dropped.
+
 ## Command-Line Options
 
 - `-h`, `--help`: Show help message and exit
