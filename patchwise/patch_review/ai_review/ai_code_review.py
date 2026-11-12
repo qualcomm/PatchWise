@@ -25,7 +25,7 @@ from patchwise.patch_review.decorators import register_llm_review, register_long
 
 from patchwise.patch_review.ai_review.ai_review import AiReview
 from patchwise.ui import events
-from patchwise.utils.config import ai_output_format, parse_config
+from patchwise.utils.config import ai_output_format, ai_output_severity
 from patchwise.utils.repo_workspace import (
     project_layout_note,
     repo_project_note,
@@ -1233,12 +1233,7 @@ finding with record_verdict as you work through them.
 
         kept: List[str] = []
         dropped: List[Dict[str, Any]] = []
-        output_severity = (
-            parse_config()
-            .get("ai", {})
-            .get("code_review", {})
-            .get("output_severity", False)
-        )
+        output_severity = ai_output_severity()
         for e in entries:
             if self._is_dropped(e):
                 dropped.append(e)

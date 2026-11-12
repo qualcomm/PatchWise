@@ -232,3 +232,33 @@ def test_cleanup_preserves_labels_in_each_output_format(
 
 def test_default_config_disables_severity(user_config):
     assert config.parse_config()["ai"]["code_review"]["output_severity"] is False
+
+
+@pytest.mark.parametrize(
+    "contents, message",
+    [
+        (
+            'ai:\n  code_review:\n    output_severity: "false"\n',
+            r"ai\.code_review\.output_severity must be true or false",
+        ),
+        ("ai:\n  code_review: []\n", r"ai\.code_review must be a dictionary"),
+    ],
+)
+def test_filter_rejects_invalid_severity_config(
+    tmp_path, user_config, contents, message
+):
+    user_config.write_text(contents)
+    review = _review(tmp_path)
+    review.agent = SimpleNamespace(
+        verdicts_path_for=lambda label: tmp_path / "verdicts.jsonl",
+        run_agent_loop=lambda *args, **kwargs: None,
+        complete_until_json=lambda *args, **kwargs: [
+            {"finding": "Buffer leaks.", "impact": "high"}
+        ],
+    )
+    review.format_chat_response = lambda text: pytest.fail(
+        "Invalid severity config reached the output renderer"
+    )
+
+    with pytest.raises(ValueError, match=message):
+        review._fp_filter_phase([({}, "### Buffer leaks.")])

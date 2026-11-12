@@ -306,6 +306,10 @@ Gerrit output, alongside `[likely false positive]` when applicable. Findings wit
 missing or unrecognized ratings remain unlabeled. The default is `false`; this
 option does not change which findings are kept or dropped.
 
+After merging defaults and user overrides, `ai.code_review` must be a mapping
+and `output_severity` must be a boolean (`true` or `false`, without quotes).
+Other types raise a configuration error.
+
 ## Command-Line Options
 
 - `-h`, `--help`: Show help message and exit
