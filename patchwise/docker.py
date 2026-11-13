@@ -11,11 +11,12 @@ import sys
 import threading
 import time
 import warnings
+from collections import deque
 from pathlib import Path
 from typing import Any, Literal, Optional, Union
 
 import docker
-from docker.errors import APIError, DockerException, NotFound
+from docker.errors import DockerException, NotFound
 from docker.models.containers import Container
 from docker.utils.socket import STDERR, STDOUT, frames_iter
 
@@ -28,7 +29,7 @@ _GIT_COMMITTER = parse_config()["git_committer"]
 
 def _error_text(error: BaseException) -> str:
     """Return the useful daemon error text from an SDK exception."""
-    return str(getattr(error, "explanation", error)).strip()
+    return str(getattr(error, "explanation", None) or error).strip()
 
 
 def _has_cause(error: BaseException, exception_type: type[BaseException]) -> bool:
@@ -185,6 +186,7 @@ class DockerManager:
         self.commit_sha = commit_sha
         self.git_subdir = (git_subdir or "").strip("/")
         self._kernel_overlay_volume: Optional[str] = None
+        self._container_object: Optional[Container] = None
         self.client = docker.from_env()
         require_workspace_root(str(self.repo_path))
         self._repo_managed = is_repo_managed(str(self.repo_path))
@@ -206,12 +208,6 @@ class DockerManager:
         destination, _, mode = target.partition(":")
         return {source: {"bind": destination, "mode": mode or "rw"}}
 
-    def _remove_volume(self, name: str) -> None:
-        try:
-            self.client.volumes.get(name).remove(force=True)
-        except NotFound:
-            pass
-
     def _setup_kernel_overlay(self) -> str:
         """Create an overlay volume backed by Docker-managed storage.
 
@@ -221,76 +217,93 @@ class DockerManager:
         """
         backing_volume = self._kernel_backing_volume_name
         volume_name = self._kernel_volume_name
-        for volume in (volume_name, backing_volume):
-            self._remove_volume(volume)
-
         self.logger.debug(
             "Creating kernel overlay backing volume '%s'...", backing_volume
         )
-        try:
-            self.client.volumes.create(backing_volume)
-            self.client.containers.run(
-                "patchwise-base:latest",
-                ["mkdir", "/backing/upper", "/backing/work"],
-                remove=True,
-                user="root",
-                network_mode=self._network_mode,
-                volumes=self._mount(backing_volume, "/backing"),
-            )
-            mountpoint = self.client.volumes.get(backing_volume).attrs["Mountpoint"]
-            self.client.volumes.create(
-                volume_name,
-                driver="local",
-                driver_opts={
-                    "type": "overlay",
-                    "o": (
-                        f"lowerdir={self.repo_path},upperdir={mountpoint}/upper,"
-                        f"workdir={mountpoint}/work,metacopy=on"
-                    ),
-                    "device": "overlay",
-                },
-            )
-        except Exception:
-            # _start_container records the overlay only after this method
-            # returns, so clean up partial creation locally on every failure.
-            for volume in (volume_name, backing_volume):
-                try:
-                    self._remove_volume(volume)
-                except DockerException:
-                    pass
-            raise
+        self.client.volumes.create(backing_volume)
+        self.client.containers.run(
+            "patchwise-base:latest",
+            ["mkdir", "/backing/upper", "/backing/work"],
+            remove=True,
+            user="root",
+            network_mode=self._network_mode,
+            volumes=self._mount(backing_volume, "/backing"),
+        )
+        mountpoint = self.client.volumes.get(backing_volume).attrs["Mountpoint"]
+        self.client.volumes.create(
+            volume_name,
+            driver="local",
+            driver_opts={
+                "type": "overlay",
+                "o": (
+                    f"lowerdir={self.repo_path},upperdir={mountpoint}/upper,"
+                    f"workdir={mountpoint}/work,metacopy=on"
+                ),
+                "device": "overlay",
+            },
+        )
         self.logger.debug("Kernel overlay volume '%s' created.", volume_name)
         return volume_name
 
     def _cleanup_kernel_overlay(self) -> None:
         for volume in (self._kernel_volume_name, self._kernel_backing_volume_name):
             try:
-                self._remove_volume(volume)
-            except APIError as error:
+                self.client.volumes.get(volume).remove(force=True)
+            except NotFound:
+                continue
+            except Exception as error:
                 self.logger.warning(
                     "Failed to remove overlay volume %s: %s", volume, _error_text(error)
                 )
+        self._kernel_overlay_volume = None
         self.logger.debug("Kernel overlay for %s cleaned up.", self.container_name)
 
     def _build(self, dockerfile: Path, tag: str) -> None:
-        """Build an image while draining SDK build output into the debug log."""
+        """Keep CLI builds for BuildKit and registry-specific credential lookup.
+
+        The SDK's legacy build API loads every configured credential helper,
+        so a broken helper for an unrelated registry can prevent all builds.
+        Drain output into the file log rather than corrupting the dashboard.
+        """
+        command = [
+            "docker",
+            "build",
+            "--rm=true",
+            "--force-rm=true",
+            "-f",
+            str(dockerfile),
+            "-t",
+            tag,
+            str(PACKAGE_PATH),
+        ]
+        output: deque[str] = deque(maxlen=20)
         try:
-            logs = self.client.api.build(
-                dockerfile=str(dockerfile), tag=tag, path=str(PACKAGE_PATH), decode=True
-            )
-            for entry in logs:
-                message = (
-                    entry.get("stream") or entry.get("status") or entry.get("error")
-                )
-                if message:
-                    self.logger.debug(message.rstrip())
-                if entry.get("error"):
+            with subprocess.Popen(
+                command,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+            ) as process:
+                if process.stdout:
+                    for line in process.stdout:
+                        self.logger.debug(line.rstrip())
+                        output.append(line)
+                code = process.wait()
+                if code:
                     raise RuntimeError(
-                        f"Docker failed to build image {tag}: {entry['error']}"
+                        f"Failed to build image {tag} (exit code {code}):\n"
+                        + "".join(output).strip()
                     )
             self.client.images.get(tag)
         except DockerException as error:
             raise _docker_error(f"build image {tag}", error) from error
+        except FileNotFoundError as error:
+            raise RuntimeError(
+                "Docker CLI is required to build images. Install Docker: "
+                "https://docs.docker.com/engine/install/"
+            ) from error
+        except OSError as error:
+            raise RuntimeError(f"Failed to build image {tag}: {error}") from error
 
     def build_image(self, dockerfile_path: Path) -> None:
         base_image_tag = "patchwise-base:latest"
@@ -305,22 +318,36 @@ class DockerManager:
             )
 
     def _container(self) -> Container:
-        return self.client.containers.get(self.container_name)
+        if self._container_object is None:
+            self._container_object = self.client.containers.get(self.container_name)
+        return self._container_object
+
+    def _cleanup_container(self) -> None:
+        try:
+            self._container().remove(force=True)
+        except NotFound:
+            pass
+        except Exception as error:
+            self.logger.warning(
+                "Failed to remove container %s: %s",
+                self.container_name,
+                _error_text(error),
+            )
+        finally:
+            self._container_object = None
 
     def _start_container(
         self, mounts: dict[str, dict[str, str]], *, reset_tree: bool
     ) -> None:
         try:
+            self._cleanup_container()
+            self._cleanup_kernel_overlay()
             self._kernel_overlay_volume = self._setup_kernel_overlay()
-            try:
-                self._container().remove(force=True)
-            except NotFound:
-                pass
             mounts.update(
                 self._mount(self._kernel_overlay_volume, str(self.kernel_dir))
             )
             self.logger.info("Starting container %s...", self.container_name)
-            self.client.containers.run(
+            self._container_object = self.client.containers.run(
                 self.image_tag,
                 ["tail", "-f", "/dev/null"],
                 detach=True,
@@ -335,10 +362,7 @@ class DockerManager:
             # Preparation may fail after the container has started. Remove it
             # before releasing its overlay volumes, otherwise Docker keeps the
             # volumes in use and teardown leaks both resources.
-            try:
-                self._container().remove(force=True)
-            except (DockerException, NotFound):
-                pass
+            self._cleanup_container()
             self._cleanup_kernel_overlay()
             if isinstance(error, DockerException):
                 raise _docker_error(
@@ -360,8 +384,8 @@ class DockerManager:
             )
         for host, destination in (mounts or {}).items():
             docker_mounts.update(self._mount(str(host), destination))
-        # Repo-managed trees are already prepared for review; resetting them
-        # would discard their workspace state.
+        # Users are responsible for preparing repo-managed trees for review;
+        # resetting them would discard their workspace state.
         self._start_container(
             docker_mounts,
             reset_tree=False if self._repo_managed else reset_tree,
@@ -370,10 +394,7 @@ class DockerManager:
             try:
                 self._fix_build_directory_permissions()
             except Exception:
-                try:
-                    self._container().remove(force=True)
-                except (DockerException, NotFound):
-                    pass
+                self._cleanup_container()
                 self._cleanup_kernel_overlay()
                 raise
 
@@ -510,6 +531,8 @@ class DockerManager:
         while True:
             try:
                 stdout, stderr = proc.communicate(timeout=5)
+                if stdout:
+                    self.logger.debug(stdout)
                 if show_timer:
                     sys.stdout.write("\r\033[K")
                     sys.stdout.flush()
@@ -553,6 +576,7 @@ class DockerManager:
                 f"stop container {self.container_name}", error
             ) from error
         finally:
+            self._container_object = None
             self._cleanup_kernel_overlay()
 
     @classmethod
@@ -702,8 +726,6 @@ class DockerManager:
 
     def _fix_build_directory_permissions(self) -> None:
         if not self.commit_sha:
-            # Normal manager construction always supplies a commit SHA, but keep
-            # this defensive warning for malformed external callers.
             self.logger.warning(
                 "No commit SHA available, cannot fix build directory permissions"
             )
@@ -715,4 +737,5 @@ class DockerManager:
         self._run_root(["chmod", "-R", "755", directory])
 
 
+# Global tracking for container orchestration
 CONTAINERS_BUILT: dict[str, DockerManager] = {}

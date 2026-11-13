@@ -1,3 +1,4 @@
+import io
 import socket
 import subprocess
 import threading
@@ -8,6 +9,7 @@ import pytest
 
 from docker.errors import DockerException, NotFound
 
+from patchwise import PACKAGE_PATH
 from patchwise.docker import DockerExecProcess, DockerManager, check_docker_available
 
 
@@ -16,6 +18,7 @@ from patchwise.docker import DockerExecProcess, DockerManager, check_docker_avai
     [
         ((b"stdout", None), ("stdout", "")),
         ((None, b"stderr"), ("", "stderr")),
+        ((None, None), ("", "")),
         (None, ("", "")),
     ],
 )
@@ -138,49 +141,129 @@ def test_exec_process_rejects_stdin_after_execution_has_started():
         process.communicate(input="more")
 
 
-def test_overlay_setup_cleans_partial_volumes_on_failure():
+@pytest.mark.parametrize(
+    "error",
+    [NotFound("missing"), DockerException("unavailable"), OSError("disconnected")],
+)
+def test_overlay_cleanup_attempts_both_volumes_after_error(error):
+    manager = object.__new__(DockerManager)
+    manager.client = Mock()
+    manager.logger = Mock()
+    manager.container_name = "review"
+    manager._kernel_overlay_volume = "overlay"
+    manager.client.volumes.get.side_effect = [error, Mock()]
+
+    manager._cleanup_kernel_overlay()
+
+    assert manager.client.volumes.get.call_args_list == [
+        call("patchwise-kernel-review"),
+        call("patchwise-kernel-backing-review"),
+    ]
+    assert manager._kernel_overlay_volume is None
+
+
+def test_overlay_setup_only_creates_volumes():
     manager = object.__new__(DockerManager)
     manager.client = Mock()
     manager.logger = Mock()
     manager.container_name = "review"
     manager.repo_path = "/repo"
-    manager._remove_volume = Mock()
-    manager.client.containers.run.side_effect = DockerException("helper failed")
+    manager.client.volumes.get.return_value.attrs = {"Mountpoint": "/volumes/backing"}
 
-    with pytest.raises(DockerException, match="helper failed"):
-        manager._setup_kernel_overlay()
+    assert manager._setup_kernel_overlay() == "patchwise-kernel-review"
 
-    assert manager._remove_volume.call_args_list[-2:] == [
-        call("patchwise-kernel-review"),
+    manager.client.volumes.get.return_value.remove.assert_not_called()
+    assert manager.client.volumes.create.call_args_list == [
         call("patchwise-kernel-backing-review"),
+        call(
+            "patchwise-kernel-review",
+            driver="local",
+            driver_opts={
+                "type": "overlay",
+                "o": "lowerdir=/repo,upperdir=/volumes/backing/upper,workdir=/volumes/backing/work,metacopy=on",
+                "device": "overlay",
+            },
+        ),
     ]
 
 
-def test_build_error_includes_image_and_daemon_detail():
+def test_build_error_includes_image_and_daemon_detail(monkeypatch):
     manager = object.__new__(DockerManager)
-    manager.client = Mock()
     manager.logger = Mock()
-    manager.client.api.build.side_effect = DockerException("daemon unavailable")
+    process = Mock(stdout=io.StringIO("daemon unavailable\n"))
+    process.wait.return_value = 1
+    popen = Mock()
+    popen.return_value.__enter__ = Mock(return_value=process)
+    popen.return_value.__exit__ = Mock(return_value=False)
+    monkeypatch.setattr("patchwise.docker.subprocess.Popen", popen)
 
     with pytest.raises(
         RuntimeError,
-        match="Failed to build image patchwise-base:latest: daemon unavailable",
+        match="(?s)Failed to build image patchwise-base:latest .*daemon unavailable",
     ):
         manager._build("Dockerfile", "patchwise-base:latest")
 
 
-def test_build_streams_logs_and_confirms_image_exists():
+def test_build_streams_cli_logs_without_loading_sdk_credentials(monkeypatch):
     manager = object.__new__(DockerManager)
     manager.client = Mock()
     manager.logger = Mock()
-    manager.client.api.build.return_value = iter(
-        [{"stream": "step 1\\n"}, {"status": "done"}]
-    )
+    manager.client.api.build.side_effect = DockerException("broken credential helper")
+    process = Mock(stdout=io.StringIO("step 1\ndone\n"))
+    process.wait.return_value = 0
+    popen = Mock()
+    popen.return_value.__enter__ = Mock(return_value=process)
+    popen.return_value.__exit__ = Mock(return_value=False)
+    monkeypatch.setattr("patchwise.docker.subprocess.Popen", popen)
 
     manager._build("Dockerfile", "patchwise-base:latest")
 
-    manager.logger.debug.assert_has_calls([call("step 1\\n"), call("done")])
+    popen.assert_called_once_with(
+        [
+            "docker",
+            "build",
+            "--rm=true",
+            "--force-rm=true",
+            "-f",
+            "Dockerfile",
+            "-t",
+            "patchwise-base:latest",
+            str(PACKAGE_PATH),
+        ],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    manager.logger.debug.assert_has_calls([call("step 1"), call("done")])
+    manager.client.api.build.assert_not_called()
     manager.client.images.get.assert_called_once_with("patchwise-base:latest")
+    process.wait.assert_called_once()
+
+
+def test_build_reports_missing_image_after_successful_cli_exit(monkeypatch):
+    manager = object.__new__(DockerManager)
+    manager.client = Mock()
+    manager.logger = Mock()
+    manager.client.images.get.side_effect = NotFound("image missing")
+    process = Mock(stdout=io.StringIO("done\n"))
+    process.wait.return_value = 0
+    popen = Mock()
+    popen.return_value.__enter__ = Mock(return_value=process)
+    popen.return_value.__exit__ = Mock(return_value=False)
+    monkeypatch.setattr("patchwise.docker.subprocess.Popen", popen)
+
+    with pytest.raises(RuntimeError, match="Failed to build image test: image missing"):
+        manager._build("Dockerfile", "test")
+
+
+def test_build_reports_missing_cli(monkeypatch):
+    manager = object.__new__(DockerManager)
+    monkeypatch.setattr(
+        "patchwise.docker.subprocess.Popen", Mock(side_effect=FileNotFoundError())
+    )
+
+    with pytest.raises(RuntimeError, match="Docker CLI is required.*Install Docker"):
+        manager._build("Dockerfile", "patchwise-base:latest")
 
 
 @pytest.mark.parametrize("output", [(None, b"error"), (b"error", None)])
@@ -204,6 +287,7 @@ def test_start_container_cleans_container_and_overlay_after_preparation_failure(
     manager.image_tag = "image"
     manager.kernel_dir = "/kernel"
     manager._kernel_overlay_volume = None
+    manager._container_object = None
     manager._setup_kernel_overlay = Mock(return_value="overlay")
     manager._container = Mock(return_value=Mock())
     manager._configure_git_identity = Mock()
@@ -214,7 +298,8 @@ def test_start_container_cleans_container_and_overlay_after_preparation_failure(
         manager._start_container({}, reset_tree=True)
 
     manager._container.return_value.remove.assert_called_with(force=True)
-    manager._cleanup_kernel_overlay.assert_called_once()
+    assert manager._cleanup_kernel_overlay.call_count == 2
+    assert manager._container_object is None
 
 
 def test_ts_cache_restarts_existing_stopped_container(monkeypatch):
@@ -268,6 +353,7 @@ def test_run_cmd_with_timer_updates_terminal_until_command_finishes(monkeypatch)
 
     assert manager.run_cmd_with_timer(["make"], "Building") == "outerr"
     assert any("Building... 0s elapsed" in write for write in writes)
+    manager.logger.debug.assert_any_call("out")
 
 
 def test_check_docker_available_reports_missing_docker(monkeypatch):
@@ -306,3 +392,151 @@ def test_check_docker_available_reports_permission_error(monkeypatch):
 
     with pytest.raises(SystemExit, match="Add your user to the 'docker' group"):
         check_docker_available()
+
+
+def test_container_lookup_is_cached():
+    manager = object.__new__(DockerManager)
+    manager.client = Mock()
+    manager.container_name = "review"
+    manager._container_object = None
+
+    assert manager._container() is manager._container()
+
+    manager.client.containers.get.assert_called_once_with("review")
+
+
+@pytest.mark.parametrize(
+    "error",
+    [None, NotFound("missing"), DockerException("busy"), OSError("disconnected")],
+)
+def test_container_cleanup_invalidates_cached_object(error):
+    manager = object.__new__(DockerManager)
+    manager.client = Mock()
+    manager.logger = Mock()
+    manager.container_name = "review"
+    container = Mock()
+    container.remove.side_effect = error
+    manager._container_object = container
+
+    manager._cleanup_container()
+
+    container.remove.assert_called_once_with(force=True)
+    assert manager._container_object is None
+    assert manager._container() is manager.client.containers.get.return_value
+
+
+def test_start_container_removes_stale_resources_before_setup_and_caches_new_container():
+    manager = object.__new__(DockerManager)
+    manager.client = Mock()
+    manager.logger = Mock()
+    manager.container_name = "review"
+    manager.image_tag = "image"
+    manager._container_object = None
+    manager._configure_git_identity = Mock()
+    manager._prepare_kernel_tree = Mock()
+    calls = Mock()
+    calls.attach_mock(manager.client.containers.get, "get_container")
+    calls.attach_mock(manager.client.volumes.get, "get_volume")
+    manager._setup_kernel_overlay = Mock(return_value="overlay")
+    calls.attach_mock(manager._setup_kernel_overlay, "setup")
+    calls.attach_mock(manager.client.containers.run, "run")
+
+    manager._start_container({}, reset_tree=True)
+
+    assert calls.mock_calls[:6] == [
+        call.get_container("review"),
+        call.get_container().remove(force=True),
+        call.get_volume("patchwise-kernel-review"),
+        call.get_volume().remove(force=True),
+        call.get_volume("patchwise-kernel-backing-review"),
+        call.get_volume().remove(force=True),
+    ]
+    assert calls.mock_calls[6] == call.setup()
+    assert manager._container() is manager.client.containers.run.return_value
+    manager.client.containers.get.assert_called_once_with("review")
+
+
+@pytest.mark.parametrize("stage", ["backing", "helper", "overlay"])
+def test_start_container_cleans_partial_overlay_after_setup_failure(stage):
+    manager = object.__new__(DockerManager)
+    manager.client = Mock()
+    manager.logger = Mock()
+    manager.container_name = "review"
+    manager.repo_path = "/repo"
+    manager._container_object = None
+    manager.client.containers.get.side_effect = NotFound("missing")
+    manager.client.volumes.get.return_value.attrs = {"Mountpoint": "/backing"}
+    error = DockerException("setup failed")
+    if stage == "helper":
+        manager.client.containers.run.side_effect = error
+    else:
+        manager.client.volumes.create.side_effect = (
+            error if stage == "backing" else [Mock(), error]
+        )
+
+    with pytest.raises(
+        RuntimeError, match="Failed to start container review: setup failed"
+    ):
+        manager._start_container({}, reset_tree=True)
+
+    assert manager.client.volumes.get.call_args_list[-2:] == [
+        call("patchwise-kernel-review"),
+        call("patchwise-kernel-backing-review"),
+    ]
+    assert manager._container_object is None
+    assert manager._kernel_overlay_volume is None
+
+
+@pytest.mark.parametrize(
+    "error", [DockerException("unavailable"), OSError("disconnected")]
+)
+def test_start_container_preserves_preparation_error_when_cleanup_fails(error):
+    manager = object.__new__(DockerManager)
+    manager.client = Mock()
+    manager.logger = Mock()
+    manager.container_name = "review"
+    manager.image_tag = "image"
+    manager._container_object = None
+    manager.client.containers.get.side_effect = NotFound("missing")
+    manager._setup_kernel_overlay = Mock(return_value="overlay")
+    manager._configure_git_identity = Mock(side_effect=RuntimeError("git failed"))
+    manager.client.containers.run.return_value.remove.side_effect = error
+    manager.client.volumes.get.return_value.remove.side_effect = error
+
+    with pytest.raises(RuntimeError, match="git failed"):
+        manager._start_container({}, reset_tree=True)
+
+    assert manager._container_object is None
+    assert manager._kernel_overlay_volume is None
+
+
+def test_start_container_cleans_resources_after_permission_failure():
+    manager = object.__new__(DockerManager)
+    manager._repo_managed = False
+    manager._start_container = Mock()
+    manager._fix_build_directory_permissions = Mock(
+        side_effect=RuntimeError("chown failed")
+    )
+    manager._cleanup_container = Mock()
+    manager._cleanup_kernel_overlay = Mock()
+
+    with pytest.raises(RuntimeError, match="chown failed"):
+        manager.start_container()
+
+    manager._cleanup_container.assert_called_once()
+    manager._cleanup_kernel_overlay.assert_called_once()
+
+
+def test_stop_container_invalidates_cached_object():
+    manager = object.__new__(DockerManager)
+    manager.client = Mock()
+    manager.logger = Mock()
+    manager.container_name = "review"
+    container = Mock()
+    manager._container_object = container
+
+    manager.stop_container()
+
+    container.stop.assert_called_once()
+    container.remove.assert_called_once()
+    assert manager._container_object is None
