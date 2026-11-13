@@ -206,7 +206,7 @@ class DockerManager:
     @staticmethod
     def _mount(source: str, target: str) -> dict[str, dict[str, str]]:
         destination, _, mode = target.partition(":")
-        return {source: {"bind": destination, "mode": mode or "rw"}}
+        return {source: {"bind": destination, "mode": mode or "ro"}}
 
     def _setup_kernel_overlay(self) -> str:
         """Create an overlay volume backed by Docker-managed storage.
@@ -227,7 +227,7 @@ class DockerManager:
             remove=True,
             user="root",
             network_mode=self._network_mode,
-            volumes=self._mount(backing_volume, "/backing"),
+            volumes=self._mount(backing_volume, "/backing:rw"),
         )
         mountpoint = self.client.volumes.get(backing_volume).attrs["Mountpoint"]
         self.client.volumes.create(
@@ -344,7 +344,7 @@ class DockerManager:
             self._cleanup_kernel_overlay()
             self._kernel_overlay_volume = self._setup_kernel_overlay()
             mounts.update(
-                self._mount(self._kernel_overlay_volume, str(self.kernel_dir))
+                self._mount(self._kernel_overlay_volume, f"{self.kernel_dir}:rw")
             )
             self.logger.info("Starting container %s...", self.container_name)
             self._container_object = self.client.containers.run(
@@ -380,7 +380,7 @@ class DockerManager:
         docker_mounts: dict[str, dict[str, str]] = {}
         if mount_shared_build:
             docker_mounts.update(
-                self._mount(self._build_volume_name, str(self.build_dir))
+                self._mount(self._build_volume_name, f"{self.build_dir}:rw")
             )
         for host, destination in (mounts or {}).items():
             docker_mounts.update(self._mount(str(host), destination))
@@ -533,6 +533,8 @@ class DockerManager:
                 stdout, stderr = proc.communicate(timeout=5)
                 if stdout:
                     self.logger.debug(stdout)
+                if stderr:
+                    self.logger.debug(stderr)
                 if show_timer:
                     sys.stdout.write("\r\033[K")
                     sys.stdout.flush()
@@ -612,7 +614,7 @@ class DockerManager:
                 detach=True,
                 name=name,
                 network_mode=cls._network_mode,
-                volumes=cls._mount(cls._build_volume_name, str(cls.build_dir)),
+                volumes=cls._mount(cls._build_volume_name, f"{cls.build_dir}:rw"),
             )
             result = container.exec_run(
                 [
@@ -671,7 +673,7 @@ class DockerManager:
                 detach=True,
                 name=cls._ts_cache_container,
                 ports={f"{cls._ts_cache_container_port}/tcp": (host, port)},
-                volumes=cls._mount(cls._ts_cache_volume, "/data"),
+                volumes=cls._mount(cls._ts_cache_volume, "/data:rw"),
             )
         cls._wait_ts_cache_ready(container)
         logger.debug("ts-cache container %s started.", cls._ts_cache_container)

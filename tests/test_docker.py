@@ -45,12 +45,57 @@ def test_exec_decodes_empty_demuxed_streams(output, expected):
 @pytest.mark.parametrize(
     ("target", "expected"),
     [
-        ("/container/path", {"host": {"bind": "/container/path", "mode": "rw"}}),
+        ("/container/path", {"host": {"bind": "/container/path", "mode": "ro"}}),
         ("/container/path:ro", {"host": {"bind": "/container/path", "mode": "ro"}}),
+        ("/container/path:rw", {"host": {"bind": "/container/path", "mode": "rw"}}),
     ],
 )
 def test_mount_preserves_destination_mode(target, expected):
     assert DockerManager._mount("host", target) == expected
+
+
+@pytest.mark.parametrize("target", ["/input", "/input:ro", "/input:rw"])
+def test_start_container_preserves_caller_mount_mode_and_writable_build_volume(target):
+    manager = object.__new__(DockerManager)
+    manager._repo_managed = False
+    manager._start_container = Mock()
+    manager._fix_build_directory_permissions = Mock()
+
+    manager.start_container({"host": target})
+
+    manager._start_container.assert_called_once_with(
+        {
+            manager._build_volume_name: {"bind": str(manager.build_dir), "mode": "rw"},
+            "host": {
+                "bind": "/input",
+                "mode": "rw" if target.endswith(":rw") else "ro",
+            },
+        },
+        reset_tree=True,
+    )
+
+
+def test_shared_build_initialization_mount_is_writable_and_name_includes_pid(
+    monkeypatch,
+):
+    client = Mock()
+    client.containers.run.return_value.exec_run.return_value.exit_code = 0
+    monkeypatch.setattr("patchwise.docker.docker.from_env", lambda: client)
+    monkeypatch.setattr("patchwise.docker.os.getpid", lambda: 123)
+    monkeypatch.setattr(DockerManager, "build_volume_initialized", False)
+    monkeypatch.setattr(DockerManager, "create_shared_build_volume", Mock())
+
+    DockerManager.initialize_shared_build_volume(None, "abcdef012345")
+
+    assert client.containers.run.call_args.kwargs["volumes"] == {
+        DockerManager._build_volume_name: {
+            "bind": str(DockerManager.build_dir),
+            "mode": "rw",
+        }
+    }
+    assert (
+        client.containers.run.call_args.kwargs["name"] == "patchwise-init-abcdef01-123"
+    )
 
 
 def test_exec_demuxes_interleaved_socket_frames_and_writes_stdin():
@@ -173,6 +218,9 @@ def test_overlay_setup_only_creates_volumes():
     assert manager._setup_kernel_overlay() == "patchwise-kernel-review"
 
     manager.client.volumes.get.return_value.remove.assert_not_called()
+    assert manager.client.containers.run.call_args.kwargs["volumes"] == {
+        "patchwise-kernel-backing-review": {"bind": "/backing", "mode": "rw"}
+    }
     assert manager.client.volumes.create.call_args_list == [
         call("patchwise-kernel-backing-review"),
         call(
@@ -332,17 +380,25 @@ def test_ts_cache_creates_container_when_absent(monkeypatch):
     assert client.containers.run.call_args.kwargs["ports"] == {
         "6379/tcp": ("127.0.0.1", 6380)
     }
+    assert client.containers.run.call_args.kwargs["volumes"] == {
+        DockerManager._ts_cache_volume: {"bind": "/data", "mode": "rw"}
+    }
     DockerManager._wait_ts_cache_ready.assert_called_once_with(container)
 
 
-def test_run_cmd_with_timer_updates_terminal_until_command_finishes(monkeypatch):
+@pytest.mark.parametrize(
+    "streams", [("out", "err"), ("", "err"), ("out", ""), ("", "")]
+)
+def test_run_cmd_with_timer_updates_terminal_until_command_finishes(
+    monkeypatch, streams
+):
     manager = object.__new__(DockerManager)
     manager.logger = Mock()
     manager.logger.isEnabledFor.return_value = True
     process = Mock()
     process.communicate.side_effect = [
         subprocess.TimeoutExpired(["make"], 5),
-        ("out", "err"),
+        streams,
     ]
     manager.run_command = Mock(return_value=process)
     monkeypatch.setattr("patchwise.ui.events.has_subscribers", lambda: False)
@@ -351,9 +407,11 @@ def test_run_cmd_with_timer_updates_terminal_until_command_finishes(monkeypatch)
     monkeypatch.setattr("patchwise.docker.sys.stdout.flush", lambda: None)
     monkeypatch.setattr("patchwise.docker.time.time", lambda: 10)
 
-    assert manager.run_cmd_with_timer(["make"], "Building") == "outerr"
+    assert manager.run_cmd_with_timer(["make"], "Building") == "".join(streams)
     assert any("Building... 0s elapsed" in write for write in writes)
-    manager.logger.debug.assert_any_call("out")
+    manager.logger.debug.assert_has_calls(
+        [call(stream) for stream in streams if stream]
+    )
 
 
 def test_check_docker_available_reports_missing_docker(monkeypatch):
@@ -452,6 +510,9 @@ def test_start_container_removes_stale_resources_before_setup_and_caches_new_con
         call.get_volume().remove(force=True),
     ]
     assert calls.mock_calls[6] == call.setup()
+    assert manager.client.containers.run.call_args.kwargs["volumes"] == {
+        "overlay": {"bind": str(manager.kernel_dir), "mode": "rw"}
+    }
     assert manager._container() is manager.client.containers.run.return_value
     manager.client.containers.get.assert_called_once_with("review")
 
