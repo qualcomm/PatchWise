@@ -81,7 +81,7 @@ class AiFix:
         new_msg = self._strip_trailers(orig_msg)
 
         # Amend HEAD with the AI's edits
-        proc = self.patch_review.docker_manager.run_interactive_command(
+        proc = self.patch_review.docker_manager.run_stdin_command(
             ["git", "commit", "-a", "--amend", "-F", "-"],
             cwd=kernel_dir,
         )
