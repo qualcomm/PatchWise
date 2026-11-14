@@ -1,0 +1,5 @@
+:1: WARNING:TYPO_SPELLING: 'SoM' may be misspelled - perhaps 'Some'?
+Support a SoM (System on Module) board.
+          ^^^
+
+total: 0 errors, 1 warnings, 0 checks, 2 lines checked

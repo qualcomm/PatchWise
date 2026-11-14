@@ -1425,30 +1425,68 @@ class Agent:
             if check_proc.returncode != 0:
                 return {"ok": False, "error": "checkpatch.pl not found in kernel tree"}
 
-            # By SHA, not HEAD: a downstream tree isn't reset, so HEAD may not be
-            # the reviewed commit.
             sha = self.docker_manager.commit_sha
-            proc = self.docker_manager.run_command(
-                [
-                    "sh",
-                    "-c",
-                    f"git --no-pager format-patch -1 --stdout {sha} "
-                    "| scripts/checkpatch.pl -",
-                ],
-                cwd=git_wd,
-            )
-            stdout, _ = proc.communicate()
 
-            output = stdout if stdout else b""
-            if isinstance(output, bytes):
-                output_str = output.decode(errors="ignore")
+            def git_output(args: List[str], input_text: Optional[str] = None) -> str:
+                command = ["git", "--no-pager", *args]
+                if input_text is None:
+                    process = self.docker_manager.run_command(command, cwd=git_wd)
+                    stdout, stderr = process.communicate()
+                else:
+                    process = self.docker_manager.run_interactive_command(
+                        command, cwd=git_wd
+                    )
+                    stdout, stderr = process.communicate(input=input_text)
+                if process.returncode != 0:
+                    raise RuntimeError(f"git {args[0]} failed: {stderr}")
+                return stdout or ""
+
+            if self.enable_edit_tools:
+                # Fixers may amend HEAD or leave staged/unstaged changes. Keep
+                # the original patch's parent as the baseline, so verification
+                # covers the complete candidate rather than the obsolete SHA.
+                parents = git_output(["rev-list", "--parents", "-n", "1", sha]).split()
+                if not parents:
+                    raise RuntimeError("Cannot resolve the reviewed commit")
+                base = (
+                    parents[1]
+                    if len(parents) > 1
+                    else git_output(["mktree"], input_text="").strip()
+                )
+                diff = git_output(
+                    ["diff", "--binary", "--no-ext-diff", "--no-textconv", base, "--"]
+                )
+                message = git_output(["show", "--no-patch", "--format=email", "HEAD"])
+                patch_text = message.rstrip("\n") + "\n\n---\n" + diff if diff else ""
             else:
-                output_str = str(output)
+                # Read-only reviews can point at a commit other than HEAD.
+                patch_text = git_output(["format-patch", "-1", "--stdout", sha])
+
+            if not patch_text:
+                return {"ok": True, "result": "No changes to check."}
+
+            # Keep Git and checkpatch separate: a failed Git command must not
+            # become an empty successful check through a shell pipeline.
+            proc = self.docker_manager.run_interactive_command(
+                [checkpatch_path, "-"], cwd=git_wd
+            )
+            stdout, stderr = proc.communicate(input=patch_text)
+            if proc.returncode not in (0, 1) or stderr:
+                return {
+                    "ok": False,
+                    "error": f"checkpatch failed (exit {proc.returncode}): {stderr or stdout}",
+                }
+            output_str = stdout or ""
 
             if not output_str.strip():
+                if proc.returncode != 0:
+                    return {
+                        "ok": False,
+                        "error": "checkpatch reported failure without diagnostics",
+                    }
                 return {
                     "ok": True,
-                    "result": "No changes to check. Make some edits first.",
+                    "result": "No checkpatch diagnostics.",
                 }
 
             if "total: 0 errors, 0 warnings" in output_str:
