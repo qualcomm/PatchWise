@@ -132,6 +132,7 @@ class Dashboard:
         self._start = time.monotonic()
         self._spin = 0
         self.output_dir = output_dir
+        self.report_path = ""
 
         # Footer state.
         self.pipeline: Optional[str] = None
@@ -457,20 +458,6 @@ class Dashboard:
                 meta.add_row("model", self.model)
             self._emit(meta, indent=3)
 
-        elif kind == events.INDEX:
-            # Pin a transient status while the tree-sitter index builds (a long,
-            # otherwise-silent wait on a large downstream workspace); clear it
-            # when the daemon is ready.
-            if f.get("phase") == "done":
-                self.set_status(None)
-            else:
-                total = f.get("total") or 0
-                done = f.get("done") or 0
-                self.set_status(
-                    f"building code index… {done}/{total} files"
-                    if total else "building code index…"
-                )
-
         elif kind == events.PHASE:
             with self._lock:
                 self.phase = f.get("name", "") or self.phase
@@ -575,6 +562,10 @@ class Dashboard:
                     and self._last_engineer):
                 self._print_accepted(self._last_engineer)
 
+        elif kind == events.REPORT_SAVED:
+            with self._lock:
+                self.report_path = f.get("path", "") or ""
+
         self.update_footer()
 
     def add_alert(self, level: str, message: str) -> None:
@@ -614,8 +605,9 @@ class Dashboard:
                     (_oneline(text, 58), "default"),
                     no_wrap=True, overflow="crop"))
 
-        out = str(self.output_dir or SANDBOX_PATH)
-        body += [Text(), Text.assemble(("output  ", "bold dim"), (out, "dim"))]
+        output = self.report_path or str(self.output_dir or SANDBOX_PATH)
+        label = "report  " if self.report_path else "output  "
+        body += [Text(), Text.assemble((label, "bold dim"), (output, "dim"))]
         return Panel(Group(*body), title=Text("run complete", style="bold green"),
                      title_align="left", border_style="green", padding=(1, 2))
 

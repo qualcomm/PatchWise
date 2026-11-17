@@ -3,6 +3,10 @@ log_level: "INFO"
 # tree-sitter code index. Patterns are gitignore-style.
 # Override this with your own list in ~/.config/patchwise_config.yaml.
 indexing:
+    cache:
+        host: "127.0.0.1"   # published loopback of the patchwise-ts-cache container
+        port: 6379
+        # schema_version:            # optional override of the module constant
     blocklist:
         - "**/out/"
         - "**/prebuilts/"
@@ -13,7 +17,7 @@ git_committer:
     name: "Patchwise"
     email: "patchwise@qualcomm.com"
 ai:
-    model: "openai/Pro"
+    model: "openai/responses/Pro"
     provider: "https://api.openai.com/v1"
     # API key for the AI model API. Leave empty to fall back to the provider's
     # usual environment variable (e.g. OPENAI_API_KEY). Override in
@@ -24,8 +28,13 @@ ai:
     # ~/.config/patchwise_config.yaml, e.g.:
     #   ai:
     #     models:
-    #       openai/Pro: "GPT-5"
+    #       openai/responses/Pro: "The Pro model"
     models: {}
+    # Accepts: "inline" or "gerrit".
+    output_format: "inline"
+    code_review:
+        # Prefix findings with the filter's low/medium/high impact rating.
+        output_severity: false
 # Shown once before the first review, asking the user to confirm their API key
 # may be used. Suppressed permanently once "Yes. Don't show again" is chosen.
 api_key_disclaimer:

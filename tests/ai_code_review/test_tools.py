@@ -4,7 +4,7 @@
 """End-to-end pytest suite for every AiCodeReview agent tool.
 
 Boots the full AiCodeReview pipeline (docker + ts_indexer) against a pinned
-linux-next checkout cloned into tests/linux/, then exercises each tool exposed
+Linux checkout cloned into tests/linux/, then exercises each tool exposed
 via AiCodeReview.dispatch_tool:
 
   find_definition / find_callers / find_callees / grep / read_file / bash
@@ -17,14 +17,16 @@ Run with the patchwise venv active.
     source .venv/bin/activate
     pytest tests/ai_code_review/test_tools.py -v -s
 
-The first run is slow: init_kernel_tree() fetches linux-next.
+The first run is slow: it fetches the pinned kernel commit.
 """
 
 import logging
 import os
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Dict, Optional
+from unittest.mock import Mock
 
 TESTS_DIR = Path(__file__).resolve().parent.parent
 KERNEL_DIR = TESTS_DIR / "linux"
@@ -32,14 +34,19 @@ KERNEL_DIR = TESTS_DIR / "linux"
 os.environ["PATCHWISE_SANDBOX_PATH"] = str(TESTS_DIR)
 
 import pytest
-from git import InvalidGitRepositoryError, NoSuchPathError, Repo
+from git import GitCommandError, InvalidGitRepositoryError, NoSuchPathError, Repo
 
+from patchwise.docker import DockerManager
+from patchwise.patch_review.ai_agent.tool_definitions import BASH_MAX_TIMEOUT
 from patchwise.patch_review.ai_review.ai_code_review import AiCodeReview
-from patchwise.patch_review.kernel_tree import init_kernel_tree
+from patchwise.ui import events
 
 # Pin the kernel HEAD so IFDEF_CASES line numbers and other expectations
-# stay stable as linux-next advances.
+# stay stable as the kernel advances.
 PINNED_COMMIT = "43cfbdda5af60ffc6272a7b8c5c37d1d0a181ca9"
+# The exact pin is also in Torvalds' repository; kernel.org can be unreachable
+# from GitHub Actions runners, preventing the entire integration suite from starting.
+KERNEL_URL = "https://github.com/torvalds/linux.git"
 
 
 def _clear_stale_index_lock(repo_path: Path) -> None:
@@ -68,11 +75,58 @@ def _checkout_pinned_commit(repo: Any) -> None:
 
 
 def _open_or_init_kernel_repo(repo_path: Path) -> Repo:
-    """Reuse an existing local kernel repo when present; fetch only on first setup."""
+    """Reuse the local kernel repo, fetching the pinned commit when it is absent.
+
+    Keyed on the commit rather than the repo: an interrupted first fetch leaves
+    a valid but empty repo behind, which would otherwise never be refetched.
+    """
     try:
-        return Repo(repo_path)
+        repo = Repo(repo_path)
     except (InvalidGitRepositoryError, NoSuchPathError):
-        return init_kernel_tree(repo_path)
+        repo_path.mkdir(parents=True, exist_ok=True)
+        repo = Repo.init(repo_path)
+    try:
+        repo.git.cat_file("-e", f"{PINNED_COMMIT}^{{commit}}")
+        return repo
+    except GitCommandError:
+        pass
+    # Shallow: the pinned commit plus its parent, which AiCodeReview diffs
+    # against. No timeout, since even that is a large download.
+    print(f"Fetching pinned kernel commit {PINNED_COMMIT[:12]}...", flush=True)
+    # Fetch the URL directly so an interrupted checkout with an old kernel.org
+    # remote can recover without modifying any existing remotes.
+    repo.git.fetch("--depth=2", KERNEL_URL, PINNED_COMMIT)
+    return repo
+
+
+@pytest.mark.parametrize(
+    "error", [None, NoSuchPathError("missing"), InvalidGitRepositoryError("invalid")]
+)
+def test_kernel_repo_fetches_exact_pin_from_github(tmp_path, monkeypatch, error):
+    repo = Mock()
+    repo.git.cat_file.side_effect = GitCommandError("cat-file", 128)
+    factory = Mock(return_value=repo)
+    if error is not None:
+        factory.side_effect = error
+        factory.init.return_value = repo
+    monkeypatch.setattr(f"{__name__}.Repo", factory)
+
+    assert _open_or_init_kernel_repo(tmp_path) is repo
+
+    repo.git.fetch.assert_called_once_with("--depth=2", KERNEL_URL, PINNED_COMMIT)
+    repo.create_remote.assert_not_called()
+    if error is not None:
+        factory.init.assert_called_once_with(tmp_path)
+
+
+def test_kernel_repo_reuses_cached_pin_without_network(tmp_path, monkeypatch):
+    repo = Mock()
+    monkeypatch.setattr(f"{__name__}.Repo", Mock(return_value=repo))
+
+    assert _open_or_init_kernel_repo(tmp_path) is repo
+
+    repo.git.cat_file.assert_called_once_with("-e", f"{PINNED_COMMIT}^{{commit}}")
+    repo.git.fetch.assert_not_called()
 
 
 @pytest.fixture(scope="session")
@@ -90,6 +144,10 @@ def review() -> AiCodeReview:
         f"Using kernel={KERNEL_DIR} head={head.hexsha[:12]} ({head.summary!r})",
         flush=True,
     )
+    # The Agent connects to the ts-cache eagerly; start it as the production
+    # path does (prepare_containers_and_build_volume) since this fixture builds
+    # the review directly.
+    DockerManager.ensure_ts_cache_service()
     instance = AiCodeReview(repo_path=str(KERNEL_DIR), commit=head)
     print("=== Running tests... ===\n", flush=True)
     return instance
@@ -151,7 +209,9 @@ def test_find_definition_strips_type_keyword(
     result = review.agent.dispatch_tool("find_definition", {"name": name})
     assert result.get("ok"), f"tool returned not-ok: {result}"
     paths = [d.get("path", "") for d in result.get("result", [])]
-    assert any(expected_file in p for p in paths), f"{expected_file!r} not among {paths}"
+    assert any(
+        expected_file in p for p in paths
+    ), f"{expected_file!r} not among {paths}"
 
 
 # #ifdef-variant cases: two textual defs in the same file under
@@ -294,7 +354,9 @@ def test_find_definition_granular_kind(
         for d in result.get("result", [])
         if expected_file in d.get("path", "") and d.get("kind") == kind
     ]
-    assert match, f"no {kind!r} for {name!r} in {expected_file}; got {result.get('result')}"
+    assert (
+        match
+    ), f"no {kind!r} for {name!r} in {expected_file}; got {result.get('result')}"
 
 
 # ---------------------------------------------------------------------------
@@ -326,8 +388,9 @@ def test_find_callers(review: AiCodeReview, name: str, min_count: int) -> None:
     assert isinstance(first.get("function_start"), int), first
     assert isinstance(first.get("function_end"), int), first
     assert first["function_start"] <= first["function_end"], first
-    assert all(first["function_start"] <= ln <= first["function_end"]
-               for ln in first["lines"]), first
+    assert all(
+        first["function_start"] <= ln <= first["function_end"] for ln in first["lines"]
+    ), first
 
 
 def test_find_callers_references(review: AiCodeReview) -> None:
@@ -693,6 +756,19 @@ def test_grep_errors(
     assert expected_error in (result.get("error") or "")
 
 
+def test_grep_path_alias(review: AiCodeReview) -> None:
+    """Models sometimes pass 'path' instead of 'file' for scope; treat as alias."""
+    result = review.agent.dispatch_tool(
+        "grep",
+        {
+            "pattern": "do_sys_openat2",
+            "path": ["fs/open.c"],
+        },
+    )
+    assert result.get("ok"), f"path alias not accepted: {result}"
+    assert result.get("total", 0) >= 1, "expected hits when path alias scopes to fs/open.c"
+
+
 # ---------------------------------------------------------------------------
 # read_file
 # ---------------------------------------------------------------------------
@@ -984,6 +1060,99 @@ def test_bash_timeout_reaps_the_process_in_the_container(
     ), f"orphan survived in the container: {survivors['result']!r}"
 
 
+def test_bash_timeout_uses_the_requested_timeout(review: AiCodeReview) -> None:
+    """bash_timeout kills the command after the timeout the caller asked for."""
+    start = time.monotonic()
+    result = review.agent.dispatch_tool(
+        "bash_timeout", {"command": "sleep 60", "timeout": 2}
+    )
+    elapsed = time.monotonic() - start
+
+    assert result["timed_out"] is True
+    assert "timed out after 2s" in result["result"]
+    assert elapsed < 30, f"took {elapsed:.1f}s — timeout did not fire promptly"
+
+
+def test_bash_timeout_clamps_the_requested_timeout(
+    review: AiCodeReview, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Timeouts outside [1, BASH_MAX_TIMEOUT] are clamped, not passed through."""
+    seen = []
+
+    def fake_run_bash(command: str, cwd: Optional[str], timeout: int) -> dict:
+        seen.append(timeout)
+        return {"ok": True}
+
+    monkeypatch.setattr(review.agent, "_run_bash", fake_run_bash)
+    review.agent.dispatch_tool("bash_timeout", {"command": "true", "timeout": 10**6})
+    review.agent.dispatch_tool("bash_timeout", {"command": "true", "timeout": 0})
+
+    assert seen == [BASH_MAX_TIMEOUT, 1]
+
+
+def test_bash_timeout_is_offered_to_the_model_as_bash(
+    review: AiCodeReview, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The bash_timeout id is sent as `bash`, and a `bash` call from that loop
+    dispatches back to bash_timeout; loops that ask for `bash` keep plain bash."""
+    seen = []
+
+    def fake_dispatch(name: str, args: dict) -> dict:
+        seen.append(name)
+        return {"ok": True}
+
+    def call_bash() -> None:
+        call = SimpleNamespace(
+            id="1",
+            function=SimpleNamespace(name="bash", arguments='{"command": "true"}'),
+        )
+        review.agent._dispatch_tool_calls([call], [])
+
+    monkeypatch.setattr(review.agent, "dispatch_tool", fake_dispatch)
+
+    (tool,) = review.agent.get_tools(["bash_timeout"])
+    assert tool["function"]["name"] == "bash"
+    assert "timeout" in tool["function"]["parameters"]["properties"]
+    call_bash()
+
+    (tool,) = review.agent.get_tools(["bash"])
+    assert "timeout" not in tool["function"]["parameters"]["properties"]
+    call_bash()
+
+    assert seen == ["bash_timeout", "bash"]
+
+
+def test_loop_without_tools_reports_a_single_iteration(
+    review: AiCodeReview, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A tool-less loop ends on its first reply, so its iteration cap is 1."""
+    reply = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                finish_reason="stop",
+                message=SimpleNamespace(
+                    content="done", tool_calls=None, model_dump=lambda: {}
+                ),
+            )
+        ],
+        usage=None,
+    )
+    monkeypatch.setattr(review.agent, "completion_with_retry", lambda **kw: reply)
+    caps = []
+
+    def listener(kind: str, fields: dict) -> None:
+        if kind == events.ITERATION:
+            caps.append((fields["n"], fields["cap"]))
+
+    events.subscribe(listener)
+    try:
+        review.agent.run_agent_loop([], max_iterations=50, use_tools=False)
+    finally:
+        events.unsubscribe(listener)
+
+    assert caps == [(1, 1)]
+
+
 def test_bash_closes_stdin(review: AiCodeReview) -> None:
     """A command reading stdin should fail, not block until the timeout."""
     start = time.monotonic()
@@ -1030,7 +1199,7 @@ def test_bash_composes_a_pipeline(review: AiCodeReview) -> None:
 
 def test_get_subsystem_review_guide_is_cached(review: AiCodeReview) -> None:
     """The guide is read from disk once and served from cache thereafter."""
-    from patchwise.patch_review.ai_agent.agent import _load_subsystem_guide
+    from patchwise.patch_review.ai_review.review_prompts import _load_subsystem_guide
 
     _load_subsystem_guide.cache_clear()
     first = review.agent.dispatch_tool(
@@ -1046,3 +1215,26 @@ def test_get_subsystem_review_guide_is_cached(review: AiCodeReview) -> None:
     info = _load_subsystem_guide.cache_info()
     assert info.misses == 1, f"expected one disk read, got {info}"
     assert info.hits >= 1, f"expected a cache hit, got {info}"
+
+
+# ---------------------------------------------------------------------------
+# hard-coded review prompts (technical patterns, FP guide, subsystem index)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "loader, title",
+    [
+        ("get_technical_patterns", "Kernel Technical Patterns"),
+        ("get_false_positive_guide", "False Positive Guide"),
+        ("get_subsystem_index", "Subsystem Review Guide Index"),
+    ],
+)
+def test_hard_coded_review_prompts_load(loader: str, title: str) -> None:
+    """Each fixed prompt doc exists and loads under its section header."""
+    from patchwise.patch_review.ai_review import review_prompts
+
+    content = getattr(review_prompts, loader)()
+    header = f"## {title}:\n\n"
+    assert content.startswith(header), f"missing header: {content[:80]!r}"
+    assert content[len(header):].strip(), f"{loader} returned an empty doc"

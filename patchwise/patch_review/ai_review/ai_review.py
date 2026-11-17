@@ -5,17 +5,71 @@ from pathlib import Path
 import re
 import textwrap
 
+from pygments.lexers import CLexer
+from pygments.token import Token
+
 from patchwise.patch_review.ai_agent.agent import Agent
 from patchwise.patch_review.patch_review import PatchReview
 
 
 class AiReview(PatchReview):
 
-    # TODO: This messes up the formatting when AI has its own code in the response
+    CODE_TOKEN_RATIO = 0.5
+
+    @staticmethod
+    def _is_c_code(text: str) -> bool:
+        """
+        Heuristic: does this paragraph look like C rather than prose about C?
+        Unreliable on short fragments, so callers gate it on multi-line text.
+        """
+        tokens = [
+            token for token, value in CLexer().get_tokens(text) if value.strip()
+        ]
+        if not tokens:
+            return False
+        code_tokens = sum(
+            1
+            for token in tokens
+            if token in Token.Keyword
+            or token in Token.Keyword.Type
+            or token in Token.Operator
+            or token in Token.Punctuation
+            or token in Token.Comment
+            or token in Token.Literal.Number
+        )
+        return code_tokens / len(tokens) > AiReview.CODE_TOKEN_RATIO
+
     def format_chat_response(self, text: str) -> str:
         """
-        Line wraps the given text at 75 columns but skips commit tags.
+        Line wraps the given text at 75 columns but skips commit tags, quoted
+        text, and the AI's own code. A paragraph whose lines already respect the
+        limit is emitted verbatim.
         """
+
+        def split_into_code_blocks(text: str) -> list[tuple[bool, str]]:
+            """
+            Splits the text into (is_code, block) pairs on ``` fences.
+            An unclosed fence keeps the remainder verbatim.
+            """
+            blocks: list[tuple[bool, str]] = []
+            current: list[str] = []
+            in_code = False
+
+            for line in text.split("\n"):
+                is_fence = line.strip().startswith("```")
+                if is_fence and not in_code and len(current) > 0:
+                    blocks.append((False, "\n".join(current)))
+                    current = []
+                current.append(line)
+                if is_fence:
+                    if in_code:
+                        blocks.append((True, "\n".join(current)))
+                        current = []
+                    in_code = not in_code
+            if len(current) > 0:
+                blocks.append((in_code, "\n".join(current)))
+
+            return blocks
 
         def split_text_into_paragraphs(text: str) -> list[str]:
             """
@@ -35,10 +89,10 @@ class AiReview(PatchReview):
                     |                             # OR
                     \d+(\.\d+)+                   # Decimal bullets like 1.1 or 1.2.3
                 )
-                \s*                               # At least one space after the bullet
+                \s*                               # At least one* space after the bullet
             """,
                 re.VERBOSE,
-            )
+            )                                     # * - to cover **Commit Analysis** as a bullet
 
             for line in lines:
                 line_stripped = line.strip()
@@ -94,22 +148,42 @@ class AiReview(PatchReview):
         def is_quote(text):
             return text.startswith(">")
 
-        paragraphs = split_text_into_paragraphs(text)
+        def is_tabbed(text: str) -> bool:
+            return any(line.startswith(("\t", " ")) for line in text.split("\n"))
 
-        wrapped_paragraphs = [
-            (
-                textwrap.fill(
-                    p,
-                    width=75,
-                    break_long_words=False,  # to preserve links
-                )
-                if not (is_commit_tag(p.strip()) or is_quote(p.strip()))
-                else p
+        def fits(text: str) -> bool:
+            return all(len(line) <= 75 for line in text.split("\n"))
+
+        def wrap_paragraph(p: str) -> str:
+            stripped = p.strip()
+            if (
+                not stripped
+                or fits(p)  # Benefit of doubt to the review-cleanup agent
+                or is_commit_tag(stripped)
+                or is_quote(stripped)
+                or is_tabbed(p)
+            ):
+                return p
+            if "\n" in stripped and self._is_c_code(p):
+                return p
+            return textwrap.fill(
+                p,
+                width=75,
+                break_long_words=False,  # to preserve links
             )
-            for p in paragraphs
+
+        wrapped_blocks = [
+            (
+                block
+                if is_code
+                else "\n".join(
+                    wrap_paragraph(p) for p in split_text_into_paragraphs(block)
+                )
+            )
+            for is_code, block in split_into_code_blocks(text)
         ]
 
-        return "\n".join(wrapped_paragraphs)
+        return "\n".join(wrapped_blocks)
 
     def setup(self):
         # The agent navigates the whole mounted --repo-path (so it can reach sibling

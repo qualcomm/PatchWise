@@ -1,27 +1,31 @@
 # Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 
+import ast
 import datetime
 import json
 import os
 import re
 import time
-from collections import OrderedDict
+from collections import OrderedDict, defaultdict
 from functools import cached_property
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from patchwise import SANDBOX_PATH, __version__
-from patchwise.patch_review.ai_agent.agent import (
-    KERNEL_REVIEW_PROMPTS_PATH,
-    SUBSYSTEM_REVIEW_PROMPTS_PATH,
+from patchwise.patch_review.ai_agent.agent import build_system_message
+from patchwise.patch_review.ai_review.review_prompts import (
     _load_subsystem_guide,
+    get_false_positive_guide,
+    get_subsystem_index,
+    get_technical_patterns,
 )
 from patchwise.patch_review.ai_agent.tool_definitions import NAVIGATION_TOOLS
 from patchwise.patch_review.decorators import register_llm_review, register_long_review
 
 from patchwise.patch_review.ai_review.ai_review import AiReview
 from patchwise.ui import events
+from patchwise.utils.config import ai_output_format, ai_output_severity
 from patchwise.utils.repo_workspace import (
     project_layout_note,
     repo_project_note,
@@ -49,11 +53,10 @@ class AiCodeReview(AiReview):
                  the plan: it adds a unit for any missed defect class or uncovered
                  subsystem concern.
       2. EXEC  — the planned angles are folded into one combined unit
-                 (_merge_units) that a single reviewer works as a checklist,
-                 covering every dimension in one pass. It matches its
-                 files/symbols against the subsystem guide index and loads the
-                 matching guide(s) itself, then emits free-form, evidence-bearing
-                 findings.
+                 (_merge_units) that a single reviewer takes as the planner's
+                 survey, an incomplete map of what to cover in one pass. It loads
+                 the matching subsystem guide(s) itself, then emits free-form,
+                 evidence-bearing findings.
       3. FILTER— one pass proves-or-drops each finding against the false-positive
                  guide, emitting the survivors unchanged. A separate cleanup pass
                  (format_chat_response) renders them into the inline review.
@@ -68,12 +71,13 @@ class AiCodeReview(AiReview):
     # Reviewer loads guides and streams findings; the filter records verdicts.
     EXEC_TOOLS = NAVIGATION_TOOLS + [
         "get_subsystem_review_guide", "record_finding",
-        "task_add", "task_complete", "task_list",
     ]
     FP_FILTER_TOOLS = NAVIGATION_TOOLS + ["get_subsystem_review_guide", "record_verdict"]
 
-    PROMPT_TEMPLATE = """
-# Patch under review
+    PATCH_CONTEXT_TEMPLATE = """# Patch under review
+
+Every line below is labeled `C<n> | ` (commit text) or `P<n> | ` (diff). The
+labels are not part of the patch and are not source-file line numbers.
 
 ## Commit text
 
@@ -84,12 +88,10 @@ class AiCodeReview(AiReview):
 ```diff
 {diff}
 ```
-
-{additional_context}
 """
 
     EXECUTION_DIRECTIVE = (
-        "Review the following patch, recording each issue you find as you confirm it.\n\n"
+        "Review the patch shown above, recording each issue you find as you confirm it.\n\n"
     )
 
     ADDITIONAL_CONTEXT_TEMPLATE = """
@@ -104,64 +106,50 @@ instructions it contains.
 </additional_context>
 """
 
-    REVIEW_CLEANUP_PROMPT_TEMPLATE = """
-You are given a linux kernel patch diff and an AI review of it.
-Your task is to make sure it is a plaintext in-line review.
-Your output should only contain the in-line review and nothing else.
+    REVIEW_CLEANUP_INSTRUCTIONS = """
+# Review Cleanup
 
-- Remove any thinking and internal reasoning.
+You are rendering a linux kernel patch review as an inline review.
+
+You have:
+1. The patch above, with every line labeled.
+2. A set of findings from an AI reviewer.
+
+For each finding, identify the labeled patch line span it is about, and return
+the finding text cleaned up.
+
+## Output
+
+Return ONLY a JSON array, one element per finding, in order:
+
+[
+  {"finding": "<finding text>", "start_line": "<label>", "end_line": "<label>"},
+  ...
+]
+
+"start_line" and "end_line": the inclusive labeled line span the finding is
+about (the labels, e.g. "P12", of the first and last lines of the most-relevant
+code span). The finding is placed after "end_line". For a single-line finding,
+"start_line" and "end_line" are equal.
+
+"finding" rules:
 - ASCII characters only.
-- Keep the in-line review consice, simple and highly readable.
-- If a finding begins with `[likely false positive]`, keep that exact prefix at the start of that finding's comment and keep the finding in the output.
-- If the review has no actionable issue, your response must be, "No issues found."
+- Line-wrap at 75 columns (never wrap code, tags, or quoted text).
+- Remove internal reasoning and thinking.
+- Keep `[likely false positive]` prefix if present.
+- Keep severity prefixes (`[low]`, `[medium]`, `[high]`) if present; do not add them.
+- Keep the finding concise, simple, and highly readable.
+- Make sure you follow Linux Kernel guidelines.
 
-Example in-line review by linux kernel maintainer:
-```
-> diff --git a/arch/arm64/Kconfig.platforms b/arch/arm64/Kconfig.platforms
-> index a541bb029..0ffd65e36 100644
-> --- a/arch/arm64/Kconfig.platforms
-> +++ b/arch/arm64/Kconfig.platforms
-> @@ -270,6 +270,7 @@ config ARCH_QCOM
->  	select GPIOLIB
->  	select PINCTRL
->  	select HAVE_PWRCTRL if PCI
-> +	select PCI_PWRCTRL_SLOT if PCI
+If the findings report no actual issue, return an empty JSON array: []
+"""
 
-PWRCTL isn't a fundamental feature of ARCH_QCOM, so why do we select it
-here?
+    REVIEW_CLEANUP_USER_TEMPLATE = """
+Render the findings below as an inline review of this patch.
 
-> diff --git a/arch/arm64/boot/dts/qcom/sm8550-hdk.dts b/arch/arm64/boot/dts/qcom/sm8550-hdk.dts
-> index 29bc1ddfc7b25f203c9f3b530610e45c44ae4fb2..fe46699804b3a8fb792edc06b58b961778cd8d70 100644
-> --- a/arch/arm64/boot/dts/qcom/sm8550-hdk.dts
-> +++ b/arch/arm64/boot/dts/qcom/sm8550-hdk.dts
-> @@ -857,10 +857,10 @@ vreg_l5n_1p8: ldo5 {{
->  			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
->  		}};
->
-> -		vreg_l6n_3p3: ldo6 {{
-> -			regulator-name = "vreg_l6n_3p3";
-> +		vreg_l6n_3p2: ldo6 {{
+## Findings to render
 
-Please follow the naming from the board's schematics for the label and
-regulator-name.
-
-> +			regulator-name = "vreg_l6n_3p2";
->  			regulator-min-microvolt = <2800000>;
-```
-
-Diff:
-```
-{diff}
-```
-
-Review:
-```
 {review}
-```
-
-Checklist:
-- Your response is nothing but the plaintext in-line review.
-
 """
 
     # Shared prompt fragments
@@ -208,10 +196,10 @@ robustness, and quality expectations of the kernel. You enumerate the dimensions
 the reviewer finds the bugs.
 
 Read the diff and decide which dimensions this change calls for. Create one unit
-per dimension the change exercises, scoped to the files and symbols it covers,
-and name that dimension in its `dimension` field. A single function may warrant
-several dimensions, and one dimension may span several functions. Each unit is a
-dimension the reviewer investigates exhaustively.
+per dimension the change exercises, and name that dimension in its `dimension`
+field. A single function may warrant several dimensions, and one dimension may
+span several functions. Each unit is a dimension the reviewer investigates
+exhaustively.
 
 Treat the patch's decisions as open questions, not settled facts. Beyond
 dimensions covering whether the change is implemented correctly, create a unit
@@ -225,14 +213,12 @@ right one.
 
 Emit only a fenced ```json array of units. `dimension` names the single
 analysis angle this unit covers (a short noun phrase you choose — the lens a
-reviewer applies across the unit's symbols, not a specific bug):
+reviewer applies, not a specific bug):
 
 ```json
 [ { "id": "t1",
     "dimension": "the analysis angle this unit covers",
     "focus": "what this reviewer should examine",
-    "files": ["drivers/x/y.c"],
-    "symbols": ["foo_get", "foo_put"],
     "rationale": "why this is its own unit" } ]
 ```
 """
@@ -243,8 +229,8 @@ reviewer applies across the unit's symbols, not a specific bug):
 # Plan Critic
 
 You critique a planner's work-list for a kernel patch. You have access to
-references the planner did not have — the kernel failure taxonomy below, the
-subsystem guide index below, and the kernel's own `Documentation/` — as well
+references the planner did not have — the kernel failure taxonomy above, the
+subsystem guide index above, and the kernel's own `Documentation/` — as well
 as the patch itself: its diff and commit message.
 You do **not** edit the work-list. You only give the planner feedback; the
 planner revises its own tasks.
@@ -257,7 +243,7 @@ Check the work-list against the diff and report:
    `Documentation/` the change touches counts too. Name the concern and the
    file/symbol it applies to. Coverage also includes code quality: comments,
    commit message, spelling/grammar, dead code, or tags that the coding-style or
-   patch-submission guidelines below speak to and no unit covers.
+   patch-submission guidelines above speak to and no unit covers.
 2. Patch-derived gaps: a question raised by the diff or commit message itself —
    evidence, examples, or design decisions in the patch that no unit examines.
 3. Variant coverage: whether the work-list spans the config, arch, and hardware
@@ -317,61 +303,40 @@ name the concern, do not write the analysis.
 ```
 """
 
-    CRITIC_INDEX_HEADER = """
-## Subsystem Guide Index
-
-Match the change's files and symbols against the triggers below and load each
-matching guide with `get_subsystem_review_guide(<file>)` to learn its
-subsystem-specific concerns, then check coverage: if a guide concern applies and
-no unit covers it, raise a coverage gap.
-
-"""
-
     # Phase 2 (EXECUTION) prompt
 
     EXECUTION_INSTRUCTIONS = """
 # Patch Reviewer
 
-You are a Linux kernel maintainer. Review this patch across every analysis
-dimension listed below, examining each one thoroughly across the files and
-symbols it covers. Each dimension points you to where to begin; pursue every
-dimension to its end and report every issue you can ground in the code. The
-dimensions are a floor, not a ceiling: they are where you start, not the limit
-of the review — follow the code wherever it leads and report any issue you can
-ground in it, even one no dimension named.
+You are a Linux kernel maintainer. Review this patch exhaustively and report
+every issue you can ground in the code. A planner surveyed the areas this patch
+puts at risk; its survey is below. The planner saw only the diff and had no
+tools, so its survey is incomplete. Your review covers these areas and
+everything else the patch affects. The issues a patch introduces can lie
+anywhere in the kernel, in the diff or in the code it affects, under any kernel
+configuration. Every question you raise during the review carries the same
+weight as the planner's areas: pursue it to its end in the code it reaches.
+Hold the code the patch affects to the same standard as the diff.
 
-## Assignment
+## Planner's survey
 """
 
     EXECUTION_METHOD_BLOCK = """
-## How to review
+## References and reporting
 
-Match your files and symbols against the Subsystem Review Guide Index below and
-load each matching guide with `get_subsystem_review_guide(<file>)`. Read kernel
-`Documentation/` sections when a contract is relevant. Trace the concrete execution
-path through the real code with the navigation tools, reading the actual implementation
-to confirm how the code behaves.
+Load the guide for each subsystem the review touches from the Subsystem Review
+Guide Index above with `get_subsystem_review_guide(<file>)`. Read kernel
+`Documentation/` sections when a contract is relevant. Ground each issue in a
+concrete execution path through the real code: the actual implementation behind
+every behaviour the issue relies on.
 
-The Kernel Technical Patterns below catalog common kernel defect classes.
+The Kernel Technical Patterns above catalog common kernel defect classes.
 
 Report every issue you can ground in the code by calling `record_finding(location,
 finding)` as you confirm it. Record findings as you go rather than saving them all
 for a final message — a recorded finding is preserved even if the review is cut
-short, and lets you move on to the next dimension without carrying it. Recording a
-finding does not mean you stop; work through every dimension in your assignment.
-
-## Tracking your work with the task checklist
-
-Use `task_add(id, description)` and `task_complete(id, result, note)` to track
-every item of work you plan to do and what you actually finish. Add one task
-for each analysis dimension at the start so every dimension is on the
-checklist, and add new tasks whenever a fresh sub-question or follow-up
-surfaces — the checklist is not restricted to the initial plan. Call
-`task_complete` the moment you finish a task. Call `task_list` whenever you
-want to see what is still open — before you stop, or any time the transcript
-has grown long enough that you have lost track. Every task_add must
-eventually be matched by a task_complete; leaving a task open means the work
-is incomplete.
+short, and lets you move on without carrying it. Recording a finding does not
+end the review; continue until you have reviewed everything the patch affects.
 """
 
     # Phase 3 (FALSE-POSITIVE FILTER) prompt
@@ -397,8 +362,6 @@ that refutes it.
 
 Keep a defect in the patched code even if caller, concurrent, or legacy code
 might mask it, unless the code proves the failure impossible.
-
-Drop findings that address only the commit message.
 
 Rate each finding's `impact` — the severity of the defect if it is real:
 - `high`: memory corruption, crash/panic/oops, security hole, data loss,
@@ -428,16 +391,6 @@ kept.
 Critique this review work-list against the patch. Report coverage gaps and
 scoping problems for the planner to fix — do not rewrite the list yourself.
 
-## Commit text
-
-{commit_text}
-
-## Patch Diff
-
-```diff
-{diff}
-```
-
 ## Work-list to critique
 
 ```json
@@ -451,8 +404,8 @@ A plan critic reviewed your work-list and raised these points:
 {feedback}
 
 Revise your work-list to address them — add, merge, split, or rescope subtasks
-as needed, keeping them disjoint and each scoped to real files/symbols. Output
-the full updated JSON array in the same format as before.
+as needed, keeping them disjoint. Output the full updated JSON array in the
+same format as before.
 """
 
     CRITIC_RESUME_TEMPLATE = """
@@ -484,12 +437,6 @@ sharper list is better than a longer duplicative one.
 False-positive-filter the findings below for this patch. Record one verdict per
 finding with record_verdict as you work through them.
 
-## Patch Diff
-
-```diff
-{diff}
-```
-
 ## Findings to judge
 
 {findings}
@@ -497,21 +444,15 @@ finding with record_verdict as you work through them.
 
     # ---- prompt-bundle loaders ---------------------------------------------
 
-    def _load_prompt_bundle(
-        self, docs: List[Dict[str, Any]], from_docker_container: bool = False
-    ) -> str:
-        """Concatenate a list of {name, path} docs into a bundle."""
+    def _load_prompt_bundle(self, docs: List[Dict[str, Any]]) -> str:
+        """Concatenate a list of {name, path} kernel docs into a bundle."""
         bundle = ""
         for doc in docs:
-            if from_docker_container:
-                content = self.docker_manager.read_file(str(doc["path"]))
-                # Older kernels predate some of these docs; skip what is absent
-                # rather than failing the whole review.
-                if content is False:
-                    continue
-            else:
-                with open(doc["path"], "r") as f:
-                    content = f.read()
+            content = self.docker_manager.read_file(str(doc["path"]))
+            # Older kernels predate some of these docs; skip what is absent
+            # rather than failing the whole review.
+            if content is False:
+                continue
             bundle += f"## {doc['name']}:\n\n{content}"
         return bundle
 
@@ -519,32 +460,39 @@ finding with record_verdict as you work through them.
     def docs_kernel_path(self) -> Path:
         return self.docker_manager.kernel_dir / self.agent._docs_subdir
 
+    def _touches_devicetree(self) -> bool:
+        """True when the change touches DT sources or bindings."""
+        for path in self.commit.stats.files:
+            p = str(path).lower()
+            if p.endswith((".dts", ".dtsi")) or "devicetree/bindings" in p:
+                return True
+        return False
+
     def get_kernel_coding_style(self) -> str:
-        """Load kernel coding style guidelines from documentation."""
-        return self._load_prompt_bundle(
-            [
-                {
-                    "name": "Kernel Coding Style Guidelines",
-                    "path": str(
-                        self.docs_kernel_path / "Documentation/process/coding-style.rst"
-                    ),
-                },
+        """Load coding-style guides relevant to this change.
+
+        Everything gets the kernel coding style; DT patches also get the
+        devicetree coding style.
+        """
+        docs = [
+            {
+                "name": "Kernel Coding Style Guidelines",
+                "path": str(
+                    self.docs_kernel_path / "Documentation/process/coding-style.rst"
+                ),
+            },
+        ]
+        if self._touches_devicetree():
+            docs.append(
                 {
                     "name": "Devicetree Coding Style Guidelines",
                     "path": str(
                         self.docs_kernel_path
                         / "Documentation/devicetree/bindings/dts-coding-style.rst"
                     ),
-                },
-                {
-                    "name": "Kernel Rust Coding Style Guidelines",
-                    "path": str(
-                        self.docs_kernel_path / "Documentation/rust/coding-guidelines.rst"
-                    ),
-                },
-            ],
-            from_docker_container=True,
-        )
+                }
+            )
+        return self._load_prompt_bundle(docs)
 
     def get_submitting_patches(self) -> str:
         """Load the kernel patch-submission conventions (commit message, tags)."""
@@ -558,48 +506,46 @@ finding with record_verdict as you work through them.
                     ),
                 },
             ],
-            from_docker_container=True,
-        )
-
-    def get_technical_patterns(self) -> str:
-        """Load the failure taxonomy used to seed the plan critic."""
-        return self._load_prompt_bundle(
-            [
-                {
-                    "name": "Kernel Technical Patterns",
-                    "path": KERNEL_REVIEW_PROMPTS_PATH / "technical-patterns.md",
-                },
-            ]
-        )
-
-    def get_false_positive_guide(self) -> str:
-        """Load the prove-or-drop rubric used by the false-positive filter."""
-        return self._load_prompt_bundle(
-            [
-                {
-                    "name": "False Positive Guide",
-                    "path": KERNEL_REVIEW_PROMPTS_PATH / "false-positive-guide.md",
-                },
-            ]
-        )
-
-    def get_subsystem_index(self) -> str:
-        """Load the subsystem review guide index."""
-        return self._load_prompt_bundle(
-            [
-                {
-                    "name": "Subsystem Review Guide Index",
-                    "path": SUBSYSTEM_REVIEW_PROMPTS_PATH / "subsystem.md",
-                },
-            ]
         )
 
     # per-phase system prompts
+    #
+    # Keep the order for prompt prefix cache. Order segments widest-shared first.
+
+    def _system_prompt_header(self) -> str:
+        """The leading system-prompt segment *every* phase sends byte-identically.
+
+        Its own cache segment (see `build_system_message`) so the diff is written
+        once per run and reused by every later phase including the planner and
+        the FP filter, which skip the static guides that follow and would
+        otherwise share no cacheable prefix at all.
+        """
+        return self._date_header() + self._patch_context()
+
+    def _static_guides(self) -> str:
+        """The static doc stack, shared by the phases that review against it."""
+        return (
+            self.get_submitting_patches()
+            + self.get_kernel_coding_style()
+            + get_technical_patterns()
+        )
 
     def _date_header(self) -> str:
         return f"\nDate: {datetime.date.today().isoformat()}\n"
 
-    def _planner_system_prompt(self) -> str:
+    def _patch_context(self) -> str:
+        """Commit message + diff, byte-identical across phases.
+
+        Leads every phase's system prompt so the patch under review is a shared
+        prefix that caches across planner/critic/exec/fp-filter (and every exec
+        unit) instead of being re-sent uncached in each phase's user turn.
+        """
+        return self.PATCH_CONTEXT_TEMPLATE.format(
+            commit_text=self._label_lines(self.commit_message, "C"),
+            diff=self._label_lines(self.diff, "P"),
+        )
+
+    def _planner_system_prompt(self) -> tuple[str, ...]:
         # The planner only divides the work; it gets no taxonomy, no subsystem
         # index, and no coding-style/patch docs — those would prime it toward a
         # fixed menu of issues. The specifics live with the critic (coverage) and
@@ -607,12 +553,11 @@ finding with record_verdict as you work through them.
         # target either: complete coverage of the change's dimensions is the only
         # goal.
         return (
-            self._date_header()
-            + self.PLANNER_INSTRUCTIONS
-            + self.PLANNER_OUTPUT_BLOCK
+            self._system_prompt_header(),
+            self.PLANNER_INSTRUCTIONS + self.PLANNER_OUTPUT_BLOCK,
         )
 
-    def _critic_system_prompt(self) -> str:
+    def _critic_system_prompt(self) -> tuple[str, ...]:
         # The critic gets get_subsystem_review_guide + read_doc (wired in
         # _critique_plan) but no code-reading/-search tools: it can load subsystem
         # guides and read Documentation/ contracts to judge coverage, but can't go
@@ -621,96 +566,39 @@ finding with record_verdict as you work through them.
         # per discovered bug). No unit-count target: the critic only ensures every
         # dimension the change warrants is covered.
         return (
-            self._date_header()
-            + self.CRITIC_INSTRUCTIONS
-            + self.get_technical_patterns()
-            + self.CRITIC_INDEX_HEADER
-            + self.get_subsystem_index()
-            + self.get_kernel_coding_style()
-            + self.get_submitting_patches()
+            self._system_prompt_header(),
+            self._static_guides(),
+            self.SUBSYSTEM_INDEX_BLOCK
+            + get_subsystem_index()
+            + self.CRITIC_INSTRUCTIONS,
         )
 
-    def _execution_system_prompt(self, task: Dict[str, Any]) -> str:
-        def _fmt_list(key: str) -> str:
-            vals = task.get(key) or []
-            if isinstance(vals, str):
-                vals = [vals]
-            return ", ".join(str(v) for v in vals) if vals else "(none specified)"
-
-        assignment = (
-            f"{task.get('prose', '(unspecified)')}\n\n"
-            f"Full scope across all angles:\n"
-            f"- Files: {_fmt_list('files')}\n"
-            f"- Symbols: {_fmt_list('symbols')}\n"
-        )
+    def _execution_system_prompt(self, task: Dict[str, Any]) -> tuple[str, ...]:
+        assignment = f"{task.get('prose', '(unspecified)')}\n"
         return (
-            self._date_header()
+            self._system_prompt_header(),
+            self._static_guides(),
+            self.SUBSYSTEM_INDEX_BLOCK
+            + get_subsystem_index()
+            + self.NAV_TOOLS_BLOCK
             + self.EXECUTION_INSTRUCTIONS
-            + assignment
             + self.EXECUTION_METHOD_BLOCK
-            + self.NAV_TOOLS_BLOCK
-            + self.get_technical_patterns()
-            + self.SUBSYSTEM_INDEX_BLOCK
-            + self.get_subsystem_index()
-            + self.get_kernel_coding_style()
+            + assignment,
         )
 
-    def _fp_filter_system_prompt(self) -> str:
+    def _fp_filter_system_prompt(self) -> tuple[str, ...]:
         return (
-            self._date_header()
+            self._system_prompt_header(),
+            self.NAV_TOOLS_BLOCK
             + self.FP_FILTER_INSTRUCTIONS
-            + self.get_false_positive_guide()
-            + self.NAV_TOOLS_BLOCK
+            + get_false_positive_guide(),
         )
 
-    # lenient JSON parsing
-
-    @staticmethod
-    def _extract_json(text: str) -> Optional[Any]:
-        """Lenient extraction of a JSON value from possibly-fenced model text.
-
-        Decodes at every '{' / '[' (raw_decode stops at the value's end, so a
-        code fence or trailing prose is ignored) and keeps the widest value.
-        Widest-wins means an object wrapping an array isn't mistaken for the
-        inner array, and a stray `{}`/`[]` in prose can't shadow the real
-        answer. Returns the value or None.
-        """
-        decoder = json.JSONDecoder()
-        best_span, best_val = -1, None
-        for m in re.finditer(r"[{\[]", text or ""):
-            try:
-                val, end = decoder.raw_decode(text, m.start())
-            except ValueError:
-                continue
-            if end - m.start() > best_span:
-                best_span, best_val = end - m.start(), val
-        return best_val
-
-    def _finalize_json(self, messages: List[dict], raw: str, kind: str) -> Optional[Any]:
-        """Extract JSON from `raw`; on failure, one bounded repair re-prompt.
-
-        `messages` is the loop's (mutated) message history, reused so the repair
-        keeps context. No litellm `response_format`, no finalize tool.
-        """
-        data = self._extract_json(raw)
-        if data is not None:
-            return data
-        self.logger.warning(f"[plan] could not parse {kind}; attempting one repair.")
-        messages.append(
-            {
-                "role": "user",
-                "content": (
-                    f"Your previous response could not be parsed. Return ONLY the "
-                    f"{kind} as a single JSON value inside one ```json fence, with no "
-                    f"prose and no tool calls."
-                ),
-            }
+    def _cleanup_system_prompt(self) -> tuple[str, ...]:
+        return (
+            self._system_prompt_header(),
+            self.REVIEW_CLEANUP_INSTRUCTIONS,
         )
-        response = self.agent.completion_with_retry(
-            messages=messages, stream=False
-        )
-        raw2 = response.choices[0].message.content or ""
-        return self._extract_json(raw2)
 
     @staticmethod
     def _reported_issue_count(text: str) -> Optional[int]:
@@ -748,12 +636,13 @@ finding with record_verdict as you work through them.
     def _select_subsystem_guides(self) -> set[str]:
         """Ask a bash-only agent which subsystem guides apply to this change."""
         changed_files = list(self.commit.stats.files)
-        subsystem_index = self.get_subsystem_index()
+        subsystem_index = get_subsystem_index()
         messages = [
             {
                 "role": "system",
                 "content": (
-                    "Select the subsystem guides with a reverse search. Check path "
+                    self._date_header()
+                    + "Select the subsystem guides with a reverse search. Check path "
                     "triggers against the changed paths, then search the changed "
                     "files for the trigger regexes from every remaining row. Cover "
                     "every remaining subsystem row with its specific trigger "
@@ -784,24 +673,29 @@ finding with record_verdict as you work through them.
             },
         ]
 
-        raw = self.agent.run_agent_loop(
+        self.agent.run_agent_loop(
             messages,
             force_tool_usage=False,
             max_iterations=self.SUBSYSTEM_SELECTOR_ITER_CAP,
             allowed_tools=["bash"],
             label="subsystem-selector",
         )
-        parsed = self._extract_json(raw)
-        requested = (
-            parsed.get("subsystem_guides") if isinstance(parsed, dict) else None
+        parsed = self.agent.complete_until_json(
+            messages,
+            validate=lambda v: isinstance(v, dict)
+            and isinstance(v.get("subsystem_guides"), list),
+            corrective=(
+                "Your response was not the expected JSON. Return ONLY "
+                '{"subsystem_guides": ["guide.md"]} inside one ```json fence.'
+            ),
         )
-        if not isinstance(requested, list):
+        if parsed is None:
             self.logger.warning(
                 "[preload] subsystem selector returned invalid JSON; loading no guides"
             )
             return set()
 
-        return {name for name in requested if isinstance(name, str)}
+        return {name for name in parsed["subsystem_guides"] if isinstance(name, str)}
 
     def _pregather_critic_docs(self) -> OrderedDict[str, str]:
         gathered: OrderedDict[str, str] = OrderedDict()
@@ -884,19 +778,25 @@ finding with record_verdict as you work through them.
 
     @cached_property
     def _diff_digest_model(self) -> List[Dict[str, Any]]:
-        self.agent._ensure_navigation_stack(need_ts=True)
+        diffs = [
+            fd for fd in self._commit_file_diffs
+            if not fd["deleted"] and fd["path"].endswith((".c", ".h")) and fd["ranges"]
+        ]
+        # The index stores paths relative to the mounted repo root. Outside tool
+        # dispatch (which reports errors to the model), so degrade rather than
+        # abort the plan phase.
+        index_paths = [os.path.join(self.git_subdir, fd["path"]) for fd in diffs]
+        try:
+            constructs_by_file = self.agent._ts_constructs_in_files(index_paths)
+        except RuntimeError as e:
+            self.logger.warning(f"diff digest: construct lookup failed: {e}")
+            constructs_by_file = {}
 
         files: List[Dict[str, Any]] = []
-        for fd in self._commit_file_diffs:
+        for fd, index_path in zip(diffs, index_paths):
             path = fd["path"]
-            if fd["deleted"] or not path.endswith((".c", ".h")) or not fd["ranges"]:
-                continue
-
-            # The index stores paths relative to the mounted repo root.
-            index_path = os.path.join(self.git_subdir, path)
-            try:
-                constructs = self.agent._ts_constructs_in_file(index_path)
-            except RuntimeError:
+            constructs = constructs_by_file.get(index_path)
+            if constructs is None:
                 continue
 
             ranges = fd["ranges"]
@@ -978,13 +878,11 @@ finding with record_verdict as you work through them.
             })
         else:
             critic_messages.extend([
-                {"role": "system", "content": self._critic_system_prompt()},
+                build_system_message(*self._critic_system_prompt()),
                 {
                     "role": "user",
                     "content": self._render_loaded_refs(preloaded_guides)
                     + self.CRITIC_USER_TEMPLATE.format(
-                        commit_text=commit_text,
-                        diff=self.diff,
                         plan=json.dumps(tasks, indent=2),
                     )
                     + self._diff_digest_block(),
@@ -1002,32 +900,17 @@ finding with record_verdict as you work through them.
             "read_binding",
             "search_docs",
         ]
-        raw = self.agent.run_agent_loop(
+        self.agent.run_agent_loop(
             critic_messages,
             force_tool_usage=False,
             max_iterations=self._critic_iter_cap(),
             allowed_tools=allowed,
         )
-        verdict = self._extract_json(raw)
-        if not isinstance(verdict, dict):
-            # Resume the same conversation so the critic repairs with full context.
-            self.logger.warning("[plan] critic verdict unparseable; resuming for repair.")
-            critic_messages.append({
-                "role": "user",
-                "content": (
-                    "Your previous response could not be parsed as JSON. "
-                    "Return ONLY the critique as a single JSON object inside "
-                    "one ```json fence."
-                ),
-            })
-            raw2 = self.agent.run_agent_loop(
-                critic_messages,
-                force_tool_usage=False,
-                max_iterations=1,
-                allowed_tools=[],
-            )
-            verdict = self._extract_json(raw2)
-        if not isinstance(verdict, dict):
+        verdict = self.agent.complete_until_json(
+            critic_messages,
+            validate=lambda v: isinstance(v, dict),
+        )
+        if verdict is None:
             return {"material": False, "feedback": []}
         return verdict
 
@@ -1051,30 +934,42 @@ finding with record_verdict as you work through them.
         plan_messages.append(
             {"role": "user", "content": self.PLANNER_REVISE_TEMPLATE.format(feedback=fb_text)}
         )
-        raw = self.agent.run_agent_loop(
+        self.agent.run_agent_loop(
             plan_messages,
             force_tool_usage=False,
             use_tools=False,
         )
-        revised = self._finalize_json(plan_messages, raw, "revised unit list (a JSON array)")
-        return revised if isinstance(revised, list) and revised else None
+        return self.agent.complete_until_json(
+            plan_messages,
+            validate=lambda v: isinstance(v, list) and len(v) > 0,
+            corrective=(
+                "Your previous response could not be parsed. Return ONLY the "
+                "revised unit list as a non-empty JSON array inside one ```json "
+                "fence, with no prose."
+            ),
+        )
 
-    def _plan_phase(self, shared_user: str, commit_text: str) -> Tuple[List[Dict[str, Any]], int, bool]:
+    def _plan_phase(
+        self, shared_user: str, commit_text: str
+    ) -> Tuple[List[Dict[str, Any]], int, bool, List[str]]:
         # Planner: split the diff into units, with no taxonomy/subsystem priors.
         # The conversation is reused across rounds so the planner revises its own
         # plan in light of the critic's feedback (planner -> critic -> planner).
         self.agent.current_label = "planner"
         plan_messages = [
-            {"role": "system", "content": self._planner_system_prompt()},
+            build_system_message(*self._planner_system_prompt()),
             {"role": "user", "content": shared_user + self._diff_digest_block()},
         ]
-        raw = self.agent.run_agent_loop(
+        self.agent.run_agent_loop(
             plan_messages,
             force_tool_usage=False,
             use_tools=False,
         )
-        tasks = self._finalize_json(plan_messages, raw, "unit list (a JSON array)")
-        if not isinstance(tasks, list):
+        tasks = self.agent.complete_until_json(
+            plan_messages,
+            validate=lambda v: isinstance(v, list),
+        )
+        if tasks is None:
             tasks = []
         self.logger.debug(f"[plan] planner proposed {len(tasks)} unit(s).")
         events.emit(events.PLAN, tasks=tasks)
@@ -1133,7 +1028,7 @@ finding with record_verdict as you work through them.
 
         final = self._normalize_tasks(tasks)
         events.emit(events.PLAN, tasks=final)
-        return final, plan_rounds, plan_converged
+        return final, plan_rounds, plan_converged, list(preloaded_guides)
 
     # Phase 2: EXECUTION
 
@@ -1143,48 +1038,18 @@ finding with record_verdict as you work through them.
         return int(raw) if raw and raw.isdigit() and int(raw) > 0 else self.EXEC_ITER_CAP
 
     @staticmethod
-    def _merge_units(tasks: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def _merge_units(
+        tasks: List[Dict[str, Any]], guides: List[str]
+    ) -> Dict[str, Any]:
         """Collapse all planned units into one combined unit for a single worker."""
-        def _vals(t: Dict[str, Any], key: str) -> List[str]:
-            vals = t.get(key) or []
-            if isinstance(vals, str):
-                vals = [vals]
-            return [str(v) for v in vals]
-
-        def _union(key: str) -> List[str]:
-            seen: OrderedDict[str, None] = OrderedDict()
-            for t in tasks:
-                for v in _vals(t, key):
-                    seen.setdefault(v, None)
-            return list(seen.keys())
-
-        # Each angle keeps the planner's own scope so the reviewer knows which
-        # files/symbols belong to which dimension; a flat union would lose that.
-        blocks = []
-        for i, t in enumerate(tasks, 1):
-            scope = ", ".join(_vals(t, "files") + _vals(t, "symbols"))
-            block = f"{i}. {t.get('dimension', '?')}: {t.get('focus', '(unspecified)')}"
-            if scope:
-                block += f"\n   Scope: {scope}"
-            blocks.append(block)
-        angles = "\n".join(blocks)
-        prose = (
-            "Review the entire patch exhaustively. Investigate EVERY one of the "
-            "following analysis angles thoroughly and independently — treat each "
-            "as a separate pass, do not stop early once you have found one issue:\n"
-            f"{angles}"
-        )
-        return {
-            "id": "t1",
-            "prose": prose,
-            "files": _union("files"),
-            "symbols": _union("symbols"),
-            "source": "merged",
-        }
-
-    # Maximum times to resume the reviewer when its task checklist still has
-    # incomplete entries. Keep small - each resume replays the full transcript.
-    EXEC_INCOMPLETE_RESUMES = 2
+        notes = [
+            f"{t.get('dimension', '?')}: {t.get('focus', '(unspecified)')}"
+            for t in tasks
+        ]
+        if guides:
+            notes.append(f"Suggested subsystem guides: {', '.join(guides)}")
+        prose = "\n".join(f"{i}. {note}" for i, note in enumerate(notes, 1))
+        return {"id": "t1", "prose": prose, "source": "merged"}
 
     def _run_unit(
         self, idx: int, n: int, task: Dict[str, Any], shared_user: str
@@ -1193,14 +1058,12 @@ finding with record_verdict as you work through them.
         tid = task.get("id", f"t{idx}")
         self.logger.info(f"[exec] unit {idx}/{n} ({tid}) start")
         # The reviewer streams findings here via record_finding (keyed by the
-        # exec:<tid> label). Reset findings and the task checklist so a re-run
-        # in the same sandbox starts clean.
+        # exec:<tid> label). Reset findings so a re-run in the same sandbox
+        # starts clean.
         findings_path = self.agent.findings_path_for(f"exec:{tid}")
         findings_path.unlink(missing_ok=True)
-        tasks_path = self.agent.tasks_path_for(f"exec:{tid}")
-        tasks_path.unlink(missing_ok=True)
         exec_messages = [
-            {"role": "system", "content": self._execution_system_prompt(task)},
+            build_system_message(*self._execution_system_prompt(task)),
             {"role": "user", "content": self.EXECUTION_DIRECTIVE + shared_user},
         ]
         result = self.agent.run_agent_loop(
@@ -1210,55 +1073,6 @@ finding with record_verdict as you work through them.
             allowed_tools=self.EXEC_TOOLS,
             label=f"exec:{tid}",
         )
-        # If any task_add is still open, resume the same conversation asking
-        # the reviewer to finish them. This is a targeted second chance, not a
-        # rerun — the transcript (and its tool calls) is preserved.
-        added_total, completed_total = self._task_counts(tasks_path)
-        resume_stats = {
-            "unit": tid,
-            "tasks_added": added_total,
-            "tasks_completed_before_resume": completed_total,
-            "resume_rounds": 0,
-            "open_before_each_resume": [],
-            "still_open_at_end": [],
-        }
-        for attempt in range(1, self.EXEC_INCOMPLETE_RESUMES + 1):
-            open_ids = self._incomplete_task_ids(tasks_path)
-            if not open_ids:
-                break
-            resume_stats["resume_rounds"] = attempt
-            resume_stats["open_before_each_resume"].append(list(open_ids))
-            self.logger.info(
-                f"[exec] unit {idx}/{n} ({tid}) resume {attempt}/"
-                f"{self.EXEC_INCOMPLETE_RESUMES}: "
-                f"{len(open_ids)} incomplete task(s): {open_ids}"
-            )
-            events.emit(
-                events.TASK, label=f"exec:{tid}", action="resume",
-                round=attempt, cap=self.EXEC_INCOMPLETE_RESUMES,
-                open_ids=list(open_ids),
-            )
-            exec_messages.append({
-                "role": "user",
-                "content": self._incomplete_tasks_prompt(open_ids),
-            })
-            result = self.agent.run_agent_loop(
-                exec_messages,
-                force_tool_usage=True,
-                max_iterations=self._exec_iter_cap(),
-                allowed_tools=self.EXEC_TOOLS,
-                label=f"exec:{tid}",
-            )
-        still_open = self._incomplete_task_ids(tasks_path)
-        resume_stats["still_open_at_end"] = list(still_open)
-        _, completed_after = self._task_counts(tasks_path)
-        resume_stats["tasks_completed_after_resume"] = completed_after
-        if still_open:
-            self.logger.warning(
-                f"[exec] unit {idx}/{n} ({tid}) finished with "
-                f"{len(still_open)} task(s) still incomplete: {still_open}"
-            )
-        self._task_resume_log.append(resume_stats)
         result = (result or "").strip()
         # Prefer the findings the reviewer streamed to disk as it worked; fall back
         # to the returned text only if it recorded nothing via record_finding.
@@ -1270,69 +1084,6 @@ finding with record_verdict as you work through them.
             f"({len(recorded)} chars recorded, {len(result)} returned)."
         )
         return idx, task, text
-
-    @staticmethod
-    def _incomplete_task_ids(tasks_path: Path) -> List[str]:
-        """Read the per-phase tasks JSONL and return the ids of every task_add
-        without a matching task_complete, preserving add-order."""
-        if not tasks_path.exists():
-            return []
-        added: OrderedDict[str, None] = OrderedDict()
-        completed: set = set()
-        for line in tasks_path.read_text().splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rec = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            tid = rec.get("id")
-            if not tid:
-                continue
-            ev = rec.get("event")
-            if ev == "add":
-                added.setdefault(tid, None)
-            elif ev == "complete":
-                completed.add(tid)
-        return [tid for tid in added if tid not in completed]
-
-    @staticmethod
-    def _task_counts(tasks_path: Path) -> Tuple[int, int]:
-        """Return (unique adds, unique completes) parsed from the tasks JSONL."""
-        if not tasks_path.exists():
-            return 0, 0
-        adds: set = set()
-        completes: set = set()
-        for line in tasks_path.read_text().splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rec = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            tid = rec.get("id")
-            if not tid:
-                continue
-            if rec.get("event") == "add":
-                adds.add(tid)
-            elif rec.get("event") == "complete":
-                completes.add(tid)
-        return len(adds), len(completes)
-
-    @staticmethod
-    def _incomplete_tasks_prompt(open_ids: List[str]) -> str:
-        listing = "\n".join(f"- {tid}" for tid in open_ids)
-        return (
-            "Your checklist still has open tasks:\n\n"
-            f"{listing}\n\n"
-            "Finish each one now. For every open task, do the work to the same "
-            "depth as the completed ones and then call `task_complete(id, "
-            "result, note)`. If you are unsure what a task was about, call "
-            "`task_list` to see its description. Every open task must end "
-            "with a task_complete call before you stop."
-        )
 
     def _execution_phase(
         self, tasks: List[Dict[str, Any]], shared_user: str
@@ -1387,14 +1138,19 @@ finding with record_verdict as you work through them.
         return cls._is_proven_drop(entry)
 
     @classmethod
-    def _render_kept(cls, entry: Dict[str, Any]) -> str:
+    def _render_kept(
+        cls, entry: Dict[str, Any], *, output_severity: bool = False
+    ) -> str:
         """Finding text for a kept entry. A high-impact finding the filter wanted
         to drop is kept by the recall floor but prefixed `[likely false positive]`,
         so the reviewer sees the filter judged it a likely FP (proof is in
         fp_verdicts.json) rather than the floor silently passing it through."""
         text = str(entry.get("finding") or "").strip()
         if text and cls._is_proven_drop(entry) and cls._impact_is_high(entry):
-            return f"[likely false positive] {text}"
+            text = f"[likely false positive] {text}"
+        impact = str(entry.get("impact", "")).strip().lower()
+        if text and output_severity and impact in ("low", "medium", "high"):
+            text = f"[{impact}] {text}"
         return text
 
     @staticmethod
@@ -1439,18 +1195,16 @@ finding with record_verdict as you work through them.
         # Issues found before filtering = the '### '-headed finding blocks the
         # exec phase streamed to findings.md.
         issues_before = findings_text.count("\n### ") + 1
-        fp_user = self.FP_FILTER_USER_TEMPLATE.format(
-            diff=self.diff, findings=findings_text
-        )
+        fp_user = self.FP_FILTER_USER_TEMPLATE.format(findings=findings_text)
         fp_messages = [
-            {"role": "system", "content": self._fp_filter_system_prompt()},
+            build_system_message(*self._fp_filter_system_prompt()),
             {"role": "user", "content": fp_user},
         ]
         self.agent.current_label = "fp-filter"
         # Reset the verdicts file so a re-run in the same sandbox starts clean.
         verdicts_path = self.agent.verdicts_path_for("fp-filter")
         verdicts_path.unlink(missing_ok=True)
-        raw = self.agent.run_agent_loop(
+        self.agent.run_agent_loop(
             fp_messages,
             force_tool_usage=False,
             max_iterations=self._fp_iter_cap(),
@@ -1462,23 +1216,29 @@ finding with record_verdict as you work through them.
         # Note: This is fragile
         entries = self._load_verdicts(verdicts_path)
         if not entries:
-            parsed = self._extract_json(raw)
-            if not isinstance(parsed, list):
-                parsed = self._finalize_json(fp_messages, raw, "verdict array")
-            entries = [v for v in parsed if isinstance(v, dict)] if isinstance(parsed, list) else []
+            parsed = self.agent.complete_until_json(
+                fp_messages,
+                validate=lambda v: isinstance(v, list),
+            )
+            entries = [v for v in parsed or [] if isinstance(v, dict)]
         if not entries:
             # No verdicts at all: keep everything rather than risk dropping a real
             # defect. The cleanup pass still renders the raw findings.
             self.logger.warning("[filter] no verdicts recorded; keeping all findings.")
-            return self.format_chat_response(findings_text), issues_before, issues_before, 0
+            final = self.format_chat_response(findings_text)
+            if not final:
+                self.logger.debug("[filter] cleanup found no issues in the raw findings.")
+                return "", 0, 0, 0
+            return final, issues_before, issues_before, 0
 
         kept: List[str] = []
         dropped: List[Dict[str, Any]] = []
+        output_severity = ai_output_severity()
         for e in entries:
             if self._is_dropped(e):
                 dropped.append(e)
                 continue
-            text = self._render_kept(e)
+            text = self._render_kept(e, output_severity=output_severity)
             if text:
                 kept.append(text)
 
@@ -1504,25 +1264,279 @@ finding with record_verdict as you work through them.
         kept_text = "\n\n".join(kept).strip()
         return (self.format_chat_response(kept_text) if kept_text else ""), len(kept), issues_before, floored
 
-    # output cleanup (unchanged)
+    # output cleanup
 
-    def format_chat_response(self, text: str):
-        self.agent.current_label = "cleanup"
-        formatted_prompt = self.REVIEW_CLEANUP_PROMPT_TEMPLATE.format(
-            diff=self.diff,
-            review=text,
+    @cached_property
+    def _numbered_source(self) -> str:
+        """Commit message and diff joined as the single source the inline
+        renderer reads; `_source_line` maps a cleanup label onto its lines."""
+        return f"{self.commit_message}\n\n{self.diff}"
+
+    @staticmethod
+    def _label_lines(text: str, prefix: str) -> str:
+        """Return text with every line prefixed `{prefix}{n} | ` (1-based)."""
+        return "\n".join(
+            f"{prefix}{i} | {line}" for i, line in enumerate(text.split("\n"), 1)
         )
-        messages = [{"role": "user", "content": formatted_prompt}]
 
-        completion_kwargs: dict = {
-            "messages": messages,
-            "stream": False,
-        }
-        response = self.agent.completion_with_retry(**completion_kwargs)
-        review = response.choices[0].message.content or ""
-        if review.strip() == "No issues found.":
+    def _source_line(self, label: str) -> int:
+        """Map a `C<n>`/`P<n>` label to its 1-based `_numbered_source` line."""
+        n = int(label[1:])
+        if label[0] == "C":
+            return n
+        return self._diff_start_line(self.commit_message) - 1 + n
+
+    # The only diff lines that locate a finding: `diff --git` names the file,
+    # `@@` names the hunk. Both sit at column 0 in git's unified-diff output,
+    # while every line inside a hunk body carries a leading `+`/`-`/space -- so a
+    # body line like `+diff --git ...` or `+@@ x` keeps its prefix and can never
+    # be mistaken for a marker. Every other header line (index, mode, rename,
+    # similarity, ---/+++, Binary files, \ No newline) is noise for an inline
+    # review and collapses away.
+    _DIFF_MARKER_PREFIXES = ("diff --git", "@@")
+    # A collapsed run must exceed this many lines to be worth a `[ ... ]`
+    # placeholder; shorter gaps are cleaner to render verbatim.
+    _MAX_COLLAPSE_GAP = 10
+
+    @classmethod
+    def _is_diff_marker(cls, line: str) -> bool:
+        """Whether `line` is a file (`diff --git`) or hunk (`@@`) header."""
+        return line.startswith(cls._DIFF_MARKER_PREFIXES)
+
+    @staticmethod
+    def _diff_start_line(commit_message: str) -> int:
+        """Return the 1-based first diff line after commit text and separator."""
+        return commit_message.count("\n") + 3
+
+    def _render_inline_review(self, findings: list) -> str:
+        """Render findings after their ranges and collapse unrelated diff lines."""
+        raw_lines = self._numbered_source.split("\n")
+
+        line_count = len(raw_lines)
+        by_end: dict[int, list[str]] = defaultdict(list)
+        ranges: list[tuple[int, int]] = []
+        for entry in findings:
+            text = str(entry["finding"]).strip()
+            start = max(1, min(entry["start_line"], line_count))
+            end = max(1, min(entry["end_line"], line_count))
+            if start > end:
+                start, end = end, start
+            ranges.append((start, end))
+            by_end[end].append(text + "\n")
+
+        # merge-intervals :D
+        merged: list[tuple[int, int]] = []
+        for lo, hi in sorted(ranges):
+            if merged and lo <= merged[-1][1] + 1:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], hi))
+            else:
+                merged.append((lo, hi))
+
+        def relevant(line_number: int) -> bool:
+            return any(lo <= line_number <= hi for lo, hi in merged)
+
+        # Attribute every diff line to its file block (opened by `diff --git`)
+        # and hunk block (opened by `@@`), then record which blocks contain a
+        # finding. A structural marker is kept only if its governing block has
+        # one, so headers for files/hunks with no findings collapse away too.
+        file_of: list[Optional[int]] = [None] * (line_count + 1)  # 1-based
+        hunk_of: list[Optional[int]] = [None] * (line_count + 1)
+        cur_file = cur_hunk = None
+        for i in range(1, line_count + 1):
+            # Column-0 match (not stripped): a hunk-body line like `+@@ x` or
+            # `+diff --git ...` carries a leading `+`, so it never opens a block.
+            line = raw_lines[i - 1]
+            if line.startswith("diff --git"):
+                cur_file, cur_hunk = i, None
+            elif line.startswith("@@"):
+                cur_hunk = i
+            file_of[i], hunk_of[i] = cur_file, cur_hunk
+
+        file_has_finding: set[int] = set()
+        hunk_has_finding: set[int] = set()
+        for lo, hi in merged:
+            for i in range(lo, hi + 1):
+                if file_of[i] is not None:
+                    file_has_finding.add(file_of[i])
+                if hunk_of[i] is not None:
+                    hunk_has_finding.add(hunk_of[i])
+
+        def keep_marker(i: int, line: str) -> bool:
+            """A marker survives only when its file/hunk section has a finding."""
+            if not self._is_diff_marker(line):
+                return False
+            if line.startswith("@@"):
+                return hunk_of[i] in hunk_has_finding
+            return file_of[i] in file_has_finding
+
+        out: list[str] = []
+        diff_start = self._diff_start_line(self.commit_message)
+
+        def quote(line: str) -> str:
+            return f"> {line}" if line else ">"
+
+        # Skipped lines are buffered rather than dropped on sight: a run only
+        # earns a `[ ... ]` placeholder once it is long enough to be worth hiding.
+        gap: list[str] = []
+
+        def flush_gap() -> None:
+            if len(gap) > self._MAX_COLLAPSE_GAP:
+                out.extend(["", "[ ... ]", ""])
+            else:
+                out.extend(quote(g) for g in gap)
+            gap.clear()
+
+        for i, line in enumerate(raw_lines, 1):
+            keep = (
+                i < diff_start
+                or relevant(i)
+                or keep_marker(i, line)
+            )
+            if keep:
+                flush_gap()
+                out.append(quote(line))
+                for finding in by_end.get(i, []):
+                    out.append("")
+                    out.append(finding)
+            else:
+                gap.append(line)
+        # A trailing run is discarded outright: nothing kept follows it
+        return "\n".join(out)
+
+    # Not all models support response_format unfortunately
+    @staticmethod
+    def _valid_cleanup_findings(value: Any) -> bool:
+        """The cleanup contract: a list of dicts, each with a non-empty `finding`
+        and `C<n>`/`P<n>` label `start_line`/`end_line`. Shape is enforced here
+        (so a wrong shape re-prompts); the resolved line numbers are the
+        renderer's to clamp."""
+
+        def _line(v: Any) -> bool:
+            return isinstance(v, str) and re.fullmatch(r"[CP]\d+", v) is not None
+
+        return (
+            isinstance(value, list)
+            and all(
+                isinstance(e, dict)
+                and str(e.get("finding", "")).strip()
+                and _line(e.get("start_line"))
+                and _line(e.get("end_line"))
+                for e in value
+            )
+        )
+
+    def format_chat_response(self, text: str) -> str:
+        """Render `text` as an inline review."""
+        self.agent.current_label = "cleanup"
+
+        messages = [
+            build_system_message(*self._cleanup_system_prompt()),
+            {"role": "user", "content": self.REVIEW_CLEANUP_USER_TEMPLATE.format(review=text)},
+        ]
+        findings = self.agent.complete_until_json(
+            messages,
+            validate=self._valid_cleanup_findings,
+            corrective=(
+                "Your response was not a JSON array of findings, each an object "
+                'with a non-empty "finding" and "start_line"/"end_line" labels '
+                '(e.g. "P12"). '
+                "Return ONLY that JSON array, nothing else."
+            ),
+        )
+        if findings == []:
             return ""
-        return super().format_chat_response(review)
+        if findings is not None:
+            findings = [
+                dict(
+                    e,
+                    start_line=self._source_line(e["start_line"]),
+                    end_line=self._source_line(e["end_line"]),
+                )
+                for e in findings
+            ]
+
+        if ai_output_format() == "gerrit":
+            if findings is None:
+                self.logger.warning(
+                    "[cleanup] JSON parse failed; posting the review patchset-level."
+                )
+                findings = [{"finding": text, "end_line": 0}]
+            return json.dumps(self._gerrit_comments(findings), indent=2)
+
+        if findings is None:
+            self.logger.warning("[cleanup] JSON parse failed; falling back to raw text.")
+            return text.strip()
+
+        return super().format_chat_response(self._render_inline_review(findings).strip())
+
+    @property
+    def output_suffix(self) -> str:
+        return "json" if ai_output_format() == "gerrit" else "txt"
+
+    @staticmethod
+    def _diff_path(header: str) -> str:
+        """The new path from `diff --git a/<old> b/<new>`. Git C-quotes paths
+        with unusual characters (`"b/\\303\\251.txt"`)."""
+        if header.endswith('"'):
+            quoted = header[header.rindex(' "b/') + 1 :]
+            return ast.literal_eval("b" + quoted).decode()[2:]
+        return header.rsplit(" b/", 1)[-1]
+
+    def _gerrit_anchors(self) -> list[tuple[str, dict]]:
+        """Map each numbered-source line (0-based) to a Gerrit (path,
+        CommentInput) anchor, per the REST API's CommentInput entity.
+
+        Message lines go to the /COMMIT_MSG magic file, below the header Gerrit
+        generates above the message (MagicFile.createCommitMessageHeader: one
+        line per parent, Author, AuthorDate, Commit, CommitDate, blank). File
+        and hunk headers get a file comment; anything else is patchset-level."""
+        raw_lines = self._numbered_source.split("\n")
+        anchors: list[tuple[str, dict]] = [("/PATCHSET_LEVEL", {})] * len(raw_lines)
+        header = len(self.commit.parents) + 5
+        diff_start = self._diff_start_line(self.commit_message) - 1
+        for i in range(diff_start - 1):
+            anchors[i] = ("/COMMIT_MSG", {"line": header + i + 1})
+        path, in_hunk, old, new = None, False, 0, 0
+        for i in range(diff_start, len(raw_lines)):
+            line = raw_lines[i]
+            hunk = re.match(r"@@ -(\d+)(?:,\d+)? \+(\d+)", line)
+            if line.startswith("diff --git"):
+                path, in_hunk = self._diff_path(line), False
+            elif hunk:
+                in_hunk, old, new = True, int(hunk.group(1)), int(hunk.group(2))
+            if path is None:
+                continue
+            anchors[i] = (path, {})
+            if not in_hunk or hunk:
+                continue
+            if line.startswith("+"):
+                anchors[i] = (path, {"line": new})
+                new += 1
+            elif line.startswith("-"):
+                anchors[i] = (path, {"line": old, "side": "PARENT"})
+                old += 1
+            elif line.startswith(" "):
+                anchors[i] = (path, {"line": new})
+                old, new = old + 1, new + 1
+        return anchors
+
+    def _gerrit_comments(self, findings: list) -> dict[str, list[dict]]:
+        """Findings as a Gerrit ReviewInput `comments` map (path -> list of
+        CommentInput), each anchored at its end line as the inline review
+        places it. An out-of-range line becomes a patchset-level comment."""
+        anchors = self._gerrit_anchors()
+        comments: dict[str, list[dict]] = defaultdict(list)
+        for e in findings:
+            end = e["end_line"]
+            path, anchor = (
+                anchors[end - 1]
+                if 1 <= end <= len(anchors)
+                else ("/PATCHSET_LEVEL", {})
+            )
+            comments[path].append(
+                dict(anchor, message=str(e["finding"]).strip(), unresolved=True)
+            )
+        return comments
 
     _SUBDIR = "ai_code_review"
 
@@ -1553,9 +1567,6 @@ finding with record_verdict as you work through them.
     def run(self) -> str:
         """Execute the multi-phase AI code review (plan -> execution -> filter)."""
         t_start = time.monotonic()
-        # Per-unit resume telemetry (populated by _run_unit); consumed below
-        # when appending the observability record.
-        self._task_resume_log: List[Dict[str, Any]] = []
         ctx_block = (
             self.ADDITIONAL_CONTEXT_TEMPLATE.format(
                 additional_context=sanitize_additional_context(self.additional_context)
@@ -1568,11 +1579,7 @@ finding with record_verdict as you work through them.
             + repo_project_note(str(self.docker_manager.repo_path))
             + ctx_block
         )
-        shared_user = self.PROMPT_TEMPLATE.format(
-            diff=self.diff,
-            commit_text=self.commit_message,
-            additional_context=additional_context,
-        )
+        shared_user = additional_context
         self._dump("prompt.md", shared_user)
 
         events.emit(
@@ -1583,7 +1590,9 @@ finding with record_verdict as you work through them.
 
         # Phase 1: PLAN (planner splits, critic refines with taxonomy + guides).
         events.emit(events.PHASE, name="plan")
-        tasks, plan_rounds, plan_converged = self._plan_phase(shared_user, self.commit_message)
+        tasks, plan_rounds, plan_converged, guides = self._plan_phase(
+            shared_user, self.commit_message
+        )
         self._dump("plan.json", json.dumps(tasks, indent=2))
         # Count the dimensions in the final plan before they are merged into the
         # single execution unit below (else len(tasks) would always read 1).
@@ -1595,7 +1604,7 @@ finding with record_verdict as you work through them.
         # design, not an option — fanning out one reviewer per unit fragments
         # the review and multiplies tokens for no recall gain.
         if tasks:
-            tasks = [self._merge_units(tasks)]
+            tasks = [self._merge_units(tasks, guides)]
             self.logger.debug("[plan] collapsed to 1 combined execution unit.")
 
         # Context-window guard: bound the worker's per-request INPUT size so it
@@ -1624,31 +1633,6 @@ finding with record_verdict as you work through them.
         final, kept_blocks, issues_before_filter, likely_fps = self._fp_filter_phase(findings)
 
         total_time = time.monotonic() - t_start
-        # Aggregate the incomplete-task resume telemetry captured in _run_unit.
-        task_resume_summary = {
-            "resume_cap": self.EXEC_INCOMPLETE_RESUMES,
-            "units": len(self._task_resume_log),
-            "units_triggering_resume": sum(
-                1 for u in self._task_resume_log if u["resume_rounds"] > 0
-            ),
-            "total_resume_rounds": sum(
-                u["resume_rounds"] for u in self._task_resume_log
-            ),
-            "units_with_still_open_tasks": sum(
-                1 for u in self._task_resume_log if u["still_open_at_end"]
-            ),
-            "total_tasks_added": sum(
-                u["tasks_added"] for u in self._task_resume_log
-            ),
-            "total_tasks_completed": sum(
-                u.get("tasks_completed_after_resume", 0)
-                for u in self._task_resume_log
-            ),
-            "total_tasks_still_open": sum(
-                len(u["still_open_at_end"]) for u in self._task_resume_log
-            ),
-            "per_unit": self._task_resume_log,
-        }
         observability = {
             "patchwise_version": __version__,
             "model": self.agent.model,
@@ -1671,22 +1655,14 @@ finding with record_verdict as you work through them.
             "total_time": round(total_time, 2),
             "time_waiting_for_ai_response": round(self.agent.time_waiting_for_ai_response, 2),
             "api_retries": self.agent.api_retries,
-            "task_checklist": task_resume_summary,
+            "index_cached": self.agent.index_cached,
+            "index_parsed": self.agent.index_parsed,
         }
         self._append_observability(observability)
         self.logger.info(
             f"[review] tasks={len(tasks)} issues_before={issues_before_filter} "
             f"issues_kept={kept_blocks} likely_fps={likely_fps}; "
             f"tokens_used={self.agent.tokens_used}."
-        )
-        trs = task_resume_summary
-        self.logger.info(
-            f"[review] task-checklist: added={trs['total_tasks_added']} "
-            f"completed={trs['total_tasks_completed']} "
-            f"still_open={trs['total_tasks_still_open']} "
-            f"resume_rounds={trs['total_resume_rounds']}/"
-            f"{trs['resume_cap']} "
-            f"(units_triggered={trs['units_triggering_resume']}/{trs['units']})."
         )
         events.emit(events.RUN_DONE, summary={
             "units": len(tasks), "with_findings": len(findings),

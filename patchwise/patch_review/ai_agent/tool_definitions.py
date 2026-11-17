@@ -15,6 +15,9 @@ text, so reach for the navigation tools when you want positions rather than
 prose.
 """
 
+# Cap on the timeout bash_timeout may request, in seconds
+BASH_MAX_TIMEOUT = 1800
+
 _NAME_PARAM = {
     "type": "object",
     "properties": {
@@ -35,8 +38,11 @@ _NAME_PARAM = {
     "required": ["name"],
 }
 
-TOOLS = [
-    {
+# Keyed by tool id. allowed_tools lists ids; the id is not sent to the model,
+# so variants of one tool can share a function name (`bash_timeout` is `bash`
+# with a caller-chosen timeout) without the extra name tokens on every call.
+TOOLS = {
+    "find_definition": {
         "type": "function",
         "function": {
             "name": "find_definition",
@@ -53,7 +59,7 @@ TOOLS = [
             "parameters": _NAME_PARAM,
         },
     },
-    {
+    "find_callers": {
         "type": "function",
         "function": {
             "name": "find_callers",
@@ -70,7 +76,7 @@ TOOLS = [
             "parameters": _NAME_PARAM,
         },
     },
-    {
+    "find_callees": {
         "type": "function",
         "function": {
             "name": "find_callees",
@@ -83,7 +89,7 @@ TOOLS = [
             "parameters": _NAME_PARAM,
         },
     },
-    {
+    "grep": {
         "type": "function",
         "function": {
             "name": "grep",
@@ -139,7 +145,7 @@ TOOLS = [
             },
         },
     },
-    {
+    "read_file": {
         "type": "function",
         "function": {
             "name": "read_file",
@@ -170,7 +176,7 @@ TOOLS = [
             },
         },
     },
-    {
+    "read_doc": {
         "type": "function",
         "function": {
             "name": "read_doc",
@@ -192,7 +198,7 @@ TOOLS = [
             },
         },
     },
-    {
+    "read_binding": {
         "type": "function",
         "function": {
             "name": "read_binding",
@@ -221,7 +227,7 @@ TOOLS = [
             },
         },
     },
-    {
+    "search_docs": {
         "type": "function",
         "function": {
             "name": "search_docs",
@@ -248,7 +254,7 @@ TOOLS = [
             },
         },
     },
-    {
+    "get_subsystem_review_guide": {
         "type": "function",
         "function": {
             "name": "get_subsystem_review_guide",
@@ -274,7 +280,7 @@ TOOLS = [
             },
         },
     },
-    {
+    "bash": {
         "type": "function",
         "function": {
             "name": "bash",
@@ -309,7 +315,48 @@ TOOLS = [
             },
         },
     },
-    {
+    "bash_timeout": {
+        "type": "function",
+        "function": {
+            "name": "bash",
+            "description": (
+                "Run a shell command in the container, killed after `timeout` "
+                f"seconds (at most {BASH_MAX_TIMEOUT}). One-shot: each call is a fresh exec, "
+                "so no state (cwd, variables, environment) carries over — chain "
+                "related steps with `&&` or `;` in one command. stdout and "
+                "stderr are merged; output is truncated past a size cap. Keep "
+                "the timeout short for quick probes; raise it only for work "
+                "known to be slow, like reading a large file from a network "
+                "share or loading a debugger."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "Shell command, run via `sh -c`.",
+                    },
+                    "timeout": {
+                        "type": "integer",
+                        "description": (
+                            f"Seconds before the command is killed "
+                            f"(1-{BASH_MAX_TIMEOUT})."
+                        ),
+                    },
+                    "cwd": {
+                        "type": "string",
+                        "description": (
+                            "Working directory, workspace-relative (e.g. "
+                            "'drivers/usb') or absolute. Defaults to the "
+                            "workspace root."
+                        ),
+                    },
+                },
+                "required": ["command", "timeout"],
+            },
+        },
+    },
+    "record_finding": {
         "type": "function",
         "function": {
             "name": "record_finding",
@@ -346,7 +393,7 @@ TOOLS = [
             },
         },
     },
-    {
+    "record_verdict": {
         "type": "function",
         "function": {
             "name": "record_verdict",
@@ -397,7 +444,7 @@ TOOLS = [
             },
         },
     },
-    {
+    "task_add": {
         "type": "function",
         "function": {
             "name": "task_add",
@@ -421,16 +468,14 @@ TOOLS = [
                     },
                     "description": {
                         "type": "string",
-                        "description": (
-                            "One line: what will be investigated or done."
-                        ),
+                        "description": ("One line: what will be investigated or done."),
                     },
                 },
                 "required": ["id", "description"],
             },
         },
     },
-    {
+    "task_complete": {
         "type": "function",
         "function": {
             "name": "task_complete",
@@ -466,7 +511,7 @@ TOOLS = [
             },
         },
     },
-    {
+    "task_list": {
         "type": "function",
         "function": {
             "name": "task_list",
@@ -482,7 +527,7 @@ TOOLS = [
             },
         },
     },
-    {
+    "run_checkpatch": {
         "type": "function",
         "function": {
             "name": "run_checkpatch",
@@ -506,8 +551,7 @@ TOOLS = [
             },
         },
     },
-
-    {
+    "run_sparse": {
         "type": "function",
         "function": {
             "name": "run_sparse",
@@ -532,9 +576,8 @@ TOOLS = [
             },
         },
     },
-
     # write tools
-    {
+    "write_file_str": {
         "type": "function",
         "function": {
             "name": "write_file_str",
@@ -564,7 +607,7 @@ TOOLS = [
             },
         },
     },
-]
+}
 
 # The general-purpose working set: structured navigation tools plus `bash`.
 # Loops that scope themselves with allowed_tools start from this set and append

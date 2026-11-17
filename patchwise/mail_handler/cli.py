@@ -11,6 +11,7 @@ from typing import Set
 
 from patchwise.mail_handler.config import MailConfig
 from patchwise.mail_handler.handler import process_mail
+from patchwise.mail_handler.mail_client import MailClient
 from patchwise.patch_review import get_selected_reviews_from_args
 
 logger = logging.getLogger(__name__)
@@ -93,9 +94,13 @@ def _process_loop(
     fix: bool,
 ) -> None:
     """Process mail in a loop or once based on the watch flag."""
+    logger.info(f"IMAP: {config.imap.server}:{config.imap.port}")
+    logger.info(f"SMTP: {config.smtp.server}:{config.smtp.port}")
+    # One IMAP session for the whole run
+    mail_client = MailClient(config, send=send)
     try:
         while True:
-            process_mail(criteria, reviews, config, send=send, fix=fix)
+            process_mail(mail_client, criteria, reviews, config, fix=fix)
 
             if watch:
                 logger.info(f"Sleeping for {WATCH_INTERVAL}")

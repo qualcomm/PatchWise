@@ -9,8 +9,7 @@ import re
 import subprocess
 import time
 from collections import OrderedDict
-from functools import cache
-from typing import Any, Dict, List, Optional, Tuple, Set, Union
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Set, Union
 from urllib.parse import unquote, urlparse
 import httpx
 import litellm
@@ -20,7 +19,17 @@ from pathlib import Path
 
 from patchwise import PACKAGE_NAME, SANDBOX_PATH
 from patchwise.docker import DockerManager
-from patchwise.patch_review.ai_agent.tool_definitions import TOOLS
+from patchwise.patch_review.ai_agent.tool_definitions import (
+    BASH_MAX_TIMEOUT,
+    NAVIGATION_TOOLS,
+    TOOLS,
+)
+from patchwise.patch_review.ai_review.review_prompts import (
+    SUBSYSTEM_REVIEW_PROMPTS_PATH,
+    _load_subsystem_guide,
+)
+from patchwise.patch_review.ai_review.ts_cache import TsCache
+from patchwise.patch_review.ai_review.ts_indexer import TsIndex
 from patchwise.ui import events
 from patchwise.utils.config import parse_config
 from patchwise.utils.decorators import retry
@@ -32,7 +41,7 @@ urllib3.disable_warnings()
 # the console, repeatedly, and corrupts the live dashboard.
 litellm.suppress_debug_info = True
 
-DEFAULT_MODEL = "openai/Pro"
+DEFAULT_MODEL = "openai/responses/Pro"
 DEFAULT_API_BASE = "https://api.openai.com/v1"
 AGENT_MAX_ITERATIONS = 50
 
@@ -47,35 +56,27 @@ def _positive_int_env(name: str, default: int) -> int:
     return int(raw) if raw and raw.isdigit() and int(raw) > 0 else default
 
 
+def build_system_message(*segments: str) -> dict:
+    """Build a system message split into independently reusable segments.
+
+    Each segment boundary becomes a provider cache breakpoint (_inject_prompt_caching
+    marks every block but the last), so providers can reuse whichever leading run
+    of segments a phase shares.
+    
+    Without the breakpoints a prefix shared only *inside* a message may not be reusable:
+    OpenAI's implicit breakpoint lands at the end of the latest eligible
+    message (a user message or tool response), which sits past the whole system
+    prompt, so changing anything after the shared part misses.
+    """
+    blocks = [{"type": "text", "text": s} for s in segments if s]
+    return {"role": "system", "content": blocks}
+
+
 # @retry binds max_retries at decoration time, so it must be a constant read at import.
 DEFAULT_MAX_API_RETRIES = _positive_int_env("PATCHWISE_MAX_API_RETRIES", 10)
 
-# Container-side tree-sitter indexer path
-TS_INDEXER_PATH = "/home/patchwise/bin/ts_indexer.py"
-
-REVIEW_PROMPTS_PATH = (
-    Path(__file__).resolve().parents[3] / "thirdparty" / "review-prompts"
-)
-KERNEL_REVIEW_PROMPTS_PATH = REVIEW_PROMPTS_PATH / "kernel"
-SUBSYSTEM_REVIEW_PROMPTS_PATH = KERNEL_REVIEW_PROMPTS_PATH / "subsystem"
-
-
-@cache
-def _load_subsystem_guide(safe_name: str) -> Optional[str]:
-    """Read a subsystem guide's content, cached for the process lifetime.
-
-    The guides are immutable on disk, so the first read serves every later
-    call across reviews, phases, and critic rounds (the critic re-fetches the
-    same guide each round). Returns None when the guide does not exist.
-    """
-    if os.path.basename(safe_name) != safe_name or not safe_name.endswith(".md"):
-        return None
-    try:
-        with open(SUBSYSTEM_REVIEW_PROMPTS_PATH / safe_name, "r") as f:
-            return f.read()
-    except FileNotFoundError:
-        return None
-
+# Corrective re-prompts complete_until_json spends on validation errors
+AGENT_JSON_RETRIES = 5
 
 def uri_to_path(uri: str) -> str:
     """Convert a file:// URI to file path."""
@@ -86,6 +87,7 @@ class Agent:
     model: str = DEFAULT_MODEL
     api_base: str = DEFAULT_API_BASE
     api_key: Optional[str] = None
+    reasoning_effort: Optional[str] = None
 
     @classmethod
     def get_logger(cls) -> logging.Logger:
@@ -104,9 +106,14 @@ class Agent:
         self.logger = self.get_logger()
         self.docker_manager = docker_manager
         self.enable_edit_tools = enable_edit_tools
-        self.ts_daemon: Optional[subprocess.Popen[Any]] = None
         self.seen_files: Set[str] = set()
+        self.tool_ids: Dict[str, str] = {}
 
+        # Connect to the Redis ts-cache and set up the host-side index
+        blocklist = parse_config().get("indexing", {}).get("blocklist") or []
+        self._ts_index = TsIndex(
+            docker_manager=docker_manager, cache=TsCache(), blocklist=blocklist
+        )
         # Summed for observability; there is no run-wide token cap.
         self.tokens_used: int = 0
         self.input_tokens: int = 0
@@ -158,6 +165,11 @@ class Agent:
         kwargs.setdefault("model", Agent.model)
         kwargs.setdefault("api_base", Agent.api_base)
         kwargs.setdefault("api_key", Agent.api_key)
+        if Agent.reasoning_effort:
+            kwargs.setdefault("reasoning_effort", Agent.reasoning_effort)
+            allowed = kwargs.setdefault("allowed_openai_params", [])
+            if "reasoning_effort" not in allowed:
+                allowed.append("reasoning_effort")
         self._inject_prompt_caching(kwargs)
         self.logger.debug(
             f"Making API call with model: {self.model}, api_base: {Agent.api_base}"
@@ -175,47 +187,85 @@ class Agent:
             ct = getattr(usage, "prompt_tokens_details", None)
             self.cached_tokens += (getattr(ct, "cached_tokens", 0) or 0) if ct else 0
             cd = getattr(usage, "completion_tokens_details", None)
-            self.reasoning_tokens += (getattr(cd, "reasoning_tokens", 0) or 0) if cd else 0
+            self.reasoning_tokens += (
+                (getattr(cd, "reasoning_tokens", 0) or 0) if cd else 0
+            )
             self.output_tokens += getattr(usage, "completion_tokens", 0) or 0
         return response
 
+    # Anthropic rejects a request carrying more than this many cache_control blocks.
+    ANTHROPIC_BREAKPOINT_CAP = 4
+
+    @staticmethod
+    def _segment_breakpoints(kwargs: dict) -> List[dict]:
+        """The system-prompt blocks to cache, outermost prefix first.
+
+        Every block but the last, since a build_system_message segment boundary
+        is exactly where one phase's shared prefix can end.
+        """
+        system = next(
+            (m for m in kwargs["messages"] if m.get("role") == "system"), None
+        )
+        segments = system.get("content") if system else None
+        if not isinstance(segments, list):
+            return []
+        return [b for b in segments[:-1] if isinstance(b, dict)]
+
     @staticmethod
     def _inject_prompt_caching(kwargs: dict) -> None:
-        # Anthropic only caches a prefix ending at an explicit cache_control
-        # breakpoint; without one, Claude re-prefills the whole growing
-        # conversation every turn. OpenAI/Gemini providers cache prefixes on their
-        # own, so we skip them.
-        if "claude" not in kwargs["model"].lower():
+        """Translate segment boundaries into the provider's own cache markers.
+
+        Dispatch on the litellm provider prefix.
+        """
+        marked = Agent._segment_breakpoints(kwargs)
+        model = kwargs["model"].lower()
+        if model.startswith("anthropic"):
+            Agent._mark_anthropic(kwargs, marked)
+        elif model.startswith("openai"):
+            Agent._mark_openai(kwargs, marked)
+
+    @staticmethod
+    def _mark_openai(kwargs: dict, marked: List[dict]) -> None:
+        if not marked:
             return
+        # TODO: LiteLLM's openai/responses/ bridge drops these markers as of
+        # 1.105.4. Remove this note once upstream preserves the breakpoints.
+        for block in marked:
+            # OpenAI honors a per-block breakpoint only if the request opts in.
+            block["prompt_cache_breakpoint"] = {"mode": "explicit"}
+        # Keep the provider's own breakpoint on the newest user/tool message, so the
+        # growing conversation tail stays cached alongside our breakpoints.
+        kwargs.setdefault("prompt_cache_options", {"mode": "implicit"})
+
+    @staticmethod
+    def _mark_anthropic(kwargs: dict, marked: List[dict]) -> None:
+        """Anthropic caches only a prefix ending at an explicit cache_control.
+
+        Without one, Claude re-prefills the whole growing conversation every turn.
+        """
+        messages = kwargs["messages"]
+        # The conversation list is reused and grows across turns, so a mark left on
+        # a prior turn's last message persists and they soon exceed the cap (a hard
+        # 400). Clear all, then re-derive the ones this turn wants.
+        for m in messages:
+            content = m.get("content")
+            if isinstance(content, list):
+                for block in content:
+                    if isinstance(block, dict):
+                        block.pop("cache_control", None)
 
         def mark(message: dict) -> None:
             content = message.get("content")
             if isinstance(content, str):
-                message["content"] = [
-                    {
-                        "type": "text",
-                        "text": content,
-                        "cache_control": {"type": "ephemeral"},
-                    }
-                ]
-            elif isinstance(content, list) and content and isinstance(content[-1], dict):
+                message["content"] = [{"type": "text", "text": content}]
+                content = message["content"]
+            if isinstance(content, list) and content and isinstance(content[-1], dict):
                 content[-1]["cache_control"] = {"type": "ephemeral"}
 
-        messages = kwargs["messages"]
-        # The conversation list is reused and grows across turns, so a breakpoint
-        # left on a prior turn's last message persists; left uncleared they soon
-        # exceed Anthropic's cap of 4 cache_control blocks (a hard 400). Clear all,
-        # then re-derive exactly the two we want.
-        for m in messages:
-            c = m.get("content")
-            if isinstance(c, list):
-                for block in c:
-                    if isinstance(block, dict):
-                        block.pop("cache_control", None)
-        # First user turn caches the constant tools+system+patch prefix; the last
-        # message rolls the cache forward over the growing tool-output tail.
-        mark(next(m for m in messages if m["role"] == "user"))
+        # Spend the cap newest-first: the tail mark is the one that pays off.
         mark(messages[-1])
+        for block in reversed(marked[: Agent.ANTHROPIC_BREAKPOINT_CAP - 1]):
+            block["cache_control"] = {"type": "ephemeral"}
 
     def budget_remaining(self) -> bool:
         """True while the current phase's token ceiling is unset or not yet hit."""
@@ -245,7 +295,7 @@ class Agent:
         force_tool_usage=False,
         max_iterations: Optional[int] = None,
         use_tools: bool = True,
-        allowed_tools: Optional[List[str]] = None,
+        allowed_tools: Sequence[str] = NAVIGATION_TOOLS,
         label: Optional[str] = None,
     ) -> str:
         """Run the agent loop, calling the LLM iteratively until it stops requesting tools.
@@ -259,8 +309,8 @@ class Agent:
             use_tools: When False, run without any tools (a single completion
                 from the prompt). The planner uses this so it divides the work
                 from the diff alone rather than investigating.
-            allowed_tools: When set (and use_tools is True), restrict the loop to
-                only these tool names; an empty list means no tools. E.g. the
+            allowed_tools: The TOOLS ids this loop may use (when use_tools is
+                True), NAVIGATION_TOOLS by default; empty means no tools. E.g. the
                 plan critic is given only `get_subsystem_review_guide` (to load
                 guides for coverage) while the code-navigation tools are withheld
                 so it can't go hunting specific bugs.
@@ -275,8 +325,9 @@ class Agent:
             self.current_label = label
         self.current_iteration = 0
 
-        max_iters = max_iterations or AGENT_MAX_ITERATIONS
         tools = self.get_tools(allowed_tools) if use_tools else None
+        # Without tools the first reply is final
+        max_iters = (max_iterations or AGENT_MAX_ITERATIONS) if tools else 1
 
         completion_kwargs: dict = {
             "messages": messages,
@@ -296,9 +347,13 @@ class Agent:
             self.current_iteration = iteration
             self.logger.debug(f"Agent iteration {iteration}/{max_iters}")
             events.emit(
-                events.ITERATION, label=self.current_label, n=iteration,
-                cap=max_iters, tokens=self.tokens_used,
-                budget=self.token_budget, peak=self.peak_prompt_tokens,
+                events.ITERATION,
+                label=self.current_label,
+                n=iteration,
+                cap=max_iters,
+                tokens=self.tokens_used,
+                budget=self.token_budget,
+                peak=self.peak_prompt_tokens,
             )
 
             if not self.budget_remaining():
@@ -342,55 +397,136 @@ class Agent:
                 completion_kwargs["tool_choice"] = "auto"
 
             # Dispatch each tool call and append results
-            for tool_call in msg.tool_calls:
-                name = tool_call.function.name
-                try:
-                    args = json.loads(tool_call.function.arguments)
-                    self.logger.debug(f"Tool call: {name}({args})")
-                    result = self.dispatch_tool(name, args)
-                    self.logger.debug(f"Tool result: {name} -> {result}")
-                except json.JSONDecodeError as e:
-                    self.logger.error(f"Error parsing tool args for '{name}': {e}")
-                    result = {
-                        "ok": False,
-                        "error": f"Invalid JSON arguments `{args}` for tool '{name}'",
-                    }
-                except Exception as e:
-                    self.logger.error(f"Error executing tool '{name}': {e}")
-                    result = {
-                        "ok": False,
-                        "error": f"Internal error executing tool '{name}({args})'",
-                    }
+            self._dispatch_tool_calls(msg.tool_calls, messages)
 
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": tool_call.id,
-                        "name": name,
-                        "content": json.dumps(result),
-                    }
-                )
-
-        # Max iterations (or budget) reached: force a final response by disallowing tool calls
+        # Max iterations (or budget) reached. Allow the exec and fp-filter with
+        # recording tools only.
         self.logger.warning(
-            f"Agent reached max iterations ({max_iters}) or budget. Forcing final response without tools."
+            f"Agent reached max iterations ({max_iters}) or budget. Forcing final response."
         )
+
+        flush_tool = None
         if self.current_label.startswith("exec:"):
             self.exec_iter_cap_hit = True
+            flush_tool = "record_finding"
+        elif self.current_label.startswith("fp-filter"):
+            flush_tool = "record_verdict"
 
-        completion_kwargs["tool_choice"] = "none"
+        if flush_tool and use_tools:
+            completion_kwargs["tools"] = self.get_tools([flush_tool])
+            completion_kwargs["tool_choice"] = "auto"
+            final_prompt = (
+                "Maximum tool iterations reached. If you confirmed a result you "
+                f"have not yet recorded, call `{flush_tool}` now to persist it. "
+                "No further investigation is allowed."
+            )
+        else:
+            completion_kwargs["tool_choice"] = "none"
+            completion_kwargs.pop("tools", None)
+            final_prompt = (
+                "Maximum tool iterations reached. Please provide your final "
+                "response based on the available information."
+            )
 
-        messages.append(
-            {
-                "role": "user",
-                "content": "Maximum tool iterations reached. Please provide your final response based on the available information.",
-            }
-        )
-
+        messages.append({"role": "user", "content": final_prompt})
         response = self.completion_with_retry(**completion_kwargs)
-        content = response.choices[0].message.content or ""
+        msg = response.choices[0].message
+        messages.append(msg.model_dump())
+        if msg.tool_calls:
+            self._dispatch_tool_calls(msg.tool_calls, messages)
+        content = msg.content or ""
         self._log_final_response(response, content)
         return content
+
+    # JSON replies
+
+    @staticmethod
+    def extract_json(text: str) -> Optional[Any]:
+        """Lenient extraction of a JSON value from possibly-fenced model text.
+
+        Decodes at every '{' / '[' (raw_decode stops at the value's end, so a
+        code fence or trailing prose is ignored) and keeps the widest value.
+        Widest-wins means an object wrapping an array isn't mistaken for the
+        inner array, and a stray `{}`/`[]` in prose can't shadow the real
+        answer. Returns the value or None.
+        """
+        decoder = json.JSONDecoder()
+        best_span, best_val = -1, None
+        for m in re.finditer(r"[{\[]", text or ""):
+            try:
+                val, end = decoder.raw_decode(text, m.start())
+            except ValueError:
+                continue
+            if end - m.start() > best_span:
+                best_span, best_val = end - m.start(), val
+        return best_val
+
+    def complete_until_json(
+        self,
+        messages: List[dict],
+        validate: Callable[[Any], bool],
+        corrective: str = (
+            "Your previous response could not be parsed. Return ONLY the "
+            "requested JSON value inside one ```json fence, with no prose and "
+            "no tool calls."
+        ),
+    ) -> Optional[Any]:
+        """Return the JSON value of the latest assistant reply in `messages`
+        once `validate` accepts it, or None after AGENT_JSON_RETRIES retires.
+
+        `messages` normally ends with the reply to check (run_agent_loop
+        appends its final message); when it ends with any other turn, a
+        completion is requested first.
+        """
+        for attempt in range(AGENT_JSON_RETRIES + 1):
+            if messages[-1].get("role") != "assistant":
+                response = self.completion_with_retry(
+                    messages=messages,
+                    stream=False,
+                    max_tokens=AGENT_MAX_OUTPUT_TOKENS,
+                )
+                messages.append(response.choices[0].message.model_dump())
+            value = self.extract_json(messages[-1].get("content") or "")
+            if validate(value):
+                return value
+            if attempt < AGENT_JSON_RETRIES:
+                self.logger.warning(
+                    f"[json] {self.current_label}: reply failed validation "
+                    f"(retry {attempt + 1}/{AGENT_JSON_RETRIES})."
+                )
+                messages.append({"role": "user", "content": corrective})
+        return None
+
+    def _dispatch_tool_calls(self, tool_calls: list, messages: list[dict]) -> None:
+        """Dispatch each requested tool call and append its result to messages."""
+        for tool_call in tool_calls:
+            name = tool_call.function.name
+            try:
+                args = json.loads(tool_call.function.arguments)
+                self.logger.debug(f"Tool call: {name}({args})")
+                result = self.dispatch_tool(self.tool_ids.get(name, name), args)
+                self.logger.debug(f"Tool result: {name} -> {result}")
+            except json.JSONDecodeError as e:
+                self.logger.error(f"Error parsing tool args for '{name}': {e}")
+                result = {
+                    "ok": False,
+                    "error": f"Invalid JSON arguments `{args}` for tool '{name}'",
+                }
+            except Exception as e:
+                self.logger.error(f"Error executing tool '{name}': {e}")
+                result = {
+                    "ok": False,
+                    "error": f"Internal error executing tool '{name}({args})'",
+                }
+
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "name": name,
+                    "content": json.dumps(result),
+                }
+            )
 
     def _kernel_rel(self, path_or_uri: str) -> str:
         """Normalize any path/URI to a kernel-relative POSIX string."""
@@ -466,7 +602,9 @@ class Agent:
 
     def _doc_container_path(self, sub: str = "") -> str:
         """Container path of `Documentation/<sub>` in the detected Linux docs tree."""
-        rel = "/".join(filter(None, [self._docs_subdir, "Documentation", sub.strip("/")]))
+        rel = "/".join(
+            filter(None, [self._docs_subdir, "Documentation", sub.strip("/")])
+        )
         return str(self.docker_manager.kernel_dir / rel)
 
     def _validate_existing_kernel_path(self, path: str) -> str:
@@ -511,121 +649,35 @@ class Agent:
             hi = lo + 200
         return "".join(lines[lo:hi])
 
-    def _start_ts_daemon(self) -> None:
-        """Spawn the container-side tree-sitter index daemon.
+    # -----------------------------------------------------------------------
+    # Tree-sitter query wrappers — delegate to TsIndex
+    # -----------------------------------------------------------------------
 
-        The daemon builds the index once, then serves JSON-RPC queries over
-        stdin/stdout.
-        """
-        if getattr(self, "ts_daemon", None) is not None:
-            return
-        kernel_dir = self.docker_manager.sandbox_path / "kernel"
-        blocklist = parse_config().get("indexing", {}).get("blocklist") or []
-        self.logger.info("tree-sitter: starting index daemon in container")
-        start = time.time()
-        self.ts_daemon = self.docker_manager.run_interactive_command(
-            ["python3", TS_INDEXER_PATH, str(kernel_dir), *map(str, blocklist)],
-            cwd=str(kernel_dir),
-        )
-        events.emit(events.INDEX, phase="start")
-        # The daemon streams {"progress", "total"} lines while building, then a
-        # {"ready": true, ...} line. Surface progress; block until ready.
-        ready: Dict[str, Any] = {}
-        while True:
-            line = self.ts_daemon.stdout.readline() if self.ts_daemon.stdout else ""
-            if not line:
-                # EOF: the daemon exited before ready. Drain its stderr so the real
-                # cause (missing file, ImportError, …) is visible instead of an
-                # opaque generic failure.
-                stderr = self.ts_daemon.stderr.read() if self.ts_daemon.stderr else ""
-                raise RuntimeError(
-                    "ts_indexer daemon exited before ready signal"
-                    + (f":\n{stderr.strip()}" if stderr.strip() else "")
-                )
-            try:
-                msg = json.loads(line)
-            except json.JSONDecodeError as e:
-                raise RuntimeError(f"ts_indexer signal not JSON: {e}\nline: {line!r}")
-            if msg.get("ready"):
-                ready = msg
-                break
-            if "progress" in msg:
-                events.emit(
-                    events.INDEX, phase="progress",
-                    done=msg.get("progress", 0), total=msg.get("total", 0),
-                )
-                continue
-            raise RuntimeError(f"ts_indexer signal malformed: {msg}")
-        elapsed = time.time() - start
-        self.logger.info(
-            f"tree-sitter: daemon ready in {elapsed:.1f}s — "
-            f"{ready.get('unique_names', 0)} unique names, "
-            f"{ready.get('entries', 0)} entries, "
-            f"{ready.get('files_parsed', 0)} parsed, "
-            f"{ready.get('files_skipped', 0)} skipped"
-        )
-        events.emit(
-            events.INDEX, phase="done",
-            files=ready.get("files_parsed", 0), seconds=round(elapsed, 1),
-        )
+    @property
+    def index_cached(self) -> int:
+        return self._ts_index.cached
 
-    def _ts_query(self, **req: Any) -> Dict[str, Any]:
-        """Send one JSON-RPC request to the ts_indexer daemon and read its reply."""
-        if getattr(self, "ts_daemon", None) is None:
-            raise RuntimeError("ts_indexer daemon not started")
-        proc = self.ts_daemon
-        if proc.stdin is None or proc.stdout is None:
-            raise RuntimeError("ts_indexer daemon has no stdio")
-        if proc.poll() is not None:
-            raise RuntimeError(f"ts_indexer daemon has exited (rc={proc.returncode})")
-        proc.stdin.write(json.dumps(req) + "\n")
-        proc.stdin.flush()
-        line = proc.stdout.readline()
-        if not line:
-            raise RuntimeError("ts_indexer daemon closed stdout")
-        return json.loads(line)
+    @property
+    def index_parsed(self) -> int:
+        return self._ts_index.parsed
 
-    # TODO: Do we need this now that LSP/clangd is removed?
-    def _ensure_navigation_stack(self, need_ts: bool = True) -> None:
-        """Lazily start the tree-sitter index daemon on first use."""
-        if need_ts and getattr(self, "ts_daemon", None) is None:
-            self._start_ts_daemon()
+    def _ts_lookup(self, name: str) -> List[Dict[str, Any]]:
+        return self._ts_index.lookup(name)
 
-    def _ts_lookup(self, name: str, limit: int = 100) -> List[Dict[str, Any]]:
-        """Return up to `limit` index entries matching `name`."""
-        resp = self._ts_query(op="lookup", name=name, limit=limit)
-        if "error" in resp:
-            raise RuntimeError(f"ts_indexer error: {resp['error']}")
-        return resp.get("candidates", [])
+    def _ts_constructs_in_files(
+        self, rel_paths: List[str]
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        return self._ts_index.constructs_in_files(rel_paths)
+
+    def _ts_callees_batch(
+        self, specs: List[Tuple[str, int, int]]
+    ) -> List[List[Dict[str, Any]]]:
+        return self._ts_index.callees_batch(specs)
 
     @staticmethod
     def _strip_type_keyword(name: str) -> str:
-        """Drop a leading C tag keyword the model often includes.
-
-        Models routinely pass a type as `struct foo`/`union foo`/`enum foo`, but
-        the tree-sitter index keys it under the bare tag `foo`. Strip the keyword
-        so the lookup matches; a bare name is returned unchanged.
-        """
+        """Drop a leading C tag keyword the model often includes (struct/union/enum foo → foo)."""
         return re.sub(r"^\s*(?:struct|union|enum)\s+", "", name.strip())
-
-    def _ts_constructs_in_file(self, rel_path: str) -> List[Dict[str, Any]]:
-        """Return every construct (function, struct, enum, macro, initializer, …)
-        in a kernel-relative file, each as {name, kind, start_line, end_line}."""
-        resp = self._ts_query(op="constructs_in_file", path=rel_path)
-        if "error" in resp:
-            raise RuntimeError(f"ts_indexer error: {resp['error']}")
-        return resp.get("constructs", [])
-
-    def _ts_callees(
-        self, rel_path: str, start_line: int, end_line: int
-    ) -> List[Dict[str, Any]]:
-        """Return the calls made within [start_line, end_line] of a file."""
-        resp = self._ts_query(
-            op="callees", path=rel_path, start_line=start_line, end_line=end_line
-        )
-        if "error" in resp:
-            raise RuntimeError(f"ts_indexer error: {resp['error']}")
-        return resp.get("callees", [])
 
     def _split_file_arg(self, file: Optional[Union[str, List[str]]]) -> List[str]:
         """Parse a `file` argument into normalized kernel-relative paths.
@@ -683,17 +735,12 @@ class Agent:
             key=lambda c: (tier(c), c["file"], c["start_line"]),
         )
 
-    _TS_LOOKUP_LIMIT = 100
-
-    def get_tools(
-        self, allowed: Optional[List[str]] = None
-    ) -> Optional[List[Dict[str, Any]]]:
-        """Return tool schemas."""
-        if allowed is None:
-            return TOOLS
-        allowed_set = set(allowed)
-        filtered = [t for t in TOOLS if t.get("function", {}).get("name") in allowed_set]
-        return filtered or None
+    def get_tools(self, allowed: Sequence[str]) -> Optional[List[Dict[str, Any]]]:
+        """Return the schemas for TOOLS ids `allowed`, and map each function
+        name back to its id so tool calls dispatch to the right variant."""
+        ids = [k for k in allowed if k in TOOLS]
+        self.tool_ids = {TOOLS[k]["function"]["name"]: k for k in ids}
+        return [TOOLS[k] for k in ids] or None
 
     _DEFINITION_LIMIT = 50
     _CALLEES_LIMIT = 200
@@ -708,9 +755,8 @@ class Agent:
         # all arch/#ifdef variants — ranked by proximity to files already seen.
         # We deliberately do not collapse to the config-active variant: a kernel
         # review must weigh all of them, not just what one defconfig compiles.
-        self._ensure_navigation_stack(need_ts=True)
         name = self._strip_type_keyword(name)
-        candidates = self._ts_lookup(name, limit=self._TS_LOOKUP_LIMIT)
+        candidates = self._ts_lookup(name)
         if not candidates:
             return {"ok": False, "error": f"symbol '{name}' not found in index"}
         ranked = self._rank_candidates(candidates, self._split_file_arg(file))
@@ -750,7 +796,6 @@ class Agent:
         # name` inside an ops table, a macro body, a struct — is a `reference`,
         # since that wiring is often how `name` actually gets invoked. Both come
         # straight off `enclosing`, so there is no caller-specific plumbing.
-        self._ensure_navigation_stack(need_ts=True)
         name = self._strip_type_keyword(name)
         pattern = rf"\b{re.escape(name)}\b"
         hits, error, skipped = self._rg_search(pattern, file, glob=None)
@@ -813,9 +858,8 @@ class Agent:
         # and extract their call expressions — direct `foo()` and indirect
         # `ops->fn()` alike (the latter is the dominant kernel call style, which
         # a semantic call graph would miss).
-        self._ensure_navigation_stack(need_ts=True)
         name = self._strip_type_keyword(name)
-        candidates = self._ts_lookup(name, limit=self._TS_LOOKUP_LIMIT)
+        candidates = self._ts_lookup(name)
         funcs = [c for c in candidates if c.get("kind") == "function"]
         hints = self._split_file_arg(file)
         if hints:
@@ -827,9 +871,12 @@ class Agent:
                 "error": f"no function definition named '{name}' in index",
             }
         ranked = self._rank_candidates(funcs, hints)
+        top = ranked[:10]
+        callees_lists = self._ts_callees_batch(
+            [(c["file"], c["start_line"], c["end_line"]) for c in top]
+        )
         definitions: List[Dict[str, Any]] = []
-        for c in ranked[:10]:
-            callees = self._ts_callees(c["file"], c["start_line"], c["end_line"])
+        for c, callees in zip(top, callees_lists):
             self.seen_files.add(c["file"])
             definitions.append(
                 {
@@ -928,6 +975,9 @@ class Agent:
                 "--max-count",
                 "500",
             ]
+        # \n in a pattern requires multiline mode.
+        if "\\n" in pattern:
+            rg_cmd.append("--multiline")
         # Apply glob filters when searching a directory (or the whole tree). When
         # every path is a concrete file, search them directly so a glob can't
         # filter an explicitly-named file out.
@@ -951,7 +1001,11 @@ class Agent:
         # silent 0 on a malformed pattern reads as "nothing found".
         if proc.returncode == 2:
             detail = (err or "").strip().splitlines()
-            return None, f"invalid regex or search error: {detail[0] if detail else ''}", skipped
+            return (
+                None,
+                f"invalid regex or search error: {detail[0] if detail else ''}",
+                skipped,
+            )
 
         if count_only:
             count = 0
@@ -962,17 +1016,11 @@ class Agent:
                     continue
             return count, None, skipped
 
-        file_to_constructs: Dict[str, List[Tuple[int, int, str, str]]] = {}
-
-        def constructs_for(rel_path: str) -> List[Tuple[int, int, str, str]]:
-            if rel_path not in file_to_constructs:
-                cs = self._ts_constructs_in_file(rel_path)
-                file_to_constructs[rel_path] = [
-                    (c["start_line"], c["end_line"], c["name"], c["kind"]) for c in cs
-                ]
-            return file_to_constructs[rel_path]
-
-        hits: List[Dict[str, Any]] = []
+        # Parse rg output once, up front, so every hit file's constructs can be
+        # resolved in one batch (a fixed number of execs) instead of a docker
+        # exec per file -- a tree-wide grep can hit hundreds of files, and
+        # per-file execs dominated the wall clock.
+        parsed_lines: List[Tuple[str, int, str]] = []
         seen_hits: Set[Tuple[str, int]] = set()
         for raw in output.splitlines():
             parts = raw.split(":", 2)
@@ -987,7 +1035,18 @@ class Agent:
             if (rel, hit_line) in seen_hits:
                 continue
             seen_hits.add((rel, hit_line))
+            parsed_lines.append((rel, hit_line, text))
 
+        constructs_by_file = self._ts_constructs_in_files(
+            list(dict.fromkeys(rel for rel, _, _ in parsed_lines))
+        )
+        file_to_constructs: Dict[str, List[Tuple[int, int, str, str]]] = {
+            rel: [(c["start_line"], c["end_line"], c["name"], c["kind"]) for c in cs]
+            for rel, cs in constructs_by_file.items()
+        }
+
+        hits: List[Dict[str, Any]] = []
+        for rel, hit_line, text in parsed_lines:
             # Attribute the hit to the INNERMOST construct that contains it
             # (smallest span), of any kind — function, struct, enum, union,
             # typedef, macro, or ops-table initializer. Consumers split on
@@ -998,7 +1057,7 @@ class Agent:
             # read the whole construct in one precise read.
             enclosing: Optional[Dict[str, Any]] = None
             enclosing_span: Optional[int] = None
-            for s, e, cname, ckind in constructs_for(rel):
+            for s, e, cname, ckind in file_to_constructs.get(rel, []):
                 if not (s <= hit_line <= e):
                     continue
                 span = e - s
@@ -1022,11 +1081,13 @@ class Agent:
         self,
         pattern: str,
         file: Optional[Union[str, List[str]]] = None,
+        path: Optional[Union[str, List[str]]] = None,
         glob: Optional[str] = None,
         count_only: bool = False,
     ) -> Dict[str, Any]:
-        if not count_only:
-            self._ensure_navigation_stack(need_ts=True)
+        # `path` is an alias for `file`.
+        if path and not file:
+            file = path
         search_result, error, skipped = self._rg_search(
             pattern, file, glob, count_only=count_only
         )
@@ -1113,7 +1174,7 @@ class Agent:
         # Documentation/ prefix (the model often drops it), then prepend the tree.
         subdir = self._docs_subdir
         if subdir and (rel == subdir or rel.startswith(subdir + "/")):
-            rel = rel[len(subdir):].lstrip("/")
+            rel = rel[len(subdir) :].lstrip("/")
         if not (rel == "Documentation" or rel.startswith("Documentation/")):
             rel = "Documentation/" + rel
         rel = "/".join(filter(None, [subdir, rel]))
@@ -1131,9 +1192,7 @@ class Agent:
         self.seen_files.add(rel)
         return {"ok": True, "result": {"path": rel, "content": content}}
 
-    def _tool_read_binding(
-        self, compatible: Union[str, List[str]]
-    ) -> Dict[str, Any]:
+    def _tool_read_binding(self, compatible: Union[str, List[str]]) -> Dict[str, Any]:
         """Resolve a devicetree `compatible` pattern to its binding docs.
 
         The compatible is in the diff; the binding is one ripgrep away under
@@ -1204,7 +1263,6 @@ class Agent:
         # _rg_search attributes hits to their enclosing construct via the
         # tree-sitter daemon, so boot it first (the critic, which runs before
         # any navigation tool, would otherwise hit it cold).
-        self._ensure_navigation_stack(need_ts=True)
         doc_rel = "/".join(filter(None, [self._docs_subdir, "Documentation"]))
         hits, error, _ = self._rg_search(query, file=[doc_rel], glob="*")
         if error:
@@ -1267,8 +1325,9 @@ class Agent:
         except Exception:
             args_json = str(args)
         ok = bool(result.get("ok"))
-        events.emit(events.TOOL_CALL, label=label, iter=iteration, name=name,
-                    args=args, ok=ok)
+        events.emit(
+            events.TOOL_CALL, label=label, iter=iteration, name=name, args=args, ok=ok
+        )
         line = f"{ts} | task={label} | iter={iteration} | call={name}({args_json}) | ok={ok}\n"
         try:
             with open(log_path, "a") as f:
@@ -1280,6 +1339,20 @@ class Agent:
     _BASH_TIMEOUT = 120  # seconds per call
 
     def _tool_bash(self, command: str, cwd: Optional[str] = None) -> Dict[str, Any]:
+        """`bash`: run `command` with the fixed _BASH_TIMEOUT."""
+        return self._run_bash(command, cwd, self._BASH_TIMEOUT)
+
+    def _tool_bash_timeout(
+        self, command: str, timeout: int, cwd: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """`bash_timeout`: run `command` with the caller's timeout, clamped to
+        [1, BASH_MAX_TIMEOUT]."""
+        timeout = max(1, min(int(timeout), BASH_MAX_TIMEOUT))
+        return self._run_bash(command, cwd, timeout)
+
+    def _run_bash(
+        self, command: str, cwd: Optional[str], timeout: int
+    ) -> Dict[str, Any]:
         """Run a shell command in the container (one-shot, like `docker exec`).
 
         No path vetting: a shell command's reachable set is decided by what the
@@ -1300,12 +1373,12 @@ class Agent:
             if cwd
             else str(self.docker_manager.kernel_dir)
         )
-        wrapped = ["timeout", "-k", "5", str(self._BASH_TIMEOUT), "sh", "-c", command]
+        wrapped = ["timeout", "-k", "5", str(timeout), "sh", "-c", command]
         proc = self.docker_manager.run_command(
             wrapped, cwd=workdir, stdin=subprocess.DEVNULL
         )
         try:
-            stdout, stderr = proc.communicate(timeout=self._BASH_TIMEOUT + 15)
+            stdout, stderr = proc.communicate(timeout=timeout + 15)
         except subprocess.TimeoutExpired:
             proc.kill()
             stdout, stderr = proc.communicate()
@@ -1316,7 +1389,7 @@ class Agent:
         timed_out = proc.returncode in (124, 137)
         if timed_out:
             output += (
-                f"\n[timed out after {self._BASH_TIMEOUT}s and was killed. "
+                f"\n[timed out after {timeout}s and was killed. "
                 f"Narrow the command — scope a search to a subdirectory, or "
                 f"split it into steps.]"
             )
@@ -1356,9 +1429,12 @@ class Agent:
             # the reviewed commit.
             sha = self.docker_manager.commit_sha
             proc = self.docker_manager.run_command(
-                ["sh", "-c",
-                 f"git --no-pager format-patch -1 --stdout {sha} "
-                 "| scripts/checkpatch.pl -"],
+                [
+                    "sh",
+                    "-c",
+                    f"git --no-pager format-patch -1 --stdout {sha} "
+                    "| scripts/checkpatch.pl -",
+                ],
                 cwd=git_wd,
             )
             stdout, _ = proc.communicate()
@@ -1559,12 +1635,19 @@ class Agent:
         phase/subtask label (the same label `_log_tool_call` uses), so a single
         reviewer's findings accumulate in one file."""
         path = self.findings_path_for(self.current_label or "unit")
-        head = " ".join(p for p in (f"[{dimension}]" if dimension else "", location) if p)
+        head = " ".join(
+            p for p in (f"[{dimension}]" if dimension else "", location) if p
+        )
         block = f"### {head}\n\n{finding}\n\n" if head else f"{finding}\n\n"
         with open(path, "a") as f:
             f.write(block)
-        events.emit(events.FINDING, label=self.current_label,
-                    dimension=dimension, location=location, text=finding)
+        events.emit(
+            events.FINDING,
+            label=self.current_label,
+            dimension=dimension,
+            location=location,
+            text=finding,
+        )
         return {"ok": True, "recorded": location or dimension or "finding"}
 
     @staticmethod
@@ -1609,10 +1692,9 @@ class Agent:
 
     def _tool_task_complete(self, id: str, result: str = "", note: str = "") -> dict:
         """Append one task-complete event to the per-phase tasks file. `result`
-        should be 'found' (record_finding was called for this task) or 'clean'
-        (nothing to report). The review reads the file back to detect any
-        task_add without a matching task_complete and, on incompleteness,
-        resumes the reviewer to finish those tasks."""
+        is a one-word outcome such as 'done', 'clean', 'found' or 'abandoned'.
+        task_list reads the file back so the model can see which tasks are
+        still open."""
         path = self.tasks_path_for(self.current_label or "unit")
         record = {"event": "complete", "id": id, "result": result, "note": note}
         with open(path, "a") as f:
@@ -1694,12 +1776,18 @@ class Agent:
         }
         with open(path, "a") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
-        events.emit(events.VERDICT, label=self.current_label, finding=finding,
-                    impact=impact, verdict=verdict, reason=reason)
+        events.emit(
+            events.VERDICT,
+            label=self.current_label,
+            finding=finding,
+            impact=impact,
+            verdict=verdict,
+            reason=reason,
+        )
         return {"ok": True, "recorded": verdict or "verdict"}
 
     def dispatch_tool(self, name: str, args: dict) -> dict:
-        """Dispatch an agent tool by name. Returns {ok, ...}."""
+        """Dispatch an agent tool by TOOLS id. Returns {ok, ...}."""
         read_tools = {
             "find_definition": self._tool_find_definition,
             "find_callers": self._tool_find_callers,
@@ -1711,6 +1799,7 @@ class Agent:
             "search_docs": self._tool_search_docs,
             "get_subsystem_review_guide": self._tool_get_subsystem_review_guide,
             "bash": self._tool_bash,
+            "bash_timeout": self._tool_bash_timeout,
             "run_checkpatch": self._tool_run_checkpatch,
             "run_sparse": self._tool_run_sparse,
             "record_finding": self._tool_record_finding,
@@ -1759,7 +1848,4 @@ class Agent:
         proc = self.docker_manager.run_command(log_cmd, cwd=git_wd)
         stdout, _ = proc.communicate()
         prefix = self.docker_manager.git_subdir
-        return {
-            f"{prefix}/{f}" if prefix else f
-            for f in stdout.strip().splitlines()
-        }
+        return {f"{prefix}/{f}" if prefix else f for f in stdout.strip().splitlines()}

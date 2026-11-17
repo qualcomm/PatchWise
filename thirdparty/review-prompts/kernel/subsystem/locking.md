@@ -479,6 +479,14 @@ c = next_c ← FREED MEMORY
   pointers, refcounts, conditions after reacquiring.
 - **Functions returning with different locks**: verify the caller knows
   which lock is held on return and releases the correct one.
+- **Naming after a function gains a second lock/mode**: when a patch adds a
+  second lock type to a function that previously handled only one (e.g. a
+  per-VMA-lock path added to an mmap-lock-only function), check whether an
+  existing generic name (`locked`, `flags`, `state`) still reads
+  unambiguously, and whether comments referencing "the lock" still resolve
+  to one specific lock. Rename to disambiguate (`mmap_locked` vs
+  `vma_locked`) rather than writing a comment to work around a name that's
+  now ambiguous.
 - **Reassigning locked objects**: verify old object's lock is released
   before acquiring the new object's lock.
 - **`raw_spinlock_t` for hardirq on RT**: `spinlock_t` in IRQ handlers

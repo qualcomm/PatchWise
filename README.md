@@ -84,6 +84,9 @@
        api_key: "<your-api-key>"
    ```
 
+   The `ai:` block also accepts `model`, `provider`, and `reasoning_effort`,
+   which set the defaults for the corresponding CLI flags.
+
 1. **Run help message:**
 
    ```bash
@@ -131,8 +134,8 @@ PatchWise merges [`patchwise/default_config.yaml`](patchwise/default_config.yaml
 ### AI Code Review
 
 `AiCodeReview` reviews a patch in three phases: **PLAN** (a planner ↔ critic
-loop splits the diff into analysis angles), **EXEC** (a focused reviewer works
-those angles as a checklist against the real code), and **FILTER** (drops
+loop splits the diff into analysis angles), **EXEC** (a single reviewer covers
+all the angles in one pass against the real code), and **FILTER** (drops
 proven false positives) before rendering the final inline review.
 
 ```bash
@@ -150,7 +153,7 @@ flowchart TD
     end
 
     B(( )) --> P
-    C -->|converged| D["EXEC\n(focused review)"]
+    C -->|converged| D["EXEC\n(review)"]
     D --> E["FILTER\n(drop false positives)"]
     E --> F(["Inline review"])
 ```
@@ -159,7 +162,7 @@ Each phase has its own iteration budget, each overridable via env:
 
 | Phase | Default cap | Override env |
 |-------|-------------|---------------|
-| Critic loop | `MAX_PLAN_ITERATIONS = 10` rounds | `PATCHWISE_MAX_PLAN_ITERATIONS` |
+| Critic loop | `MAX_PLAN_ITERATIONS = 5` rounds | `PATCHWISE_MAX_PLAN_ITERATIONS` |
 | Critic (per round) | `CRITIC_ITER_CAP = 10` | `PATCHWISE_CRITIC_ITER_CAP` |
 | Execution | `EXEC_ITER_CAP = 100` | `PATCHWISE_EXEC_ITER_CAP` |
 | FP filter | `FP_ITER_CAP = 50` | `PATCHWISE_FP_ITER_CAP` |
@@ -172,10 +175,13 @@ Artifacts land in `SANDBOX_PATH`:
 
 Root-cause a kernel crashdump instead of reviewing a patch. Point `--dump` at a
 folder containing the dmesg/console log (and any parser output), and `--repo-path`
-at the kernel source tree the crash came from:
+at the kernel source tree the crash came from. Optionally pass `--build` with the
+kernel build output (including `vmlinux` and any modules); supplied dump/build
+directories are bind-mounted read-only into the RCA container:
 
 ```bash
-patchwise --rca --dump <crashdump-folder> --repo-path <kernel-source>
+patchwise --rca --dump <crashdump-folder> --build <kernel-build-output> \
+  --repo-path <kernel-source>
 ```
 
 `--repo-path` can be a standalone upstream `.git` kernel tree or a repo(1)-managed
@@ -188,7 +194,8 @@ unstated assumptions, symptom-only fixes, and incorrect causes — until it hold
 Give the engineer a head start with any debugging you've already done:
 
 ```bash
-patchwise --rca --dump <crashdump-folder> --repo-path <kernel-source> \
+patchwise --rca --dump <crashdump-folder> --build <kernel-build-output> \
+  --repo-path <kernel-source> \
   --additional-context "perf_fuzzer + cpu-hotplug + stress-ng reproduces this"
 ```
 
@@ -206,7 +213,7 @@ flowchart TD
     A["Crashdump"] --> B["Engineer\n(root-cause from evidence)"]
     B -->|"1 root cause + 1 fix"| C["Maintainer\n(challenges the answer)"]
     C -->|refuted, budget remains| B
-    C -->|accepted / budget spent| D(["rca_report.md"])
+    C -->|accepted / budget spent| D(["rca_report_YYYYMMDD_HHMMSS_MICROS.md"])
 ```
 
 Each role draws from its own iteration/token budget (cumulative across resumes), overridable via env:
@@ -286,6 +293,27 @@ mail:
 
 ---
 
+## Configuration
+
+PatchWise merges [`patchwise/default_config.yaml`](patchwise/default_config.yaml) (shipped defaults) under `~/.config/patchwise_config.yaml` (user overrides) — see that file for all available options.
+
+To include the false-positive filter's severity rating in code-review findings, set:
+
+```yaml
+ai:
+  code_review:
+    output_severity: true
+```
+
+This adds `[low]`, `[medium]`, or `[high]` before each rated finding in inline and
+Gerrit output, alongside `[likely false positive]` when applicable. Findings with
+missing or unrecognized ratings remain unlabeled. The default is `false`; this
+option does not change which findings are kept or dropped.
+
+After merging defaults and user overrides, `ai.code_review` must be a mapping
+and `output_severity` must be a boolean (`true` or `false`, without quotes).
+Other types raise a configuration error.
+
 ## Command-Line Options
 
 - `-h`, `--help`: Show help message and exit
@@ -334,14 +362,16 @@ mail:
 
 ### Ai Review Options
 
-- `--model`: Specify the AI model to use for code review. (default: `openai/Pro`).
+- `--model`: Specify the AI model to use for code review. (default: `openai/responses/Pro`). Use the `openai/responses/` prefix for OpenAI models, e.g. `openai/responses/gpt-6.1-sol`, which routes requests through the `/v1/responses`.
 - `--provider`: The base URL for the AI model API. (default: `https://api.openai.com/v1`)
+- `--reasoning-effort`: Reasoning-effort hint for reasoning models, e.g. `low`/`medium`/`high`. Unset uses the model default.
 - `--additional-context`: Extra text injected into the review/analysis prompt (e.g. a known reproducer or debugging notes). Shared across review and `--rca` modes.
 
 ### Crashdump RCA Options (require `--rca`)
 
 - `--rca`: Root-cause a kernel crashdump folder instead of reviewing commits.
-- `--dump`: Path to the crashdump folder (must contain a dmesg/console log).
+- `--dump`: Local path to the crashdump folder (mount network shares first).
+- `--build`: Optional local path to the kernel build output, including `vmlinux` and modules.
 
 The kernel tree is given with `--repo-path`; `--model`, `--provider`, `--additional-context`, and `--output-dir` are shared with the other modes.
 

@@ -24,6 +24,12 @@ def add_ai_arguments(
         help="The base URL for the AI model API. (default: %(default)s)",
     )
     parser_or_group.add_argument(
+        "--reasoning-effort",
+        default=ai.get("reasoning_effort") or Agent.reasoning_effort,
+        help="Reasoning-effort hint for reasoning models, e.g. low/medium/"
+        "high. Unset uses the model default.",
+    )
+    parser_or_group.add_argument(
         "--additional-context",
         default="",
         help="Extra text injected into the AI Code Review prompt.",
@@ -37,4 +43,5 @@ def apply_ai_args(args: argparse.Namespace, config: Dict) -> None:
     """
     Agent.model = args.model
     Agent.api_base = args.provider
+    Agent.reasoning_effort = args.reasoning_effort or None
     Agent.api_key = config.get("ai", {}).get("api_key") or None

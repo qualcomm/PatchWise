@@ -55,6 +55,36 @@ def parse_config() -> Dict[str, Any]:
     return _merge_overrides(default_options, user_options)
 
 
+def redis_address() -> Tuple[str, int]:
+    """Return the ts-cache Redis (host, port) from `indexing.cache`."""
+    cache = parse_config()["indexing"]["cache"]
+    return cache["host"], int(cache["port"])
+
+
+def ai_output_format() -> str:
+    """Return `ai.output_format`: "inline" or "gerrit"."""
+    fmt = parse_config()["ai"].get("output_format", "inline")
+    if fmt not in ("inline", "gerrit"):
+        raise ValueError(f'ai.output_format must be "inline" or "gerrit", not {fmt!r}')
+    return fmt
+
+
+def ai_output_severity() -> bool:
+    """Return `ai.code_review.output_severity`, validating the merged config."""
+    code_review = parse_config()["ai"].get("code_review", {})
+    if not isinstance(code_review, dict):
+        raise ValueError(
+            f"ai.code_review must be a dictionary, not {type(code_review).__name__}"
+        )
+    output_severity = code_review.get("output_severity", False)
+    if not isinstance(output_severity, bool):
+        raise ValueError(
+            "ai.code_review.output_severity must be true or false, "
+            f"not {output_severity!r}"
+        )
+    return output_severity
+
+
 def update_user_config(key_path: Sequence[str], value: Any) -> None:
     """
     Sets a single (possibly nested) key in user_config.yaml to ``value``, leaving every

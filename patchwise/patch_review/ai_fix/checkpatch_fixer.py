@@ -416,7 +416,7 @@ that your fixes actually resolved the issues. This is a self-correction loop.
             f"Restoring {len(to_append)} preserved trailers into commit message"
         )
 
-        proc = self.patch_review.docker_manager.run_interactive_command(
+        proc = self.patch_review.docker_manager.run_stdin_command(
             ["git", "commit", "--amend", "-F", "-"],
             cwd=kernel_dir,
         )
@@ -515,7 +515,7 @@ Provide ONLY the corrected commit message, nothing else."""
             
             # Update commit message (pass string, subprocess will encode it)
             self.logger.debug("Running git commit --amend")
-            proc = self.patch_review.docker_manager.run_interactive_command(
+            proc = self.patch_review.docker_manager.run_stdin_command(
                 ["git", "commit", "--amend", "-F", "-"],
                 cwd=kernel_dir,
             )

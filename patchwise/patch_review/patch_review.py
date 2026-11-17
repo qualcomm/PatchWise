@@ -3,6 +3,7 @@
 
 import abc
 import logging
+import os
 import subprocess
 import sys
 import time
@@ -47,7 +48,9 @@ class PatchReview(abc.ABC):
             image_tag = "patchwise-base:latest"
         else:
             image_tag = f"{PACKAGE_NAME.lower()}-{self.__class__.__name__.lower()}"
-        container_name = f"{image_tag.replace(':', '-')}-{self.commit.hexsha}"
+        container_name = (
+            f"{image_tag.replace(':', '-')}-{self.commit.hexsha}-{os.getpid()}"
+        )
 
         self.docker_manager = DockerManager(
             image_tag=image_tag,
@@ -64,13 +67,11 @@ class PatchReview(abc.ABC):
 
         # Initialize shared build volume once using base container
         if not DockerManager.build_volume_initialized:
-            DockerManager.initialize_shared_build_volume(
-                mount_root, self.commit.hexsha
-            )
+            DockerManager.initialize_shared_build_volume(mount_root, self.commit.hexsha)
             DockerManager.build_volume_initialized = True
 
         # Start container with shared volume
-        self.docker_manager.start_container_with_shared_volume()
+        self.docker_manager.start_container()
 
         self.setup()
 
@@ -84,6 +85,9 @@ class PatchReview(abc.ABC):
         if specific_dockerfile.exists():
             return specific_dockerfile
         return DOCKERFILES_PATH / "base.Dockerfile"
+
+    # Extension of the file main.py saves this review's result to
+    output_suffix = "txt"
 
     @abc.abstractmethod
     def setup(self) -> None:

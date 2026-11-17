@@ -18,6 +18,7 @@ from .docker import check_docker_available
 from .logger_setup import add_logging_arguments, setup_logger
 from .mail_handler.cli import add_mail_arguments, run_mail_mode
 from .patch_review.ai_review.root_cause_analysis import add_rca_arguments, run_rca_mode
+from .ui import events
 from .patch_review import (
     _cleanup_all_containers,
     add_review_arguments,
@@ -163,6 +164,14 @@ def parse_args(config: Dict) -> argparse.Namespace:
     if args.rca:
         if not args.dump:
             parser.error("--rca requires --dump <path>")
+        used_review_args = [
+            action.option_strings[0]
+            for action in review_group._group_actions
+            if action.dest in ("reviews", "short_reviews", "fix")
+            and getattr(args, action.dest) != action.default
+        ]
+        if used_review_args:
+            parser.error(f"{', '.join(used_review_args)} may not be used with --rca")
 
     if args.commits is None:
         args.commits = ["HEAD"]
@@ -225,10 +234,14 @@ def run_local_mode(args: argparse.Namespace) -> None:
             if not result_text:
                 continue
             review_name = type(review).__name__
-            output_file = output_dir / f"{review_name.lower()}.txt"
+            output_file = output_dir / f"{review_name.lower()}.{review.output_suffix}"
+            if not result_text.endswith("\n"):
+                result_text += "\n"
             with open(output_file, "w", encoding="utf-8") as f:
                 f.write(result_text)
             logger.info(f"Saved {review_name} results to {output_file}")
+            if review_name == "AiCodeReview":
+                events.emit(events.REPORT_SAVED, path=str(output_file))
 
         for fix_name, fix_text in fix_results.items():
             if not fix_text:
