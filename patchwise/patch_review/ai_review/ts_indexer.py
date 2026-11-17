@@ -12,7 +12,6 @@ through it; all git/rg/cache/parse logic stays here.
 
 import io
 import logging
-import subprocess
 import tarfile
 from typing import Any, Dict, List, Tuple
 
@@ -228,15 +227,14 @@ class TsIndex:
         """Map each rel to its working-tree blob SHA in one exec."""
         if not rels:
             return {}
-        proc = self._dm.run_command(
+        result = self._dm.exec_command(
             ["git", "hash-object", "--no-filters", "--stdin-paths"],
             cwd=str(self._kernel_dir),
-            stdin=subprocess.PIPE,
+            input="\n".join(rels) + "\n",
         )
-        out, err = proc.communicate(input="\n".join(rels) + "\n")
-        shas = out.splitlines()
-        if proc.returncode or len(shas) != len(rels):
-            raise RuntimeError(f"git hash-object failed: {err}")
+        shas = result.stdout_text().splitlines()
+        if result.exit_code or len(shas) != len(rels):
+            raise RuntimeError(f"git hash-object failed: {result.stderr_text()}")
         return dict(zip(rels, shas))
 
     def _read_files(self, rels: List[str]) -> Dict[str, bytes]:
@@ -245,16 +243,14 @@ class TsIndex:
         rels = list(dict.fromkeys(rels))
         if not rels:
             return {}
-        proc = self._dm.run_command(
+        result = self._dm.exec_command(
             ["tar", "-cf", "-", "--null", "-T", "-"],
             cwd=str(self._kernel_dir),
-            text=False,
-            stdin=subprocess.PIPE,
+            input=b"\0".join(r.encode() for r in rels),
         )
-        raw, err = proc.communicate(input=b"\0".join(r.encode() for r in rels))
-        if proc.returncode:
-            raise RuntimeError(f"tar of {len(rels)} files failed: {err!r}")
-        with tarfile.open(fileobj=io.BytesIO(raw)) as tar:
+        if result.exit_code:
+            raise RuntimeError(f"tar of {len(rels)} files failed: {result.stderr!r}")
+        with tarfile.open(fileobj=io.BytesIO(result.stdout)) as tar:
             return {m.name: tar.extractfile(m).read() for m in tar if m.isfile()}
 
     # -- cache-backed parse --
@@ -306,8 +302,8 @@ class TsIndex:
         for entry in self._blocklist:
             rg_cmd += ["--glob", f"!{entry}"]
         rg_cmd += [name, str(self._kernel_dir)]
-        proc = self._dm.run_command(rg_cmd, cwd=None)
-        out, _ = proc.communicate()
+        result = self._dm.exec_command(rg_cmd, cwd=None)
+        out = result.stdout_text()
 
         kernel_prefix = str(self._kernel_dir) + "/"
         candidate_rels = []

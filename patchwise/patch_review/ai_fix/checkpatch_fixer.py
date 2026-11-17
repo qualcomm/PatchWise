@@ -9,7 +9,6 @@ Includes RAG-based retrieval of kernel documentation for enhanced context.
 
 import os
 import re
-import subprocess
 import tempfile
 from pathlib import Path
 from typing import List
@@ -175,11 +174,11 @@ that your fixes actually resolved the issues. This is a self-correction loop.
         changes_made = False
 
         # Get list of modified files from the patch
-        proc = self.patch_review.docker_manager.run_command(
+        result = self.patch_review.docker_manager.exec_command(
             ["git", "diff", "--name-only", "HEAD~1"], cwd=kernel_dir
         )
-        stdout, _ = proc.communicate()
-        if proc.returncode != 0:
+        stdout = result.stdout_text()
+        if result.exit_code != 0:
             self.logger.warning("Failed to get modified files")
             return False
 
@@ -242,21 +241,23 @@ that your fixes actually resolved the issues. This is a self-correction loop.
         # Commit the script fixes if any were made
         if changes_made:
             self.logger.info("Committing script-based fixes...")
-            proc = self.patch_review.docker_manager.run_command(
+            result = self.patch_review.docker_manager.exec_command(
                 ["git", "add", "-u"], cwd=kernel_dir
             )
-            stdout_add, stderr_add = proc.communicate()
-            if proc.returncode != 0:
-                self.logger.warning(f"git add -u failed (rc={proc.returncode}): {stderr_add}")
+            if result.exit_code != 0:
+                self.logger.warning(
+                    f"git add -u failed (rc={result.exit_code}): {result.stderr_text()}"
+                )
             else:
                 self.logger.debug("git add -u successful")
             
-            proc = self.patch_review.docker_manager.run_command(
+            result = self.patch_review.docker_manager.exec_command(
                 ["git", "commit", "--amend", "--no-edit"], cwd=kernel_dir
             )
-            stdout_commit, stderr_commit = proc.communicate()
-            if proc.returncode != 0:
-                self.logger.warning(f"git commit --amend failed (rc={proc.returncode}): {stderr_commit}")
+            if result.exit_code != 0:
+                self.logger.warning(
+                    f"git commit --amend failed (rc={result.exit_code}): {result.stderr_text()}"
+                )
             else:
                 self.logger.info("✓ Successfully committed script-based fixes")
         else:
@@ -334,12 +335,11 @@ that your fixes actually resolved the issues. This is a self-correction loop.
                     "rm -f \"$TMP\""
                 ),
             ]
-            proc = self.patch_review.docker_manager.run_command(cmd, cwd=kernel_dir)
-            proc.communicate()
-            if proc.returncode != 0:
+            result = self.patch_review.docker_manager.exec_command(cmd, cwd=kernel_dir)
+            if result.exit_code != 0:
                 # Either checkpatch.pl not found or format-patch/apply failed
                 self.logger.debug(
-                    f"checkpatch --fix-inplace pipeline failed with rc={proc.returncode}"
+                    f"checkpatch --fix-inplace pipeline failed with rc={result.exit_code}"
                 )
                 return False
 
@@ -377,20 +377,17 @@ that your fixes actually resolved the issues. This is a self-correction loop.
         kernel_dir = str(self.patch_review.docker_manager.kernel_dir)
 
         # Read current commit message
-        proc = self.patch_review.docker_manager.run_command(
+        result = self.patch_review.docker_manager.exec_command(
             ["git", "log", "-1", "--format=%B"],
             cwd=kernel_dir,
         )
-        current_msg_bytes, stderr = proc.communicate()
-        if proc.returncode != 0:
-            self.logger.warning(f"Failed to get current commit message for trailer restore: {stderr}")
+        if result.exit_code != 0:
+            self.logger.warning(
+                f"Failed to get current commit message for trailer restore: {result.stderr_text()}"
+            )
             return
 
-        current_msg = (
-            current_msg_bytes.decode("utf-8")
-            if isinstance(current_msg_bytes, bytes)
-            else current_msg_bytes
-        )
+        current_msg = result.stdout_text()
 
         current_lines = current_msg.splitlines()
         # Track which trailers are already present (string match)
@@ -416,13 +413,15 @@ that your fixes actually resolved the issues. This is a self-correction loop.
             f"Restoring {len(to_append)} preserved trailers into commit message"
         )
 
-        proc = self.patch_review.docker_manager.run_stdin_command(
+        result = self.patch_review.docker_manager.exec_command(
             ["git", "commit", "--amend", "-F", "-"],
             cwd=kernel_dir,
+            input=new_msg,
         )
-        _stdout, stderr = proc.communicate(input=new_msg)
-        if proc.returncode != 0:
-            self.logger.warning(f"Failed to restore trailers on commit message: {stderr}")
+        if result.exit_code != 0:
+            self.logger.warning(
+                f"Failed to restore trailers on commit message: {result.stderr_text()}"
+            )
 
     def _fix_commit_message(self, checkpatch_output: str) -> bool:
         """Use LLM to fix commit message issues.
@@ -433,27 +432,19 @@ that your fixes actually resolved the issues. This is a self-correction loop.
         kernel_dir = str(self.patch_review.docker_manager.kernel_dir)
         
         # Get current commit message
-        proc = self.patch_review.docker_manager.run_command(
-            ["git", "log", "-1", "--format=%B"],
-            cwd=kernel_dir
+        result = self.patch_review.docker_manager.exec_command(
+            ["git", "log", "-1", "--format=%B"], cwd=kernel_dir
         )
-        current_message_bytes, _ = proc.communicate()
-        if proc.returncode != 0:
+        if result.exit_code != 0:
             self.logger.warning("Failed to get current commit message")
             return False
-        
-        # Decode to string
-        current_message = current_message_bytes.decode('utf-8') if isinstance(current_message_bytes, bytes) else current_message_bytes
+        current_message = result.stdout_text()
         
         # Get the diff to provide context
-        proc = self.patch_review.docker_manager.run_command(
-            ["git", "show", "--format=", "HEAD"],
-            cwd=kernel_dir
+        result = self.patch_review.docker_manager.exec_command(
+            ["git", "show", "--format=", "HEAD"], cwd=kernel_dir
         )
-        diff_content_bytes, _ = proc.communicate()
-        
-        # Decode to string
-        diff_content = diff_content_bytes.decode('utf-8') if isinstance(diff_content_bytes, bytes) else diff_content_bytes
+        diff_content = result.stdout_text()
         
         # Create prompt for LLM to fix commit message
         prompt = f"""Fix the following commit message to address checkpatch warnings.
@@ -507,25 +498,27 @@ Provide ONLY the corrected commit message, nothing else."""
                 fixed_message = '\n'.join(lines[1:-1]) if len(lines) > 2 else fixed_message
                 self.logger.debug("Removed markdown code blocks")
             
-            # Ensure fixed_message is a string (subprocess will encode it)
-            self.logger.debug(f"Before passing to subprocess - type: {type(fixed_message)}")
+            # String input is encoded as UTF-8 by the Docker execution helper.
+            self.logger.debug(f"Before passing to Docker - type: {type(fixed_message)}")
             if isinstance(fixed_message, bytes):
                 fixed_message = fixed_message.decode('utf-8')
                 self.logger.debug("Decoded bytes to string")
             
-            # Update commit message (pass string, subprocess will encode it)
+            # Update commit message with buffered standard input.
             self.logger.debug("Running git commit --amend")
-            proc = self.patch_review.docker_manager.run_stdin_command(
+            result = self.patch_review.docker_manager.exec_command(
                 ["git", "commit", "--amend", "-F", "-"],
                 cwd=kernel_dir,
+                input=fixed_message,
             )
-            _, stderr = proc.communicate(input=fixed_message)
             
-            if proc.returncode == 0:
+            if result.exit_code == 0:
                 self.logger.info("Successfully fixed commit message")
                 return True
             else:
-                self.logger.warning(f"Failed to update commit message: {stderr}")
+                self.logger.warning(
+                    f"Failed to update commit message: {result.stderr_text()}"
+                )
                 return False
                 
         except Exception as e:
@@ -545,20 +538,18 @@ Provide ONLY the corrected commit message, nothing else."""
         kernel_dir = str(self.patch_review.docker_manager.kernel_dir)
         preserved_trailers: list[str] = []
         try:
-            proc = self.patch_review.docker_manager.run_command(
+            result = self.patch_review.docker_manager.exec_command(
                 ["git", "log", "-1", "--format=%B"],
                 cwd=kernel_dir,
             )
-            orig_msg_bytes, stderr = proc.communicate()
-            if proc.returncode == 0:
-                orig_msg = (
-                    orig_msg_bytes.decode("utf-8")
-                    if isinstance(orig_msg_bytes, bytes)
-                    else orig_msg_bytes
+            if result.exit_code == 0:
+                preserved_trailers = self._extract_preserved_trailers(
+                    result.stdout_text()
                 )
-                preserved_trailers = self._extract_preserved_trailers(orig_msg)
             else:
-                self.logger.warning(f"Failed to read original commit message for trailer capture: {stderr}")
+                self.logger.warning(
+                    f"Failed to read original commit message for trailer capture: {result.stderr_text()}"
+                )
         except Exception as e:
             self.logger.warning(f"Error capturing original commit trailers: {e}")
 
@@ -588,15 +579,12 @@ Provide ONLY the corrected commit message, nothing else."""
 
         # Get current diff after script fixes
         kernel_dir = str(self.patch_review.docker_manager.kernel_dir)
-        proc = self.patch_review.docker_manager.run_command(
-            ["git", "format-patch", "-1", "--stdout", "HEAD"],
-            cwd=kernel_dir
+        result = self.patch_review.docker_manager.exec_command(
+            ["git", "format-patch", "-1", "--stdout", "HEAD"], cwd=kernel_dir
         )
-        current_diff, _ = proc.communicate()
-        if proc.returncode == 0:
-            current_diff = current_diff
-        else:
-            current_diff = self.patch_review.diff
+        current_diff = (
+            result.stdout_text() if result.exit_code == 0 else self.patch_review.diff
+        )
 
         # Stage 2: Use AI with verification loop and RAG context
         self.logger.info("Stage 2: Using AI with verification loop and RAG context...")

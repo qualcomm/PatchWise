@@ -176,18 +176,14 @@ Add NULL checks before dereferencing pointers.
         """
         kernel_dir = str(self.patch_review.docker_manager.kernel_dir)
 
-        proc = self.patch_review.docker_manager.run_command(
+        result = self.patch_review.docker_manager.exec_command(
             ["git", "diff", "--name-only", "HEAD~1"], cwd=kernel_dir
         )
-        stdout, _ = proc.communicate()
-        if proc.returncode != 0:
+        if result.exit_code != 0:
             self.logger.warning("Failed to get modified files")
             return False
 
-        if isinstance(stdout, bytes):
-            lines = stdout.decode().splitlines()
-        else:
-            lines = str(stdout).splitlines()
+        lines = result.stdout_text().splitlines()
 
         modified_files = [f.strip() for f in lines if f.strip()]
         self.logger.info(f"Found {len(modified_files)} modified files to process")
@@ -224,12 +220,12 @@ Add NULL checks before dereferencing pointers.
         # Build the diff shown to the AI: HEAD~1..working-tree captures both
         # the original commit and any script edits, without an intermediate amend.
         kernel_dir = str(self.patch_review.docker_manager.kernel_dir)
-        proc = self.patch_review.docker_manager.run_command(
+        result = self.patch_review.docker_manager.exec_command(
             ["git", "diff", "HEAD~1"],
             cwd=kernel_dir,
         )
-        current_diff, _ = proc.communicate()
-        if proc.returncode != 0 or not current_diff:
+        current_diff = result.stdout_text()
+        if result.exit_code != 0 or not current_diff:
             current_diff = self.patch_review.diff
 
         # Stage 2: AI loop with RAG context and self-correction via run_sparse.
