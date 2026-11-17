@@ -4,7 +4,7 @@
 """End-to-end pytest suite for every AiCodeReview agent tool.
 
 Boots the full AiCodeReview pipeline (docker + ts_indexer) against a pinned
-linux-next checkout cloned into tests/linux/, then exercises each tool exposed
+Linux checkout cloned into tests/linux/, then exercises each tool exposed
 via AiCodeReview.dispatch_tool:
 
   find_definition / find_callers / find_callees / grep / read_file / bash
@@ -17,7 +17,7 @@ Run with the patchwise venv active.
     source .venv/bin/activate
     pytest tests/ai_code_review/test_tools.py -v -s
 
-The first run is slow: it fetches the pinned linux-next commit.
+The first run is slow: it fetches the pinned kernel commit.
 """
 
 import logging
@@ -26,6 +26,7 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict, Optional
+from unittest.mock import Mock
 
 TESTS_DIR = Path(__file__).resolve().parent.parent
 KERNEL_DIR = TESTS_DIR / "linux"
@@ -38,13 +39,14 @@ from git import GitCommandError, InvalidGitRepositoryError, NoSuchPathError, Rep
 from patchwise.docker import DockerManager
 from patchwise.patch_review.ai_agent.tool_definitions import BASH_MAX_TIMEOUT
 from patchwise.patch_review.ai_review.ai_code_review import AiCodeReview
-from patchwise import PACKAGE_NAME
 from patchwise.ui import events
 
 # Pin the kernel HEAD so IFDEF_CASES line numbers and other expectations
-# stay stable as linux-next advances.
+# stay stable as the kernel advances.
 PINNED_COMMIT = "43cfbdda5af60ffc6272a7b8c5c37d1d0a181ca9"
-LINUX_NEXT_URL = "https://git.kernel.org/pub/scm/linux/kernel/git/next/linux-next.git"
+# The exact pin is also in Torvalds' repository; kernel.org can be unreachable
+# from GitHub Actions runners, preventing the entire integration suite from starting.
+KERNEL_URL = "https://github.com/torvalds/linux.git"
 
 
 def _clear_stale_index_lock(repo_path: Path) -> None:
@@ -88,13 +90,43 @@ def _open_or_init_kernel_repo(repo_path: Path) -> Repo:
         return repo
     except GitCommandError:
         pass
-    if PACKAGE_NAME not in [remote.name for remote in repo.remotes]:
-        repo.create_remote(PACKAGE_NAME, LINUX_NEXT_URL)
     # Shallow: the pinned commit plus its parent, which AiCodeReview diffs
     # against. No timeout, since even that is a large download.
     print(f"Fetching pinned kernel commit {PINNED_COMMIT[:12]}...", flush=True)
-    repo.git.fetch("--depth=2", PACKAGE_NAME, PINNED_COMMIT)
+    # Fetch the URL directly so an interrupted checkout with an old kernel.org
+    # remote can recover without modifying any existing remotes.
+    repo.git.fetch("--depth=2", KERNEL_URL, PINNED_COMMIT)
     return repo
+
+
+@pytest.mark.parametrize(
+    "error", [None, NoSuchPathError("missing"), InvalidGitRepositoryError("invalid")]
+)
+def test_kernel_repo_fetches_exact_pin_from_github(tmp_path, monkeypatch, error):
+    repo = Mock()
+    repo.git.cat_file.side_effect = GitCommandError("cat-file", 128)
+    factory = Mock(return_value=repo)
+    if error is not None:
+        factory.side_effect = error
+        factory.init.return_value = repo
+    monkeypatch.setattr(f"{__name__}.Repo", factory)
+
+    assert _open_or_init_kernel_repo(tmp_path) is repo
+
+    repo.git.fetch.assert_called_once_with("--depth=2", KERNEL_URL, PINNED_COMMIT)
+    repo.create_remote.assert_not_called()
+    if error is not None:
+        factory.init.assert_called_once_with(tmp_path)
+
+
+def test_kernel_repo_reuses_cached_pin_without_network(tmp_path, monkeypatch):
+    repo = Mock()
+    monkeypatch.setattr(f"{__name__}.Repo", Mock(return_value=repo))
+
+    assert _open_or_init_kernel_repo(tmp_path) is repo
+
+    repo.git.cat_file.assert_called_once_with("-e", f"{PINNED_COMMIT}^{{commit}}")
+    repo.git.fetch.assert_not_called()
 
 
 @pytest.fixture(scope="session")
