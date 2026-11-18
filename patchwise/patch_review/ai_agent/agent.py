@@ -172,7 +172,9 @@ class Agent:
                 allowed.append("reasoning_effort")
         self._inject_prompt_caching(kwargs)
         self.logger.debug(
-            f"Making API call with model: {self.model}, api_base: {Agent.api_base}"
+            "Making API call with model: %s, api_base: %s",
+            kwargs["model"],
+            kwargs["api_base"],
         )
         t0 = time.monotonic()
         response = litellm.completion(**kwargs)
@@ -470,9 +472,11 @@ class Agent:
             "requested JSON value inside one ```json fence, with no prose and "
             "no tool calls."
         ),
+        *,
+        model: Optional[str] = None,
     ) -> Optional[Any]:
         """Return the JSON value of the latest assistant reply in `messages`
-        once `validate` accepts it, or None after AGENT_JSON_RETRIES retires.
+        once `validate` accepts it, or None after AGENT_JSON_RETRIES retries.
 
         `messages` normally ends with the reply to check (run_agent_loop
         appends its final message); when it ends with any other turn, a
@@ -481,6 +485,7 @@ class Agent:
         for attempt in range(AGENT_JSON_RETRIES + 1):
             if messages[-1].get("role") != "assistant":
                 response = self.completion_with_retry(
+                    model=model or Agent.model,
                     messages=messages,
                     stream=False,
                     max_tokens=AGENT_MAX_OUTPUT_TOKENS,

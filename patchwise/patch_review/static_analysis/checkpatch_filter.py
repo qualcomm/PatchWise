@@ -119,64 +119,46 @@ def parse_report(raw: str, commit_message: str = "") -> Optional[Report]:
 
 
 def filter_options(config: dict) -> tuple[bool, Optional[str]]:
-    """Validate opt-in configuration without treating strings as booleans."""
+    """Read opt-in settings. Invalid values disable filtering."""
     options = config
     for name in ("static_analysis", "Checkpatch", "ai_filter"):
-        options = options.get(name, {})
+        options = options.get(name)
         if not isinstance(options, dict):
-            raise ValueError(
-                f"static_analysis.Checkpatch.ai_filter: {name} must be a mapping"
-            )
-    enabled = options.get("enabled", False)
-    if not isinstance(enabled, bool):
-        raise ValueError(
-            "static_analysis.Checkpatch.ai_filter.enabled must be a boolean"
-        )
+            return False, None
     model = options.get("model")
     if model is not None and (not isinstance(model, str) or not model.strip()):
-        raise ValueError(
-            "static_analysis.Checkpatch.ai_filter.model must be a nonempty string"
-        )
-    return enabled, model
+        return False, None
+    return options.get("enabled") is True, model
 
 
-def validate_decisions(value: object, report: Report) -> list[dict]:
-    if not isinstance(value, dict) or set(value) != {"decisions"}:
-        raise ValueError("Expected a decisions object")
+def _valid_decisions(value: object, expected_ids: set[str]) -> bool:
+    if not isinstance(value, dict) or value.keys() != {"decisions"}:
+        return False
     decisions = value["decisions"]
-    if not isinstance(decisions, list):
-        raise ValueError("Expected a decision list")
-    expected = {f.id for f in report.findings}
-    seen: set[str] = set()
-    for decision in decisions:
-        if not isinstance(decision, dict) or set(decision) != {
-            "id",
-            "suppress",
-            "reason",
-        }:
-            raise ValueError("Invalid decision fields")
-        ident = decision["id"]
-        if not isinstance(ident, str) or ident not in expected or ident in seen:
-            raise ValueError("Unknown or duplicate finding ID")
-        if not isinstance(decision["suppress"], bool):
-            raise ValueError("Suppression must be a boolean")
-        if not isinstance(decision["reason"], str) or not decision["reason"].strip():
-            raise ValueError("A reason is required")
-        seen.add(ident)
-    if seen != expected:
-        raise ValueError("Missing decisions")
-    return decisions
+    return (
+        isinstance(decisions, list)
+        and len(decisions) == len(expected_ids)
+        and all(
+            isinstance(d, dict)
+            and d.keys() == {"id", "suppress", "reason"}
+            and isinstance(d["id"], str)
+            and isinstance(d["suppress"], bool)
+            and isinstance(d["reason"], str)
+            and bool(d["reason"].strip())
+            for d in decisions
+        )
+        and {d["id"] for d in decisions} == expected_ids
+    )
 
 
 def filter_report(
     raw: str,
     commit_message: str,
     diff: str,
-    complete: Callable[[list[dict]], str],
+    complete_json: Callable[[list[dict], Callable[[object], bool]], Optional[dict]],
     audit_root: Path,
 ) -> str:
-    """Keep raw output on *any* filter/audit failure. Never call a model for no findings."""
-    audit_dir = None
+    """Filter recognized findings after saving the raw report and decisions."""
     try:
         audit_root.mkdir(parents=True, exist_ok=True)
         # Each invocation keeps its own evidence, including concurrent reruns.
@@ -184,10 +166,6 @@ def filter_report(
         (audit_dir / "raw.txt").write_text(raw, encoding="utf-8")
         report = parse_report(raw, commit_message)
         if report is None:
-            (audit_dir / "status.json").write_text(
-                json.dumps({"status": "unrecognized_report", "filtered": False}),
-                encoding="utf-8",
-            )
             logger.info(
                 "Checkpatch AI filter skipped unrecognized report; audit: %s", audit_dir
             )
@@ -208,15 +186,16 @@ def filter_report(
                 ),
             },
         ]
-        response = complete(messages)
-        (audit_dir / "response.txt").write_text(response, encoding="utf-8")
-        decisions = validate_decisions(json.loads(response), report)
+        expected_ids = {f.id for f in report.findings}
+        response = complete_json(messages, lambda v: _valid_decisions(v, expected_ids))
+        if response is None:
+            raise ValueError("No valid Checkpatch decisions")
+        decisions = response["decisions"]
         suppressed = {d["id"] for d in decisions if d["suppress"]}
         result = report.render(suppressed) if suppressed else raw
         (audit_dir / "decisions.json").write_text(
             json.dumps(decisions, indent=2), encoding="utf-8"
         )
-        (audit_dir / "filtered.txt").write_text(result, encoding="utf-8")
         logger.info(
             "Checkpatch AI filter: %d suppressed; audit: %s", len(suppressed), audit_dir
         )
@@ -226,18 +205,4 @@ def filter_report(
         logger.warning(
             "Checkpatch AI filter failed; retaining original report: %s", exc
         )
-        if audit_dir is not None:
-            try:
-                (audit_dir / "status.json").write_text(
-                    json.dumps(
-                        {
-                            "status": "failed",
-                            "filtered": False,
-                            "error": type(exc).__name__,
-                        }
-                    ),
-                    encoding="utf-8",
-                )
-            except OSError:
-                pass
         return raw

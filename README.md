@@ -310,44 +310,7 @@ After merging defaults and user overrides, `ai.code_review` must be a mapping
 and `output_severity` must be a boolean (`true` or `false`, without quotes).
 Other types raise a configuration error.
 
-### Optional Checkpatch false-positive filtering
-
-Checkpatch remains deterministic and makes no AI calls by default. To enable an
-additional AI classification pass for CLI and mail reviews:
-
-```yaml
-static_analysis:
-  Checkpatch:
-    ai_filter:
-      enabled: true
-      # model: "openai/responses/Pro"  # optional; defaults to the active AI model
-```
-
-This sends the commit message, patch diff, and identified Checkpatch findings to
-the configured AI provider, using the existing API key/retry configuration.
-It may incur additional API charges. `enabled` must be a YAML boolean, and an
-optional `model` must be a nonempty string; a model override affects only this
-filter, not other reviews.
-
-The model is instructed to suppress only clear false positives and retain
-uncertain findings. It cannot rewrite diagnostics: retained records come from
-the original report, with totals recomputed. If every finding is suppressed,
-the Checkpatch result is empty (and alone does not generate a mail reply).
-Rerunning the same commit with no remaining findings removes its previous
-`checkpatch.txt` report from the output directory. With `--fix`, previous fix
-patches are also removed for fixers that return no patch on the rerun.
-Model classifications are not guaranteed correct; leave filtering disabled when
-all original findings must be reported.
-
-Each filtering pass that reaches report parsing saves the raw output. A completed
-pass also saves its model response, validated decisions/reasons, and filtered output under
-`$PATCHWISE_SANDBOX_PATH/checkpatch_filter/<commit>/run-*` (default sandbox:
-`/tmp/patchwise/sandbox`). Reports outside the supported quiet Checkpatch format,
-including free-form continuation paragraphs or unexpected diagnostics, are kept
-unchanged without a model call. Invalid/incomplete model responses, provider
-errors, and audit-write failures retain the original report. Failed or skipped
-passes record a status when storage is available. Audit files are local and are
-not attached to mail replies.
+Set `static_analysis.Checkpatch.ai_filter.enabled` to `true` to enable AI filtering of Checkpatch false positives (off by default).
 
 ## Command-Line Options
 

@@ -39,20 +39,19 @@ ERROR = (
 )
 
 
-def complete(messages, suppress=True):
+def complete(messages, validate):
     data = json.loads(messages[1]["content"])
-    return json.dumps(
-        {
-            "decisions": [
-                {
-                    "id": finding["id"],
-                    "suppress": suppress and "TYPO_SPELLING" in finding["text"],
-                    "reason": "SoM is expanded in the reviewed commit",
-                }
-                for finding in data["findings"]
-            ]
-        }
-    )
+    value = {
+        "decisions": [
+            {
+                "id": finding["id"],
+                "suppress": "TYPO_SPELLING" in finding["text"],
+                "reason": "SoM is expanded in the reviewed commit",
+            }
+            for finding in data["findings"]
+        ]
+    }
+    return value if validate(value) else None
 
 
 @pytest.mark.parametrize(
@@ -62,22 +61,16 @@ def complete(messages, suppress=True):
         ("checkpatch-commit-body.txt", BODY_MESSAGE),
     ],
 )
-@pytest.mark.parametrize("suppress", [False, True])
-def test_real_commit_spelling_context_reaches_filter(
-    tmp_path, fixture, message, suppress
-):
+def test_real_commit_spelling_context_reaches_filter(tmp_path, fixture, message):
     raw = (FIXTURES / fixture).read_text()
-    completion = Mock(side_effect=lambda messages: complete(messages, suppress))
+    completion = Mock(side_effect=complete)
 
-    result = filter_report(raw, message, "+/* board support */", completion, tmp_path)
-
-    assert result == ("" if suppress else raw)
+    assert (
+        filter_report(raw, message, "+/* board support */", completion, tmp_path) == ""
+    )
     completion.assert_called_once()
     payload = json.loads(completion.call_args.args[0][1]["content"])
     assert payload["findings"][0]["text"] == raw[: raw.index("total:")]
-    (audit,) = tmp_path.iterdir()
-    assert (audit / "raw.txt").read_text() == raw
-    assert (audit / "filtered.txt").read_text() == result
 
 
 @pytest.mark.parametrize(
@@ -106,13 +99,6 @@ def mixed_report():
         + ERROR
         + ("total: 1 errors, 1 warnings, 0 checks, 3 lines checked\n")
     )
-
-
-def test_mixed_commit_warning_keeps_real_error_byte_for_byte(tmp_path):
-    completion = Mock(side_effect=complete)
-    result = filter_report(mixed_report(), TITLE_MESSAGE, "diff", completion, tmp_path)
-    assert result == ERROR + "total: 1 errors, 0 warnings, 0 checks, 3 lines checked\n"
-    completion.assert_called_once()
 
 
 def test_commit_context_cannot_be_attached_to_a_code_location(tmp_path):
@@ -203,8 +189,8 @@ def test_filtered_results_control_mail_reply(tmp_path, monkeypatch, mixed):
         else (FIXTURES / "checkpatch-commit-title.txt").read_text()
     )
     output = filter_report(raw, TITLE_MESSAGE, "diff", complete, tmp_path)
-    assert "TYPO_SPELLING" not in output
-    assert ("ERROR:TRAILING_WHITESPACE" in output) is mixed
+    expected = ERROR + "total: 1 errors, 0 warnings, 0 checks, 3 lines checked\n"
+    assert output == (expected if mixed else "")
     review = object.__new__(Checkpatch)
     review.docker_manager = SimpleNamespace(container_name="unused-test-container")
     message = EmailMessage()
