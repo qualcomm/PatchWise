@@ -1,0 +1,5 @@
+:0: WARNING:TYPO_SPELLING: 'SoM' may be misspelled - perhaps 'Some'?
+Subject: [PATCH] probe: Add SoM support
+                            ^^^
+
+total: 0 errors, 1 warnings, 0 checks, 2 lines checked

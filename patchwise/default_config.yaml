@@ -57,3 +57,10 @@ mail:
         server: "smtp.gmail.com"
         port: 465
         ssl: true
+
+static_analysis:
+    Checkpatch:
+        ai_filter:
+            # Optional AI suppression of clear false positives. Failures keep raw output.
+            enabled: false
+            # model: "openai/responses/Pro"  # defaults to the active AI model

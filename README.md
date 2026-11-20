@@ -310,6 +310,8 @@ After merging defaults and user overrides, `ai.code_review` must be a mapping
 and `output_severity` must be a boolean (`true` or `false`, without quotes).
 Other types raise a configuration error.
 
+Set `static_analysis.Checkpatch.ai_filter.enabled` to `true` to enable AI filtering of Checkpatch false positives (off by default).
+
 ## Command-Line Options
 
 - `-h`, `--help`: Show help message and exit

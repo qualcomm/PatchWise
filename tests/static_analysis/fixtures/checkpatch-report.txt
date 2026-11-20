@@ -1,0 +1,27 @@
+drivers/example.c:1: WARNING:SPDX_LICENSE_TAG: Missing or malformed SPDX-License-Identifier tag in line 1
++int foo(void) {
+
+drivers/example.c:1: ERROR:OPEN_BRACE: open brace '{' following function definitions go on the next line
++int foo(void) {
+
+drivers/example.c:2: WARNING:LEADING_SPACE: please, no spaces at the start of a line
++  int x=0;$
+
+drivers/example.c:2: ERROR:SPACING: spaces required around that '=' (ctx:VxV)
++  int x=0;
+        ^
+
+drivers/example.c:3: WARNING:LINE_SPACING: Missing a blank line after declarations
++  int x=0;
++  printk("hi");
+
+drivers/example.c:3: WARNING:LEADING_SPACE: please, no spaces at the start of a line
++  printk("hi");$
+
+drivers/example.c:3: WARNING:PRINTK_WITHOUT_KERN_LEVEL: printk() should include KERN_<LEVEL> facility level
++  printk("hi");
+
+drivers/example.c:4: WARNING:LEADING_SPACE: please, no spaces at the start of a line
++  return x;$
+
+total: 2 errors, 6 warnings, 0 checks, 5 lines checked
