@@ -217,10 +217,13 @@ def run_local_mode(args: argparse.Namespace) -> None:
         output_dir = Path(args.output_dir) / commit.hexsha
         output_dir.mkdir(parents=True, exist_ok=True)
         for review, result_text in results.results.items():
-            if not result_text:
-                continue
             review_name = type(review).__name__
             output_file = output_dir / f"{review_name.lower()}.{review.output_suffix}"
+            if not result_text:
+                # A rerun can suppress every previously reported finding.
+                # Remove only this selected review's stale output.
+                output_file.unlink(missing_ok=True)
+                continue
             if not result_text.endswith("\n"):
                 result_text += "\n"
             with open(output_file, "w", encoding="utf-8") as f:
@@ -230,9 +233,10 @@ def run_local_mode(args: argparse.Namespace) -> None:
                 events.emit(events.REPORT_SAVED, path=str(output_file))
 
         for fix_name, fix_text in fix_results.items():
-            if not fix_text:
-                continue
             output_file = output_dir / f"{fix_name.lower()}.patch"
+            if not fix_text:
+                output_file.unlink(missing_ok=True)
+                continue
             with open(output_file, "w", encoding="utf-8") as f:
                 f.write(fix_text)
             logger.info(f"Saved {fix_name} results to {output_file}")

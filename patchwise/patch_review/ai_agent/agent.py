@@ -171,7 +171,9 @@ class Agent:
                 allowed.append("reasoning_effort")
         self._inject_prompt_caching(kwargs)
         self.logger.debug(
-            f"Making API call with model: {self.model}, api_base: {Agent.api_base}"
+            "Making API call with model: %s, api_base: %s",
+            kwargs["model"],
+            kwargs["api_base"],
         )
         t0 = time.monotonic()
         response = litellm.completion(**kwargs)
@@ -469,9 +471,11 @@ class Agent:
             "requested JSON value inside one ```json fence, with no prose and "
             "no tool calls."
         ),
+        *,
+        model: Optional[str] = None,
     ) -> Optional[Any]:
         """Return the JSON value of the latest assistant reply in `messages`
-        once `validate` accepts it, or None after AGENT_JSON_RETRIES retires.
+        once `validate` accepts it, or None after AGENT_JSON_RETRIES retries.
 
         `messages` normally ends with the reply to check (run_agent_loop
         appends its final message); when it ends with any other turn, a
@@ -480,6 +484,7 @@ class Agent:
         for attempt in range(AGENT_JSON_RETRIES + 1):
             if messages[-1].get("role") != "assistant":
                 response = self.completion_with_retry(
+                    model=model or Agent.model,
                     messages=messages,
                     stream=False,
                     max_tokens=AGENT_MAX_OUTPUT_TOKENS,
@@ -1419,24 +1424,66 @@ class Agent:
             if result.exit_code != 0:
                 return {"ok": False, "error": "checkpatch.pl not found in kernel tree"}
 
-            # By SHA, not HEAD: a downstream tree isn't reset, so HEAD may not be
-            # the reviewed commit.
             sha = self.docker_manager.commit_sha
-            result = self.docker_manager.exec_command(
-                [
-                    "sh",
-                    "-c",
-                    f"git --no-pager format-patch -1 --stdout {sha} "
-                    "| scripts/checkpatch.pl -",
-                ],
-                cwd=git_wd,
+
+            def git_output(args: List[str], input_text: Optional[str] = None) -> str:
+                result = self.docker_manager.exec_command(
+                    ["git", "--no-pager", *args],
+                    cwd=git_wd,
+                    input=input_text,
+                )
+                if result.exit_code != 0:
+                    raise RuntimeError(
+                        f"git {args[0]} failed: {result.stderr_text()}"
+                    )
+                return result.stdout_text()
+
+            if self.enable_edit_tools:
+                # Fixers may amend HEAD or leave staged/unstaged changes. Keep
+                # the original patch's parent as the baseline, so verification
+                # covers the complete candidate rather than the obsolete SHA.
+                parents = git_output(["rev-list", "--parents", "-n", "1", sha]).split()
+                if not parents:
+                    raise RuntimeError("Cannot resolve the reviewed commit")
+                base = (
+                    parents[1]
+                    if len(parents) > 1
+                    else git_output(["mktree"], input_text="").strip()
+                )
+                diff = git_output(
+                    ["diff", "--binary", "--no-ext-diff", "--no-textconv", base, "--"]
+                )
+                message = git_output(["show", "--no-patch", "--format=email", "HEAD"])
+                patch_text = message.rstrip("\n") + "\n\n---\n" + diff if diff else ""
+            else:
+                # Read-only reviews can point at a commit other than HEAD.
+                patch_text = git_output(["format-patch", "-1", "--stdout", sha])
+
+            if not patch_text:
+                return {"ok": True, "result": "No changes to check."}
+
+            # Keep Git and checkpatch separate: a failed Git command must not
+            # become an empty successful check through a shell pipeline.
+            proc = self.docker_manager.run_interactive_command(
+                [checkpatch_path, "-"], cwd=git_wd
             )
-            output_str = result.stdout_text()
+            stdout, stderr = proc.communicate(input=patch_text)
+            if proc.returncode not in (0, 1) or stderr:
+                return {
+                    "ok": False,
+                    "error": f"checkpatch failed (exit {proc.returncode}): {stderr or stdout}",
+                }
+            output_str = stdout or ""
 
             if not output_str.strip():
+                if proc.returncode != 0:
+                    return {
+                        "ok": False,
+                        "error": "checkpatch reported failure without diagnostics",
+                    }
                 return {
                     "ok": True,
-                    "result": "No changes to check. Make some edits first.",
+                    "result": "No checkpatch diagnostics.",
                 }
 
             if "total: 0 errors, 0 warnings" in output_str:
