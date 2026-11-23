@@ -1464,19 +1464,20 @@ class Agent:
 
             # Keep Git and checkpatch separate: a failed Git command must not
             # become an empty successful check through a shell pipeline.
-            proc = self.docker_manager.run_interactive_command(
-                [checkpatch_path, "-"], cwd=git_wd
+            result = self.docker_manager.exec_command(
+                [checkpatch_path, "-"],
+                cwd=git_wd,
+                input=patch_text,
             )
-            stdout, stderr = proc.communicate(input=patch_text)
-            if proc.returncode not in (0, 1) or stderr:
+            if result.exit_code not in (0, 1) or result.stderr:
                 return {
                     "ok": False,
-                    "error": f"checkpatch failed (exit {proc.returncode}): {stderr or stdout}",
+                    "error": f"checkpatch failed (exit {result.exit_code}): {result.stderr_text() or result.stdout_text()}",
                 }
-            output_str = stdout or ""
+            output_str = result.stdout_text() or ""
 
             if not output_str.strip():
-                if proc.returncode != 0:
+                if result.exit_code != 0:
                     return {
                         "ok": False,
                         "error": "checkpatch reported failure without diagnostics",
