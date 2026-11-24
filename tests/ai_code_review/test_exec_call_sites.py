@@ -95,16 +95,15 @@ def test_read_files_reports_binary_stderr_on_failure(index, manager):
 
 
 def test_index_lookup_decodes_candidates(index, manager):
-    # One exec runs rg and git hash-object: paths, NUL, one SHA per path.
+    # One exec runs rg and git hash-object: rg output, NUL, files, NUL, SHAs.
+    path = str(manager.kernel_dir / "目录/a.c").encode()
     sha = "a" * 40
     manager.exec_command.return_value = DockerExecResult(
-        0,
-        str(manager.kernel_dir / "目录/a.c").encode() + b"\n\0" + sha.encode() + b"\n",
-        b"",
+        0, path + b"\n\0" + path + b"\n\0" + sha.encode() + b"\n", b""
     )
     index._constructs_for_paths = Mock(return_value={})
     assert index.lookup("function") == []
-    index._constructs_for_paths.assert_called_once_with(["目录/a.c"], {"目录/a.c": sha})
+    index._constructs_for_paths.assert_called_once_with({"目录/a.c": sha})
 
 
 @pytest.fixture

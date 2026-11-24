@@ -247,3 +247,54 @@ def test_ts_cache_saves_time(review, bench_namespace, monkeypatch):  # noqa: F81
         f"Redis used_memory: {real.memory_bytes() / 2**20:.1f} MiB"
     )
     assert med["warm"] < med["nocache"], "warm cache is not faster than re-parsing"
+
+
+def test_rg_search_hashes_in_same_exec(
+    review, bench_namespace, monkeypatch
+):  # noqa: F811
+    """find_callers / grep (via _rg_search): hashing in rg's exec vs its own exec."""
+    agent, meter = review.agent, Meter()
+    dm = agent.docker_manager
+    monkeypatch.setattr(dm, "_exec", meter.timed(dm._exec, "exec"))
+    merged = agent._ts_index.rg
+    modes = {
+        "separate": lambda args, hash_files=True: merged(args, hash_files=False),
+        "merged": merged,
+    }
+    calls = [("find_callers", {"name": s}) for s in SYMBOLS]
+    calls += [("grep", {"pattern": s}) for s in SYMBOLS]
+    reps = int(os.environ.get("PATCHWISE_TS_BENCH_REPS", "5"))
+
+    def run():
+        meter.t.clear()
+        t0 = time.perf_counter()
+        results = [agent.dispatch_tool(tool, args) for tool, args in calls]
+        # Hit order is rg's (nondeterministic); compare outcome and totals.
+        totals = [
+            {k: v for k, v in r.items() if k == "ok" or k.startswith("total")}
+            for r in results
+        ]
+        return time.perf_counter() - t0, meter.t.get("exec#", 0), totals
+
+    run()  # warm the Redis namespace and the page cache
+    res = {m: [] for m in modes}
+    for rep in range(reps):
+        for mode, rg in modes.items():
+            monkeypatch.setattr(agent._ts_index, "rg", rg)
+            res[mode].append(run())
+        assert res["separate"][-1][2] == res["merged"][-1][2], "results differ"
+        assert all(t["ok"] for t in res["merged"][-1][2]), "a tool call failed"
+        print(
+            f"rep {rep + 1}/{reps}: "
+            + "  ".join(f"{m}={res[m][-1][0]:.2f}s" for m in res)
+        )
+
+    med = {m: statistics.median(r[0] for r in rows) for m, rows in res.items()}
+    execs = {m: rows[0][1] for m, rows in res.items()}
+    print(
+        f"\n{len(calls)} calls -- separate: {med['separate']:.2f}s, {execs['separate']} execs; "
+        f"merged: {med['merged']:.2f}s, {execs['merged']} execs; "
+        f"saved {med['separate'] - med['merged']:.2f}s"
+    )
+    assert execs["merged"] < execs["separate"]
+    assert med["merged"] < med["separate"], "merged hashing is not faster"
