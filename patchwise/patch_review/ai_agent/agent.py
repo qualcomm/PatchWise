@@ -668,9 +668,9 @@ class Agent:
         return self._ts_index.lookup(name)
 
     def _ts_constructs_in_files(
-        self, rel_paths: List[str]
+        self, rel_paths: List[str], sha_by_rel: Optional[Dict[str, str]] = None
     ) -> Dict[str, List[Dict[str, Any]]]:
-        return self._ts_index.constructs_in_files(rel_paths)
+        return self._ts_index.constructs_in_files(rel_paths, sha_by_rel)
 
     def _ts_callees_batch(
         self, specs: List[Tuple[str, int, int]]
@@ -966,11 +966,11 @@ class Agent:
 
         kernel_dir = self.docker_manager.kernel_dir
 
-        rg_cmd: List[str] = ["rg"]
+        rg_args: List[str] = []
         if count_only:
-            rg_cmd += ["--count", "--with-filename"]
+            rg_args += ["--count", "--with-filename"]
         else:
-            rg_cmd += [
+            rg_args += [
                 "--line-number",
                 "--no-heading",
                 "--with-filename",
@@ -979,25 +979,27 @@ class Agent:
             ]
         # \n in a pattern requires multiline mode.
         if "\\n" in pattern:
-            rg_cmd.append("--multiline")
+            rg_args.append("--multiline")
         # Apply glob filters when searching a directory (or the whole tree). When
         # every path is a concrete file, search them directly so a glob can't
         # filter an explicitly-named file out.
         if any_dir or not file_paths:
             globs = [g.strip() for g in glob.split(",")] if glob else ["*.c", "*.h"]
             for g in globs:
-                rg_cmd += ["--glob", g]
+                rg_args += ["--glob", g]
             blocklist = parse_config().get("indexing", {}).get("blocklist") or []
             for entry in blocklist:
-                rg_cmd += ["--glob", f"!{entry}"]
-        rg_cmd += ["-e", pattern]
+                rg_args += ["--glob", f"!{entry}"]
+        rg_args += ["-e", pattern]
         if file_paths:
-            rg_cmd += [str(kernel_dir / p) for p in file_paths]
+            rg_args += [str(kernel_dir / p) for p in file_paths]
         else:
-            rg_cmd.append(str(kernel_dir))
+            rg_args.append(str(kernel_dir))
 
-        result = self.docker_manager.exec_command(rg_cmd, cwd=str(kernel_dir))
-        output, err = result.stdout_text(), result.stderr_text()
+        # Hashing the hit files in the same exec saves a docker round-trip;
+        # --count needs no constructs, so it skips hashing.
+        result = self._ts_index.rg(rg_args, hash_files=not count_only)
+        output, err = result.stdout, result.stderr
         # rg exit codes: 0 = matches, 1 = no matches, 2 = error (e.g. bad regex).
         # Surface a real error rather than silently returning zero hits — a
         # silent 0 on a malformed pattern reads as "nothing found".
@@ -1040,7 +1042,7 @@ class Agent:
             parsed_lines.append((rel, hit_line, text))
 
         constructs_by_file = self._ts_constructs_in_files(
-            list(dict.fromkeys(rel for rel, _, _ in parsed_lines))
+            list(dict.fromkeys(rel for rel, _, _ in parsed_lines)), result.sha_by_rel
         )
         file_to_constructs: Dict[str, List[Tuple[int, int, str, str]]] = {
             rel: [(c["start_line"], c["end_line"], c["name"], c["kind"]) for c in cs]

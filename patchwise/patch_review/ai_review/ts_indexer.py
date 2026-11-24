@@ -13,7 +13,7 @@ through it; all git/rg/cache/parse logic stays here.
 import io
 import logging
 import tarfile
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 import tree_sitter_c
 from tree_sitter import Language, Parser, Query, QueryCursor
@@ -202,6 +202,24 @@ def callees_in_range(
 # ---------------------------------------------------------------------------
 
 
+# Runs rg, then hashes every file it reported (the text before the first ":" of
+# each line, for both `-l` and `-n` output). stdout: rg output, NUL, file list,
+# NUL, one SHA per file.
+_RG_AND_HASH = (
+    'out=$(rg "$@"); rc=$?; [ "$rc" -le 1 ] || exit "$rc"; '
+    "files=$(printf '%s\\n' \"$out\" | awk -F: 'NF && !seen[$1]++ {print $1}'); "
+    'printf \'%s\\n\\0%s\\n\\0\' "$out" "$files"; '
+    '[ -z "$files" ] || printf "%s\\n" "$files" | git hash-object --no-filters --stdin-paths'
+)
+
+
+class RgResult(NamedTuple):
+    exit_code: int
+    stdout: str
+    stderr: str
+    sha_by_rel: Optional[Dict[str, str]]  # file -> blob SHA; None if not hashed
+
+
 class TsIndex:
     """Host-side tree-sitter index for one review container.
 
@@ -256,16 +274,13 @@ class TsIndex:
     # -- cache-backed parse --
 
     def _constructs_for_paths(
-        self, rels: List[str], sha_by_rel: Optional[Dict[str, str]] = None
+        self, sha_by_rel: Dict[str, str]
     ) -> Dict[str, List[Dict[str, Any]]]:
-        """Resolve+parse many paths with a fixed number of docker execs.
+        """Return {rel: constructs} for every rel in `sha_by_rel` ({rel: blob SHA}).
 
-        One `git hash-object` exec, one `cache.mget`, then -- only if anything
-        missed -- one `tar` exec for the misses' bytes and one `cache.mset` for
-        their parses. Returns {rel: constructs} for every rel.
+        One `cache.mget`, then -- only if anything missed -- one `tar` exec for
+        the misses' bytes and one `cache.mset` for their parses.
         """
-        if sha_by_rel is None:
-            sha_by_rel = self._hash_files(list(dict.fromkeys(rels)))
         cached_map = self._cache.mget(list(dict.fromkeys(sha_by_rel.values())))
         self.cached += sum(1 for v in cached_map.values() if v is not None)
 
@@ -286,6 +301,37 @@ class TsIndex:
 
     # -- public query methods --
 
+    def rg(self, args: List[str], hash_files: bool = True) -> RgResult:
+        """Run `rg *args` in the kernel tree and hash every file it reports.
+
+        Both happen in one docker exec: a round-trip is ~36 ms, ~80% of the
+        45 ms a separate hash exec took. Exit codes are rg's (0 match, 1 none,
+        2 error). sha_by_rel is None without `hash_files` or on error.
+        """
+        command = (
+            ["sh", "-c", _RG_AND_HASH, "sh", *args] if hash_files else ["rg", *args]
+        )
+        result = self._dm.exec_command(command, cwd=str(self._kernel_dir))
+        if not hash_files or result.exit_code > 1:
+            return RgResult(
+                result.exit_code, result.stdout_text(), result.stderr_text(), None
+            )
+
+        out, files, shas = result.stdout_text().split("\0")
+        rels = [self._rel(f) for f in files.splitlines() if f]
+        shas = shas.split()
+        if len(shas) != len(rels):
+            raise RuntimeError(
+                f"git hash-object returned {len(shas)} SHAs for {len(rels)} files"
+            )
+        return RgResult(
+            result.exit_code, out, result.stderr_text(), dict(zip(rels, shas))
+        )
+
+    def _rel(self, path: str) -> str:
+        prefix = f"{self._kernel_dir}/"
+        return path[len(prefix) :] if path.startswith(prefix) else path
+
     def lookup(self, name: str) -> List[Dict[str, Any]]:
         """Return every index entry defining `name` via rg + cache + tree-sitter.
 
@@ -293,8 +339,7 @@ class TsIndex:
         and applies its own display cap. Truncating here (before ranking) could
         drop the nearest-to-the-change definer for a heavily-redefined name.
         """
-        rg_cmd = [
-            "rg",
+        args = [
             "--files-with-matches",
             "--word-regexp",
             "--glob",
@@ -303,53 +348,30 @@ class TsIndex:
             "*.h",
         ]
         for entry in self._blocklist:
-            rg_cmd += ["--glob", f"!{entry}"]
-        rg_cmd += [name, str(self._kernel_dir)]
-        # rg and `git hash-object` share one exec: a docker round-trip is ~36 ms,
-        # ~80% of the 45 ms a separate hash exec took per lookup.
-        # Output: rg paths, NUL, one SHA per path.
-        script = (
-            'p=$(rg "$@"); [ -n "$p" ] || exit 0; printf "%s\\n\\0" "$p"; '
-            'printf "%s\\n" "$p" | git hash-object --no-filters --stdin-paths'
-        )
-        result = self._dm.exec_command(
-            ["sh", "-c", script, "sh", *rg_cmd[1:]], cwd=str(self._kernel_dir)
-        )
-        if result.exit_code:
-            raise RuntimeError(f"rg/git hash-object failed: {result.stderr_text()}")
+            args += ["--glob", f"!{entry}"]
+        result = self.rg([*args, name, str(self._kernel_dir)])
+        if result.exit_code > 1:
+            raise RuntimeError(f"rg failed: {result.stderr}")
 
-        paths, _, shas = result.stdout_text().partition("\0")
-        kernel_prefix = str(self._kernel_dir) + "/"
-        candidate_rels = [
-            line[len(kernel_prefix) :] if line.startswith(kernel_prefix) else line
-            for line in paths.splitlines()
-            if line.strip()
-        ]
-        sha_list = shas.split()
-        if len(sha_list) != len(candidate_rels):
-            raise RuntimeError(
-                f"git hash-object returned {len(sha_list)} SHAs "
-                f"for {len(candidate_rels)} paths"
-            )
-
-        if len(candidate_rels) > 200:
+        if len(result.sha_by_rel) > 200:
             self._logger.warning(
-                f"ts_lookup({name!r}): {len(candidate_rels)} candidate files -- "
+                f"ts_lookup({name!r}): {len(result.sha_by_rel)} candidate files -- "
                 "large lookup; results are still complete"
             )
 
-        per_file = self._constructs_for_paths(
-            candidate_rels, dict(zip(candidate_rels, sha_list))
-        )
+        per_file = self._constructs_for_paths(result.sha_by_rel)
         return confirm_definitions(name, per_file)
 
-    def constructs_in_files(self, rels: List[str]) -> Dict[str, List[Dict[str, Any]]]:
+    def constructs_in_files(
+        self, rels: List[str], sha_by_rel: Optional[Dict[str, str]] = None
+    ) -> Dict[str, List[Dict[str, Any]]]:
         """Return {rel: [{name, kind, start_line, end_line}]} for many paths.
 
-        One blob-resolution + cache/parse pass for the whole set (see
-        `_constructs_for_paths`), not a git exec per file.
+        Pass `sha_by_rel` (e.g. from `rg()`) to skip the `git hash-object` exec.
         """
-        per_file = self._constructs_for_paths(rels)
+        if sha_by_rel is None:
+            sha_by_rel = self._hash_files(list(dict.fromkeys(rels)))
+        per_file = self._constructs_for_paths(sha_by_rel)
         return {
             rel: [
                 {
