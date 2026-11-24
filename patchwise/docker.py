@@ -4,6 +4,7 @@
 """Docker lifecycle management backed by the official Python Docker SDK."""
 
 import logging
+import math
 import os
 import socket
 import subprocess
@@ -12,6 +13,8 @@ import threading
 import time
 import warnings
 from collections import deque
+from concurrent.futures import Future, TimeoutError as FutureTimeoutError
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Optional, Union
 
@@ -73,14 +76,28 @@ def check_docker_available() -> None:
         )
 
 
+@dataclass(frozen=True)
+class DockerExecResult:
+    """Buffered SDK output, kept as bytes so decoding never loses the originals."""
+
+    exit_code: int
+    stdout: bytes
+    stderr: bytes
+
+    def stdout_text(self, encoding: str = "utf-8", errors: str = "replace") -> str:
+        return self.stdout.decode(encoding, errors=errors)
+
+    def stderr_text(self, encoding: str = "utf-8", errors: str = "replace") -> str:
+        return self.stderr.decode(encoding, errors=errors)
+
+
 class DockerExecProcess:
     """A temporary, minimal ``Popen`` compatibility layer for SDK execs.
 
-    New callers should use a Docker-specific execution interface when one is
-    available. ``kill`` cannot terminate an individual Docker exec, so callers
-    must enforce a command timeout inside the container. This wrapper retains
-    ``communicate`` only while existing review tools are migrated away from its
-    subprocess-shaped API.
+    New callers should use ``DockerManager.exec_command``. ``kill`` cannot
+    terminate an individual Docker exec, so callers must enforce a command
+    timeout inside the container. This wrapper retains ``communicate`` for
+    compatibility with external callers of the subprocess-shaped API.
     """
 
     def __init__(
@@ -470,9 +487,75 @@ class DockerManager:
             )
         return code, (stdout, stderr)
 
+    def exec_command(
+        self,
+        command: list[str],
+        cwd: Optional[str] = None,
+        *,
+        input: Union[str, bytes, None] = None,
+        user: Optional[str] = None,
+        environment: Optional[dict[str, str]] = None,
+        wait_timeout: Optional[float] = None,
+    ) -> DockerExecResult:
+        """Execute a buffered command, with stdin closed unless input is supplied.
+
+        String input is encoded as UTF-8; bytes are sent unchanged. A wait
+        timeout bounds the client's wait, not the command's lifetime. Enforce
+        command deadlines inside the container (for example with ``timeout``).
+        On a wait timeout no complete result is available, and the SDK worker
+        may still be running; it must not be mistaken for a cancelled exec.
+        Do not retry automatically: a stalled transport can retain that worker
+        even after an in-container deadline has stopped the command.
+        """
+        if wait_timeout is not None and (
+            not math.isfinite(wait_timeout) or wait_timeout <= 0
+        ):
+            raise ValueError("wait_timeout must be finite and positive")
+        if input is not None and not isinstance(input, (str, bytes)):
+            raise TypeError("Docker exec input must be str or bytes")
+        workdir = str(cwd or self.sandbox_path)
+        self.logger.debug("Executing command in container: %s", command)
+
+        def execute() -> DockerExecResult:
+            code, (stdout, stderr) = self._exec(
+                command,
+                workdir,
+                input=input,
+                text=False,
+                user=user,
+                environment=environment,
+            )
+            return DockerExecResult(code, stdout, stderr)
+
+        if wait_timeout is None:
+            return execute()
+
+        result: Future[DockerExecResult] = Future()
+
+        def run() -> None:
+            try:
+                result.set_result(execute())
+            except BaseException as error:
+                result.set_exception(error)
+
+        threading.Thread(target=run, daemon=True).start()
+        try:
+            return result.result(timeout=wait_timeout)
+        except FutureTimeoutError:
+            # A worker-raised TimeoutError is already an execution failure,
+            # rather than evidence that our client wait expired.
+            if result.done():
+                return result.result()
+            raise TimeoutError(
+                f"Docker exec did not finish responding within {wait_timeout}s: "
+                f"{command!r}. The command was not cancelled; no complete "
+                "output or exit code is available."
+            ) from None
+
     def run_command(
         self, command: list[str], cwd: Optional[str], **kwargs: Any
     ) -> DockerExecProcess:
+        """Legacy process adapter; new callers should use :meth:`exec_command`."""
         cwd = str(cwd or self.sandbox_path)
         text = kwargs.pop("text", True)
         stdin = kwargs.pop("stdin", None)
@@ -526,41 +609,52 @@ class DockerManager:
         show_timer = (
             self.logger.isEnabledFor(logging.INFO) and not events.has_subscribers()
         )
-        start = time.time()
-        proc = self.run_command(cmd, cwd=cwd, **kwargs)
-        while True:
-            try:
-                stdout, stderr = proc.communicate(timeout=5)
-                if stdout:
-                    self.logger.debug(stdout)
-                if stderr:
-                    self.logger.debug(stderr)
-                if show_timer:
-                    sys.stdout.write("\r\033[K")
-                    sys.stdout.flush()
-                break
-            except subprocess.TimeoutExpired:
-                elapsed = int(time.time() - start)
-                if show_timer:
-                    sys.stdout.write(f"\r\033[K{desc}... {elapsed}s elapsed")
-                    sys.stdout.flush()
-        elapsed = int(time.time() - start)
+        start = time.monotonic()
+        complete = threading.Event()
+
+        def update_timer() -> None:
+            while not complete.wait(5):
+                elapsed = int(time.monotonic() - start)
+                sys.stdout.write(f"\r\033[K{desc}... {elapsed}s elapsed")
+                sys.stdout.flush()
+
+        timer = (
+            threading.Thread(target=update_timer, daemon=True) if show_timer else None
+        )
+        if timer is not None:
+            timer.start()
+        try:
+            result = self.exec_command(cmd, cwd=cwd, **kwargs)
+        finally:
+            complete.set()
+            if timer is not None:
+                timer.join()
+                sys.stdout.write("\r\033[K")
+                sys.stdout.flush()
+        stdout, stderr = result.stdout_text(), result.stderr_text()
+        if stdout:
+            self.logger.debug(stdout)
+        if stderr:
+            self.logger.debug(stderr)
+        elapsed = int(time.monotonic() - start)
         self.logger.debug("%s completed in %ss", desc, elapsed)
-        return (stdout or "") + (stderr or "")
+        return stdout + stderr
 
     def read_file(self, path: str) -> Union[str, Literal[False]]:
-        proc = self.run_command(["cat", path], cwd=None)
-        stdout, stderr = proc.communicate()
-        if proc.returncode != 0:
-            self.logger.debug("read_file(%s) failed: %s", path, stderr.strip())
+        result = self.exec_command(["cat", path])
+        if result.exit_code != 0:
+            self.logger.debug(
+                "read_file(%s) failed: %s", path, result.stderr_text().strip()
+            )
             return False
-        return stdout
+        return result.stdout_text()
 
     def write_file(self, path: str, content: str) -> bool:
-        proc = self.run_stdin_command(["tee", path], cwd=None)
-        _, stderr = proc.communicate(input=content)
-        if proc.returncode != 0:
-            self.logger.debug("write_file(%s) failed: %s", path, stderr.strip())
+        result = self.exec_command(["tee", path], input=content)
+        if result.exit_code != 0:
+            self.logger.debug(
+                "write_file(%s) failed: %s", path, result.stderr_text().strip()
+            )
             return False
         return True
 

@@ -13,7 +13,12 @@ import pytest
 from docker.errors import DockerException, NotFound
 
 from patchwise import PACKAGE_PATH
-from patchwise.docker import DockerExecProcess, DockerManager, check_docker_available
+from patchwise.docker import (
+    DockerExecProcess,
+    DockerExecResult,
+    DockerManager,
+    check_docker_available,
+)
 
 
 @pytest.mark.parametrize(
@@ -398,20 +403,32 @@ def test_run_cmd_with_timer_updates_terminal_until_command_finishes(
     manager = object.__new__(DockerManager)
     manager.logger = Mock()
     manager.logger.isEnabledFor.return_value = True
-    process = Mock()
-    process.communicate.side_effect = [
-        subprocess.TimeoutExpired(["make"], 5),
-        streams,
-    ]
-    manager.run_command = Mock(return_value=process)
+    manager.exec_command = Mock(
+        return_value=DockerExecResult(0, *(stream.encode() for stream in streams))
+    )
+    complete = Mock()
+    complete.wait.side_effect = [False, True]
+    monkeypatch.setattr("patchwise.docker.threading.Event", lambda: complete)
+    timer = Mock()
+
+    def make_timer(*, target, daemon):
+        timer.start.side_effect = target
+        return timer
+
+    monkeypatch.setattr("patchwise.docker.threading.Thread", make_timer)
     monkeypatch.setattr("patchwise.ui.events.has_subscribers", lambda: False)
     writes = []
     monkeypatch.setattr("patchwise.docker.sys.stdout.write", writes.append)
     monkeypatch.setattr("patchwise.docker.sys.stdout.flush", lambda: None)
-    monkeypatch.setattr("patchwise.docker.time.time", lambda: 10)
+    monkeypatch.setattr("patchwise.docker.time.monotonic", lambda: 10)
 
     assert manager.run_cmd_with_timer(["make"], "Building") == "".join(streams)
     assert any("Building... 0s elapsed" in write for write in writes)
+    assert writes[-1] == "\r\033[K"
+    assert complete.wait.call_args_list == [call(5), call(5)]
+    complete.set.assert_called_once()
+    timer.join.assert_called_once()
+    manager.exec_command.assert_called_once_with(["make"], cwd=None)
     manager.logger.debug.assert_has_calls(
         [call(stream) for stream in streams if stream]
     )

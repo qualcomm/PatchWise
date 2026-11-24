@@ -41,11 +41,12 @@ class StaticAnalysis(PatchReview):
         """Reset the in-container kernel tree to the given commit."""
         self.logger.debug(f"Reset tree to {commit.hexsha}")
         kernel_dir = self.docker_manager.sandbox_path / "kernel"
-        proc = self.docker_manager.run_command(
+        result = self.docker_manager.exec_command(
             ["git", "reset", "--hard", commit.hexsha],
             cwd=str(kernel_dir),
         )
-        proc.communicate()
+        if result.exit_code != 0:
+            raise RuntimeError(f"git reset failed: {result.stderr_text()}")
 
     def group_records(self, text: str) -> list[str]:
         """

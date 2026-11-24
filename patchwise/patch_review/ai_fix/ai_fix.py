@@ -63,34 +63,32 @@ class AiFix:
         kernel_dir = str(self.patch_review.docker_manager.kernel_dir)
 
         # No-op if the AI made no changes
-        proc = self.patch_review.docker_manager.run_command(
+        result = self.patch_review.docker_manager.exec_command(
             ["git", "diff", "--quiet", "HEAD"], cwd=kernel_dir
         )
-        proc.communicate()
-        if proc.returncode == 0:
+        if result.exit_code == 0:
             self.logger.debug("No working-tree changes from AI; no patch fix.")
             return ""
 
         # Read current commit message and strip trailers
-        proc = self.patch_review.docker_manager.run_command(
+        result = self.patch_review.docker_manager.exec_command(
             ["git", "log", "-1", "--format=%B"], cwd=kernel_dir
         )
-        orig_msg, stderr = proc.communicate()
-        if proc.returncode != 0:
-            raise RuntimeError(f"git log failed: {stderr}")
-        new_msg = self._strip_trailers(orig_msg)
+        if result.exit_code != 0:
+            raise RuntimeError(f"git log failed: {result.stderr_text()}")
+        new_msg = self._strip_trailers(result.stdout_text())
 
         # Amend HEAD with the AI's edits
-        proc = self.patch_review.docker_manager.run_stdin_command(
+        result = self.patch_review.docker_manager.exec_command(
             ["git", "commit", "-a", "--amend", "-F", "-"],
             cwd=kernel_dir,
+            input=new_msg,
         )
-        _stdout, stderr = proc.communicate(input=new_msg)
-        if proc.returncode != 0:
-            raise RuntimeError(f"git commit --amend failed: {stderr}")
+        if result.exit_code != 0:
+            raise RuntimeError(f"git commit --amend failed: {result.stderr_text()}")
 
         # Emit the updated patch as mbox
-        proc = self.patch_review.docker_manager.run_command(
+        result = self.patch_review.docker_manager.exec_command(
             [
                 "git",
                 "format-patch",
@@ -99,10 +97,9 @@ class AiFix:
             ],
             cwd=kernel_dir,
         )
-        stdout, stderr = proc.communicate()
-        if proc.returncode != 0:
-            raise RuntimeError(f"git format-patch failed: {stderr}")
-        return stdout.strip()
+        if result.exit_code != 0:
+            raise RuntimeError(f"git format-patch failed: {result.stderr_text()}")
+        return result.stdout_text().strip()
 
     def run(self):
         # subclasses override and fix the issues in review_result

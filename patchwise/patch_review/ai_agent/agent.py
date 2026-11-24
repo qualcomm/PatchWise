@@ -6,7 +6,6 @@ import json
 import logging
 import os
 import re
-import subprocess
 import time
 from collections import OrderedDict
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Set, Union
@@ -583,12 +582,12 @@ class Agent:
             else:
                 rg_args += ["-g", leaf.split("/")[-1], "."]
             rg_args.append(str(self.docker_manager.kernel_dir))
-            proc = self.docker_manager.run_command(rg_args, cwd=None)
-            stdout, stderr = proc.communicate()
+            result = self.docker_manager.exec_command(rg_args, cwd=None)
+            stdout, stderr = result.stdout_text(), result.stderr_text()
             if stderr and stderr.strip():
                 self.logger.warning(
                     f"rg for sentinel {leaf!r} wrote to stderr "
-                    f"(rc={proc.returncode}): {stderr.strip()}"
+                    f"(rc={result.exit_code}): {stderr.strip()}"
                 )
             trees: List[str] = []
             for line in (stdout or "").splitlines():
@@ -618,11 +617,10 @@ class Agent:
 
         rel = self._kernel_rel(path)
         container_path = self._container_kernel_path(rel)
-        check = self.docker_manager.run_command(
+        result = self.docker_manager.exec_command(
             ["test", "-e", container_path], cwd=None
         )
-        check.communicate()
-        if check.returncode != 0:
+        if result.exit_code != 0:
             raise ValueError(f"path not found: {rel}")
         return rel
 
@@ -936,7 +934,7 @@ class Agent:
                     return None, str(e), []
                 rel = self._kernel_rel(tok)
                 container_path = str(self.docker_manager.kernel_dir / rel)
-                check = self.docker_manager.run_command(
+                result = self.docker_manager.exec_command(
                     [
                         "sh",
                         "-c",
@@ -950,8 +948,7 @@ class Agent:
                     ],
                     cwd=None,
                 )
-                stdout, _ = check.communicate()
-                kind = stdout.strip()
+                kind = result.stdout_text().strip()
                 if kind == "missing":
                     # Drop a missing path and keep going: the model routinely
                     # passes several roots, and one stale path should not throw
@@ -999,12 +996,12 @@ class Agent:
         else:
             rg_cmd.append(str(kernel_dir))
 
-        proc = self.docker_manager.run_command(rg_cmd, cwd=str(kernel_dir))
-        output, err = proc.communicate()
+        result = self.docker_manager.exec_command(rg_cmd, cwd=str(kernel_dir))
+        output, err = result.stdout_text(), result.stderr_text()
         # rg exit codes: 0 = matches, 1 = no matches, 2 = error (e.g. bad regex).
         # Surface a real error rather than silently returning zero hits — a
         # silent 0 on a malformed pattern reads as "nothing found".
-        if proc.returncode == 2:
+        if result.exit_code == 2:
             detail = (err or "").strip().splitlines()
             return (
                 None,
@@ -1219,12 +1216,12 @@ class Agent:
 
         bindings_abs = self._doc_container_path("devicetree/bindings")
         cmd = ["rg", "-l", "--glob", "*.yaml", "-e", compatible, bindings_abs]
-        proc = self.docker_manager.run_command(
+        result = self.docker_manager.exec_command(
             cmd, cwd=str(self.docker_manager.kernel_dir)
         )
-        out, err = proc.communicate()
+        out, err = result.stdout_text(), result.stderr_text()
         # rg exit codes: 0 = matches, 1 = none, 2 = error (e.g. bad regex).
-        if proc.returncode == 2:
+        if result.exit_code == 2:
             detail = (err or "").strip().splitlines()
             return {
                 "ok": False,
@@ -1379,19 +1376,17 @@ class Agent:
             else str(self.docker_manager.kernel_dir)
         )
         wrapped = ["timeout", "-k", "5", str(timeout), "sh", "-c", command]
-        proc = self.docker_manager.run_command(
-            wrapped, cwd=workdir, stdin=subprocess.DEVNULL
+        # No stdin attachment means EOF in the container. The client wait is
+        # separate from the in-container deadline; an expired wait does not
+        # establish that the command was killed or provide a complete result.
+        result = self.docker_manager.exec_command(
+            wrapped, cwd=workdir, wait_timeout=timeout + 15
         )
-        try:
-            stdout, stderr = proc.communicate(timeout=timeout + 15)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            stdout, stderr = proc.communicate()
-        output = (stdout or "") + (stderr or "")
+        output = result.stdout_text() + result.stderr_text()
         truncated = len(output) > self._BASH_OUTPUT_CAP
         if truncated:
             output = output[: self._BASH_OUTPUT_CAP]
-        timed_out = proc.returncode in (124, 137)
+        timed_out = result.exit_code in (124, 137)
         if timed_out:
             output += (
                 f"\n[timed out after {timeout}s and was killed. "
@@ -1399,9 +1394,9 @@ class Agent:
                 f"split it into steps.]"
             )
         return {
-            "ok": proc.returncode == 0,
+            "ok": result.exit_code == 0,
             "result": output,
-            "exit_code": proc.returncode,
+            "exit_code": result.exit_code,
             "truncated": truncated,
             "timed_out": timed_out,
         }
@@ -1422,29 +1417,26 @@ class Agent:
         try:
             # Ensure checkpatch.pl exists in the container kernel tree
             checkpatch_path = os.path.join(git_wd, "scripts", "checkpatch.pl")
-            check_proc = self.docker_manager.run_command(
+            result = self.docker_manager.exec_command(
                 ["test", "-x", checkpatch_path],
                 cwd=None,
             )
-            check_proc.communicate()
-            if check_proc.returncode != 0:
+            if result.exit_code != 0:
                 return {"ok": False, "error": "checkpatch.pl not found in kernel tree"}
 
             sha = self.docker_manager.commit_sha
 
             def git_output(args: List[str], input_text: Optional[str] = None) -> str:
-                command = ["git", "--no-pager", *args]
-                if input_text is None:
-                    process = self.docker_manager.run_command(command, cwd=git_wd)
-                    stdout, stderr = process.communicate()
-                else:
-                    process = self.docker_manager.run_interactive_command(
-                        command, cwd=git_wd
+                result = self.docker_manager.exec_command(
+                    ["git", "--no-pager", *args],
+                    cwd=git_wd,
+                    input=input_text,
+                )
+                if result.exit_code != 0:
+                    raise RuntimeError(
+                        f"git {args[0]} failed: {result.stderr_text()}"
                     )
-                    stdout, stderr = process.communicate(input=input_text)
-                if process.returncode != 0:
-                    raise RuntimeError(f"git {args[0]} failed: {stderr}")
-                return stdout or ""
+                return result.stdout_text()
 
             if self.enable_edit_tools:
                 # Fixers may amend HEAD or leave staged/unstaged changes. Keep
@@ -1472,19 +1464,20 @@ class Agent:
 
             # Keep Git and checkpatch separate: a failed Git command must not
             # become an empty successful check through a shell pipeline.
-            proc = self.docker_manager.run_interactive_command(
-                [checkpatch_path, "-"], cwd=git_wd
+            result = self.docker_manager.exec_command(
+                [checkpatch_path, "-"],
+                cwd=git_wd,
+                input=patch_text,
             )
-            stdout, stderr = proc.communicate(input=patch_text)
-            if proc.returncode not in (0, 1) or stderr:
+            if result.exit_code not in (0, 1) or result.stderr:
                 return {
                     "ok": False,
-                    "error": f"checkpatch failed (exit {proc.returncode}): {stderr or stdout}",
+                    "error": f"checkpatch failed (exit {result.exit_code}): {result.stderr_text() or result.stdout_text()}",
                 }
-            output_str = stdout or ""
+            output_str = result.stdout_text() or ""
 
             if not output_str.strip():
-                if proc.returncode != 0:
+                if result.exit_code != 0:
                     return {
                         "ok": False,
                         "error": "checkpatch reported failure without diagnostics",
@@ -1525,19 +1518,14 @@ class Agent:
                     return {"ok": False, "error": str(e)}
 
         try:
-            proc = self.docker_manager.run_command(
+            result = self.docker_manager.exec_command(
                 ["git", "diff", "--name-only", "HEAD~1"],
                 cwd=str(kernel_dir),
             )
-            stdout, _ = proc.communicate()
-
-            if proc.returncode != 0:
+            if result.exit_code != 0:
                 return {"ok": False, "error": "Failed to get modified files"}
 
-            if isinstance(stdout, bytes):
-                lines = stdout.decode().splitlines()
-            else:
-                lines = str(stdout).splitlines()
+            lines = result.stdout_text().splitlines()
 
             modified_files = [f.strip() for f in lines if f.strip()]
 
@@ -1588,22 +1576,17 @@ class Agent:
                 *obj_targets,
             ]
 
-            proc = self.docker_manager.run_command(
+            result = self.docker_manager.exec_command(
                 sparse_cmd,
                 cwd=str(build_dir),
             )
-            raw_stdout, raw_stderr = proc.communicate()
-            output = ""
-            if raw_stdout:
-                output += raw_stdout if isinstance(raw_stdout, str) else raw_stdout.decode(errors="ignore")
-            if raw_stderr:
-                output += raw_stderr if isinstance(raw_stderr, str) else raw_stderr.decode(errors="ignore")
+            output = result.stdout_text() + result.stderr_text()
 
-            if proc.returncode != 0:
+            if result.exit_code != 0:
                 return {
                     "ok": False,
                     "error": (
-                        f"make exited with code {proc.returncode}. "
+                        f"make exited with code {result.exit_code}. "
                         f"Output:\n{output}"
                     ),
                 }
@@ -1888,7 +1871,9 @@ class Agent:
         git_wd = self.docker_manager._git_workdir
         sha = self.docker_manager.commit_sha
         log_cmd = [*self._git_command("diff"), "--name-only", f"{sha}^..{sha}"]
-        proc = self.docker_manager.run_command(log_cmd, cwd=git_wd)
-        stdout, _ = proc.communicate()
+        result = self.docker_manager.exec_command(log_cmd, cwd=git_wd)
         prefix = self.docker_manager.git_subdir
-        return {f"{prefix}/{f}" if prefix else f for f in stdout.strip().splitlines()}
+        return {
+            f"{prefix}/{f}" if prefix else f
+            for f in result.stdout_text().strip().splitlines()
+        }
