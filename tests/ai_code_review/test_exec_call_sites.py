@@ -155,7 +155,6 @@ def test_bash_client_wait_failure_is_reported_without_kill_or_retry(agent, manag
     assert "command was not cancelled" in result["error"]
     assert "timed_out" not in result
     manager.exec_command.assert_called_once()
-    manager.run_command.assert_not_called()
 
 
 @pytest.mark.parametrize("exit_code", [0, 1])

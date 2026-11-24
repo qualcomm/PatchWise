@@ -11,7 +11,6 @@ import subprocess
 import sys
 import threading
 import time
-import warnings
 from collections import deque
 from concurrent.futures import Future, TimeoutError as FutureTimeoutError
 from dataclasses import dataclass
@@ -89,85 +88,6 @@ class DockerExecResult:
 
     def stderr_text(self, encoding: str = "utf-8", errors: str = "replace") -> str:
         return self.stderr.decode(encoding, errors=errors)
-
-
-class DockerExecProcess:
-    """A temporary, minimal ``Popen`` compatibility layer for SDK execs.
-
-    New callers should use ``DockerManager.exec_command``. ``kill`` cannot
-    terminate an individual Docker exec, so callers must enforce a command
-    timeout inside the container. This wrapper retains ``communicate`` for
-    compatibility with external callers of the subprocess-shaped API.
-    """
-
-    def __init__(
-        self,
-        manager: "DockerManager",
-        command: list[str],
-        cwd: str,
-        *,
-        text: bool = True,
-        stdin: Any = None,
-        user: Optional[str] = None,
-        environment: Optional[dict[str, str]] = None,
-    ) -> None:
-        self._manager = manager
-        self._command = command
-        self._cwd = cwd
-        self._text = text
-        self._stdin = stdin
-        self._user = user
-        self._environment = environment
-        self.returncode: Optional[int] = None
-        self._result: tuple[Any, Any] = ("" if text else b"", "" if text else b"")
-        self._error: Optional[BaseException] = None
-        self._complete = threading.Event()
-        self._start_lock = threading.Lock()
-        self._thread: Optional[threading.Thread] = None
-
-    def _run(self, input: Any) -> None:
-        try:
-            self.returncode, self._result = self._manager._exec(
-                self._command,
-                self._cwd,
-                input=input,
-                text=self._text,
-                user=self._user,
-                environment=self._environment,
-            )
-        except Exception as error:
-            self._error = error
-        finally:
-            self._complete.set()
-
-    def communicate(
-        self, input: Any = None, timeout: Optional[float] = None
-    ) -> tuple[Any, Any]:
-        with self._start_lock:
-            if self._thread is None:
-                if input is not None and self._stdin is None:
-                    raise ValueError("stdin was not requested for this command")
-                self._thread = threading.Thread(
-                    target=self._run, args=(input,), daemon=True
-                )
-                self._thread.start()
-            elif input is not None:
-                raise ValueError(
-                    "stdin can only be supplied to the first communicate call"
-                )
-        if not self._complete.wait(timeout):
-            raise subprocess.TimeoutExpired(self._command, timeout)
-        if self._error is not None:
-            raise self._error
-        return self._result
-
-    def kill(self) -> None:
-        message = (
-            "DockerExecProcess.kill() cannot stop an individual Docker exec and "
-            "is deprecated; enforce timeouts inside the container instead."
-        )
-        self._manager.logger.warning(message)
-        warnings.warn(message, DeprecationWarning, stacklevel=2)
 
 
 class DockerManager:
@@ -551,55 +471,6 @@ class DockerManager:
                 f"{command!r}. The command was not cancelled; no complete "
                 "output or exit code is available."
             ) from None
-
-    def run_command(
-        self, command: list[str], cwd: Optional[str], **kwargs: Any
-    ) -> DockerExecProcess:
-        """Legacy process adapter; new callers should use :meth:`exec_command`."""
-        cwd = str(cwd or self.sandbox_path)
-        text = kwargs.pop("text", True)
-        stdin = kwargs.pop("stdin", None)
-        user = kwargs.pop("user", None)
-        environment = kwargs.pop("environment", None)
-        if kwargs:
-            unsupported = ", ".join(sorted(kwargs))
-            raise TypeError(f"Unsupported Docker exec options: {unsupported}")
-        self.logger.debug("Executing command in container: %s", command)
-        return DockerExecProcess(
-            self,
-            command,
-            cwd,
-            text=text,
-            stdin=stdin,
-            user=user,
-            environment=environment,
-        )
-
-    def run_stdin_command(
-        self, command: list[str], cwd: Optional[str], **kwargs: Any
-    ) -> DockerExecProcess:
-        """Run a buffered command whose complete standard input is supplied to communicate.
-
-        Docker SDK exec does not offer the incremental stdio contract implied by
-        ``Popen``. Use this method for commands that consume all input before
-        producing their result.
-        """
-        return self.run_command(command, cwd, stdin=subprocess.PIPE, **kwargs)
-
-    def run_interactive_command(
-        self, command: list[str], cwd: Optional[str], **kwargs: Any
-    ) -> DockerExecProcess:
-        """Deprecated alias for :meth:`run_stdin_command`.
-
-        It is buffered, not an incremental interactive stdio session.
-        """
-        warnings.warn(
-            "run_interactive_command() is deprecated; use run_stdin_command() "
-            "for buffered standard input.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return self.run_stdin_command(command, cwd, **kwargs)
 
     def run_cmd_with_timer(
         self, cmd: list[str], desc: str, cwd: Optional[str] = None, **kwargs: Any

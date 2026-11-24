@@ -14,7 +14,6 @@ from docker.errors import DockerException, NotFound
 
 from patchwise import PACKAGE_PATH
 from patchwise.docker import (
-    DockerExecProcess,
     DockerExecResult,
     DockerManager,
     check_docker_available,
@@ -130,68 +129,6 @@ def test_exec_demuxes_interleaved_socket_frames_and_writes_stdin():
     assert streams == ("out-put", "err")
     assert daemon_socket.recv(5) == b"input"
     daemon_socket.close()
-
-
-def test_exec_process_honors_host_timeout_then_returns_result():
-    manager = Mock()
-    manager.logger = Mock()
-    started = threading.Event()
-    release = threading.Event()
-
-    def execute(*_args, **_kwargs):
-        started.set()
-        release.wait()
-        return 0, ("done", "")
-
-    manager._exec.side_effect = execute
-    process = DockerExecProcess(manager, ["sleep", "1"], "/tmp")
-
-    with pytest.raises(subprocess.TimeoutExpired):
-        process.communicate(timeout=0.01)
-    assert started.wait(1)
-
-    release.set()
-    assert process.communicate() == ("done", "")
-    assert process.returncode == 0
-
-
-def test_exec_process_kill_warns_that_docker_exec_cannot_be_stopped():
-    manager = Mock()
-    manager.logger = Mock()
-    process = DockerExecProcess(manager, ["sleep", "1"], "/tmp")
-
-    with pytest.deprecated_call(match="cannot stop an individual Docker exec"):
-        process.kill()
-
-    manager.logger.warning.assert_called_once()
-
-
-def test_exec_process_rejects_input_when_stdin_was_not_requested():
-    manager = Mock()
-    process = DockerExecProcess(manager, ["true"], "/tmp")
-
-    with pytest.raises(ValueError, match="stdin was not requested"):
-        process.communicate(input="input")
-
-
-def test_interactive_command_alias_warns_and_uses_buffered_stdin():
-    manager = object.__new__(DockerManager)
-    manager.run_stdin_command = Mock(return_value="process")
-
-    with pytest.deprecated_call(match="run_interactive_command"):
-        assert manager.run_interactive_command(["cat"], "/tmp") == "process"
-
-    manager.run_stdin_command.assert_called_once_with(["cat"], "/tmp")
-
-
-def test_exec_process_rejects_stdin_after_execution_has_started():
-    manager = Mock()
-    manager._exec.return_value = (0, ("", ""))
-    process = DockerExecProcess(manager, ["true"], "/tmp")
-
-    assert process.communicate() == ("", "")
-    with pytest.raises(ValueError, match="first communicate"):
-        process.communicate(input="more")
 
 
 @pytest.mark.parametrize(
