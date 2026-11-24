@@ -107,6 +107,7 @@ def test_index_lookup_decodes_candidates(index, manager):
 def agent(manager):
     agent = object.__new__(Agent)
     agent.docker_manager = manager
+    agent.enable_edit_tools = False
     agent.logger = Mock()
     agent._log_tool_call = Mock()
     return agent
@@ -183,6 +184,7 @@ def test_agent_sparse_combines_decoded_diagnostics(agent, manager):
 def test_agent_checkpatch_decodes_output(agent, manager):
     manager.exec_command.side_effect = [
         DockerExecResult(0, b"", b""),
+        DockerExecResult(0, b"patch\n", b""),
         DockerExecResult(1, b"warning: issue\xff", b""),
     ]
     result = agent._tool_run_checkpatch()
