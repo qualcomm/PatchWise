@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 from git import Actor, Repo
 
+from patchwise.docker import DockerExecResult
 from patchwise.patch_review.ai_agent.agent import Agent
 
 ACTOR = Actor("Test Author", "test@example.invalid")
@@ -42,21 +43,19 @@ class LocalDocker:
         self.commit_sha = sha
         self.capture = capture
 
-    def run_command(self, command, cwd=None, **kwargs):
+    def exec_command(self, command, cwd=None, *, input=None):
         env = dict(os.environ, CHECKPATCH_TEST_CAPTURE=str(self.capture))
-        env.update(kwargs.pop("env", {}))
-        return subprocess.Popen(
+        payload = input.encode("utf-8") if isinstance(input, str) else input
+        result = subprocess.run(
             command,
             cwd=cwd or self._git_workdir,
+            input=payload,
+            stdin=subprocess.DEVNULL if payload is None else None,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True,
             env=env,
-            **kwargs,
         )
-
-    def run_interactive_command(self, command, cwd=None, **kwargs):
-        return self.run_command(command, cwd, stdin=subprocess.PIPE, **kwargs)
+        return DockerExecResult(result.returncode, result.stdout, result.stderr)
 
 
 def make_repo(tmp_path, root=False):
