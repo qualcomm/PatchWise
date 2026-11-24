@@ -388,6 +388,40 @@ If you'd like to develop new features or fix existing issues:
 
 Please make sure to follow our contribution guidelines before submitting a pull request. [CONTRIBUTING.md](CONTRIBUTING.md)
 
+### Docker Execution API
+
+Code integrating with `DockerManager` should use `exec_command()` instead of the
+removed `run_command()`, `run_stdin_command()`, `run_interactive_command()` and
+`DockerExecProcess` compatibility adapter. Supply complete buffered stdin through
+`input=` rather than `communicate(input=...)`:
+
+```python
+result = manager.exec_command(["git", "hash-object", "--stdin"], input="content")
+if result.exit_code != 0:
+    raise RuntimeError(result.stderr_text())
+sha = result.stdout_text().strip()
+```
+
+`DockerExecResult` is immutable and keeps `stdout` and `stderr` as bytes. Use
+`stdout_text()` and `stderr_text()` for decoding (UTF-8 with replacement by
+default), or keep the bytes for binary output. String input is encoded as UTF-8;
+bytes are sent unchanged. Stdin is closed when no input is supplied.
+
+`wait_timeout=` limits the client wait, **not** the container command's lifetime.
+Enforce command deadlines inside the container. At the wait boundary, a worker
+that is complete when checked can still supply its result or original exception;
+this is intentionally best-effort, not a strict result cutoff. Otherwise a client
+wait expiration raises `TimeoutError` without complete output or an exit code.
+The worker may remain alive, and the command is **not cancelled**. Do not retry
+such failures automatically. The progress timer in `run_cmd_with_timer()` is
+independent of command deadlines and retains both stdout and stderr debug logs.
+
+**Docker safety invariants:** Keep image builds on the Docker CLI to preserve
+BuildKit and registry-specific credential lookup. Preserve review-container
+network isolation and read-only default mounts, with explicit writable mounts
+for managed volumes. Remove containers before releasing their overlay volumes.
+Never stop a shared container to handle an individual exec timeout.
+
 ## Getting in Contact
 
 - [Report an Issue on GitHub](../../issues/new/choose)

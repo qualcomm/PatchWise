@@ -1,6 +1,7 @@
 # Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 
+from concurrent.futures import Future, TimeoutError as FutureTimeoutError
 from dataclasses import FrozenInstanceError
 import socket
 import threading
@@ -155,6 +156,70 @@ def test_exec_command_returns_result_with_bounded_wait(manager):
     assert manager.exec_command(["true"], wait_timeout=1) == DockerExecResult(
         0, b"done", b""
     )
+
+
+@pytest.mark.parametrize(
+    "error", [None, DockerException("disconnected"), TimeoutError("transport")]
+)
+def test_exec_command_preserves_completion_at_wait_boundary(
+    manager, monkeypatch, error
+):
+    thread = Mock()
+
+    class BoundaryFuture(Future):
+        def result(self, timeout=None):
+            if timeout is not None:
+                # Complete after the timed wait expires but before the caller
+                # checks done(), without relying on thread scheduling or sleeps.
+                thread.call_args.kwargs["target"]()
+                raise FutureTimeoutError()
+            return super().result()
+
+    future = BoundaryFuture()
+    monkeypatch.setattr("patchwise.docker.Future", lambda: future)
+    monkeypatch.setattr("patchwise.docker.threading.Thread", thread)
+    manager._exec = Mock(return_value=(7, (b"out", b"err")), side_effect=error)
+
+    if error is None:
+        assert manager.exec_command(["test"], wait_timeout=1) == DockerExecResult(
+            7, b"out", b"err"
+        )
+    else:
+        with pytest.raises(type(error)) as exc:
+            manager.exec_command(["test"], wait_timeout=1)
+        assert exc.value is error
+    assert future.done()
+    manager._exec.assert_called_once()
+    thread.assert_called_once()
+    assert thread.call_args.kwargs["daemon"] is True
+    thread.return_value.start.assert_called_once_with()
+
+
+def test_exec_command_reports_expiration_before_worker_completes(manager, monkeypatch):
+    class ExpiredFuture(Future):
+        def result(self, timeout=None):
+            if timeout is not None:
+                raise FutureTimeoutError()
+            return super().result()
+
+    future = ExpiredFuture()
+    thread = Mock()
+    monkeypatch.setattr("patchwise.docker.Future", lambda: future)
+    monkeypatch.setattr("patchwise.docker.threading.Thread", thread)
+    manager._exec = Mock(return_value=(0, (b"done", b"")))
+
+    with pytest.raises(TimeoutError, match="no complete output or exit code"):
+        manager.exec_command(["test"], wait_timeout=1)
+    assert not future.done()
+    assert not future.cancelled()
+    manager._exec.assert_not_called()
+    thread.assert_called_once()
+    thread.return_value.start.assert_called_once_with()
+
+    # The original worker can still finish; expiration did not cancel or retry it.
+    thread.call_args.kwargs["target"]()
+    assert future.result() == DockerExecResult(0, b"done", b"")
+    manager._exec.assert_called_once()
 
 
 @pytest.mark.parametrize("timeout", [0, -1, float("inf"), float("nan")])
