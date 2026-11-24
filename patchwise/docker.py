@@ -422,6 +422,9 @@ class DockerManager:
         String input is encoded as UTF-8; bytes are sent unchanged. A wait
         timeout bounds the client's wait, not the command's lifetime. Enforce
         command deadlines inside the container (for example with ``timeout``).
+        Expiration is best-effort: if the worker is complete when checked after
+        the timed wait expires, return its result or propagate its exception.
+        This is not a strict cutoff for results arriving at the wait boundary.
         On a wait timeout no complete result is available, and the SDK worker
         may still be running; it must not be mistaken for a cancelled exec.
         Do not retry automatically: a stalled transport can retain that worker
